@@ -1,0 +1,29 @@
+; Fox Assembly 16 bit
+; Address denotion $HEX(16 bit only)
+; constant denotion %DEC(16 bit only)
+
+:main
+NOP ; Nothing
+LFM $FFFF
+WTM $FFFF
+SRA %1
+AXY ; Add
+SXY ; Sub
+MXY ; Mul
+DXY ; Div
+EQU ; equal
+LEQ ; less
+JPZ test_one
+:test_one
+JNZ test_one
+:test_two
+JPL test_three
+:test_three
+CLR ; Clear equality bit
+BSL ; bitshift left
+BSR ; Bitshift right
+AND ; And
+ORA ; Or
+XOR ; Xor
+DWR %621 ; Direct right to register
+HLT ; HALT machine
