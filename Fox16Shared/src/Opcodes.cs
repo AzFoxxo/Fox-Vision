@@ -1,11 +1,10 @@
-/*
- *   Copyright (c) 2023 Az Foxxo
- *   All rights reserved.
- */
-
-namespace Fox16ASM
+namespace Fox16Shared
 {
-    class Opcodes
+    /// <summary>
+    /// Opcodes dictionary
+    /// Contains the short opcode string representation and opcode value
+    /// </summary>
+    public class Opcodes
     {
         public const ushort PPU_OFFSET = 128;
         public static Dictionary<string, ushort> instructions = new Dictionary<string, ushort>()

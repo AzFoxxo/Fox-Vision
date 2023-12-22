@@ -1,6 +1,7 @@
 using System.IO;
 using MiscUtil.IO;
 using MiscUtil.Conversion;
+using Fox16Shared;
 
 namespace Fox16ASM
 {
