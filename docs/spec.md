@@ -61,7 +61,7 @@ The PPU will initially idle executing `NOP`s until VRAM has instructions to inst
 - `1000 0101` - `PPU_BLR` - bitshift value in register to right by 1, storing result in the register
 - `1000 0111` - `PPU_ORA` - bitwise OR between a provided value and that in the register, storing result in the register
 - `1000 1000` - `PPU_XOR` - bitwise XOR between a provided value and that in the register, storing result in the register
-- `1000 1001` - `PPU_ABD` - bitwise AND between a provided value and that in the register, storing result in the register
+- `1000 1001` - `PPU_AND` - bitwise AND between a provided value and that in the register, storing result in the register
 - `1000 1010` - `PPU_DEC` - decrement one to the current value in the register
 - `1000 1011` - `PPU_INC` - increment one to the current value in the register
 
