@@ -6,8 +6,8 @@ namespace Fox16Shared
     /// </summary>
     public class Opcodes
     {
-        public const ushort PPU_OFFSET = 128;
-        public static Dictionary<string, ushort> instructions = new Dictionary<string, ushort>()
+        public const byte PPU_OFFSET = 128;
+        public static Dictionary<string, byte> instructions = new Dictionary<string, byte>()
         {
             // CPU opcodes
             {"NOP", 0},
