@@ -44,8 +44,8 @@ namespace Fox16ASM
                 using (var writer = new EndianBinaryWriter(EndianBitConverter.Big, stream))
                 {
                     
-                    writer.Write(Convert.ToUInt16(Opcodes.instructions["NOP"]));
-                    writer.Write(Convert.ToUInt16(Opcodes.instructions["HLT"]));
+                    writer.Write(Convert.ToByte(Opcodes.instructions["NOP"]));
+                    writer.Write(Convert.ToByte(Opcodes.instructions["HLT"]));
                 }
             }
         }
