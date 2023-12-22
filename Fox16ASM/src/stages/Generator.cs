@@ -99,10 +99,10 @@ namespace Fox16ASM
                         if (token.type == TokenType.Opcode)
                         {
                             // Get the value of the opcode from Opcodes.instructions
-                            if (Opcodes.instructions.TryGetValue(Convert.ToString(token.value), out ushort value))
+                            if (Opcodes.instructions.TryGetValue(Convert.ToString(token.value), out byte value))
                             {
                                 Console.WriteLine(value);
-                                writer.Write(Convert.ToUInt16(value));
+                                writer.Write(Convert.ToByte(value));
                             }
                             // TODO: Error handling
                         }
