@@ -6,25 +6,77 @@ namespace Fox16ASM
 {
     class Generator
     {
+        /// <summary>
+        /// Generate the ROM file using the tokens
+        /// Directly generate machine code from tokens
+        /// </summary>
+        /// <param name="tokens">tokens</param>
+        /// <param name="outputFile">ROM filename</param>
         public void Generate(Token[] tokens, string outputFile)
         {
             // Delete the file if it exists
             if (File.Exists(outputFile)) File.Delete(outputFile);
 
             // Write the header to the file
-            // WriteHeader(tokens, outputFile);
+            WriteHeader(outputFile);
 
             // Write the ROM
             WriteROM(tokens, outputFile);
 
             // Write the footer to the file
-            // WriteFooter(tokens, outputFile);
+            WriteFooter(outputFile);
+
+            Console.ForegroundColor = ConsoleColor.White;
+            Console.WriteLine("Code generation complete!");
+            Console.WriteLine($"ROM file written to {outputFile}");
         }
 
+        /// <summary>
+        /// Write the footer to the file
+        /// </summary>
+        /// <param name="outputFile">ROM filename</param>
+        private void WriteFooter(string outputFile)
+        {
+            // Pad the file with a NOP and a HLT instruction
+            using (var stream = File.Open(outputFile, FileMode.Append))
+            {
+                using (var writer = new EndianBinaryWriter(EndianBitConverter.Big, stream))
+                {
+                    
+                    writer.Write(Convert.ToUInt16(Opcodes.instructions["NOP"]));
+                    writer.Write(Convert.ToUInt16(Opcodes.instructions["HLT"]));
+                }
+            }
+        }
+
+        /// <summary>
+        /// Write the header to the file
+        /// </summary>
+        /// <param name="outputFile">ROM filename</param>
+        private void WriteHeader(string outputFile)
+        {
+            using (var stream = File.Open(outputFile, FileMode.OpenOrCreate, FileAccess.Write))
+            {
+                using (var writer = new BinaryWriter(stream))
+                {
+                    // Write magic number to the file ".VISOFOX16"
+                    string magic = ".VISOFOX16";
+                    byte[] magicBytes = System.Text.Encoding.ASCII.GetBytes(magic);
+                    writer.Write(magicBytes, 0, magicBytes.Length);
+                }
+            }
+        }
+
+
+        /// <summary>
+        /// Write instructions to ROM
+        /// </summary>
+        /// <param name="tokens">tokens to write</param>
+        /// <param name="outputFile">ROM filename</param>
         private void WriteROM(Token[] tokens, string outputFile)
         {
             // Write the tokens to the file
-            using (var stream = File.Open(outputFile, FileMode.Create))
+            using (var stream = File.Open(outputFile, FileMode.Append))
             {
                 using (var writer = new EndianBinaryWriter(EndianBitConverter.Big, stream))
                 {
@@ -46,8 +98,7 @@ namespace Fox16ASM
                         if (token.type == TokenType.Opcode)
                         {
                             // Get the value of the opcode from Opcodes.instructions
-                            ushort value;
-                            if (Opcodes.instructions.TryGetValue(Convert.ToString(token.value), out value))
+                            if (Opcodes.instructions.TryGetValue(Convert.ToString(token.value), out ushort value))
                             {
                                 Console.WriteLine(value);
                                 writer.Write(Convert.ToUInt16(value));
