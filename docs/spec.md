@@ -15,27 +15,27 @@ The CPU contains several registers:
   - Halt register (`0x0` - continue after cycle, `0x1` - halt after cycle)
 
 ## CPU opcodes
-- `0000 0000` - `NOP` - Waste clock cycle
-- `0000 0001` - `LFM` - Load 2 byte value from memory in active register
-- `0000 0010` - `WTM` - Write to memory the value of the active register
-- `0000 0011` - `SRA` - Set register active (X - 0, Y - 1)
-- `0000 0100` - `AXY` - Add X and Y and store result in active register
-- `0000 0101` - `SXY` - Subtract X from Y and store result in active register
-- `0000 0110` - `MXY` - Multiply X by Y and store result in active register
-- `0000 0111` - `DXY` - Divide X by Y and store result in active register
-- `0000 1000` - `EQU` - Check if X and Y registers are equal and store result in 
-- `0000 1001` - `LEQ` - Check if X register is less than Y register.
-- `0000 1010` - `JPZ` - Jump if zero to 2 byte wide address
-- `0000 1011` - `JNZ` - Jump if not zero to 2 byte wide address
-- `0000 1100` - `JMP` - Jump to 2 byte wide address.
-- `0000 1101` - `CLR` - Clear all OSR registers (set to zero)
-- `0000 1110` - `HLT` - Halt program execution (quit/power-off)
-- `0000 1111` - `BSL` - Bitshift to left value in active register
-- `0001 0000` - `BSR` - Bitshift to right value in active register
-- `0001 0001` - `AND` - AND bitwise value in active register by value in non-active register
-- `0001 0010` - `ORA` - OR bitwise value in active register by value in non-active register
-- `0001 0011` - `XOR` - XOR bitwise value in active register by value in non-active register
-- `0001 0100` - `DWR` - Direct write (to) register sets the value given (16 bit decimal) to the active register
+- `0000 0000` `0000 0000` - `NOP` - Waste clock cycle
+- `0000 0000` `0000 0001` - `LFM` - Load 2 byte value from memory in active register
+- `0000 0000` `0000 0010` - `WTM` - Write to memory the value of the active register
+- `0000 0000` `0000 0011` - `SRA` - Set register active (X - 0, Y - 1)
+- `0000 0000` `0000 0100` - `AXY` - Add X and Y and store result in active register
+- `0000 0000` `0000 0101` - `SXY` - Subtract X from Y and store result in active register
+- `0000 0000` `0000 0110` - `MXY` - Multiply X by Y and store result in active register
+- `0000 0000` `0000 0111` - `DXY` - Divide X by Y and store result in active register
+- `0000 0000` `0000 1000` - `EQU` - Check if X and Y registers are equal and store result in 
+- `0000 0000` `0000 1001` - `LEQ` - Check if X register is less than Y register.
+- `0000 0000` `0000 1010` - `JPZ` - Jump if zero to 2 byte wide address
+- `0000 0000` `0000 1011` - `JNZ` - Jump if not zero to 2 byte wide address
+- `0000 0000` `0000 1100` - `JMP` - Jump to 2 byte wide address.
+- `0000 0000` `0000 1101` - `CLR` - Clear all OSR registers (set to zero)
+- `0000 0000` `0000 1110` - `HLT` - Halt program execution (quit/power-off)
+- `0000 0000` `0000 1111` - `BSL` - Bitshift to left value in active register
+- `0000 0000` `0001 0000` - `BSR` - Bitshift to right value in active register
+- `0000 0000` `0001 0001` - `AND` - AND bitwise value in active register by value in non-active register
+- `0000 0000` `0001 0010` - `ORA` - OR bitwise value in active register by value in non-active register
+- `0000 0000` `0001 0011` - `XOR` - XOR bitwise value in active register by value in non-active register
+- `0000 0000` `0001 0100` - `DWR` - Direct write (to) register sets the value given (16 bit decimal) to the active register
 
 ### Instruction breakdown
 first 16 bits: opcode
@@ -57,19 +57,19 @@ The PPU has a total of two registers, `PPU_PC` for program counter which loops b
 The PPU will initially idle executing `NOP`s until VRAM has instructions to instruct the PPU to draw its data.
 
 ### List of support instructions
-**Note:** all PPU instructions start with `1--- ----` so the first instruction starts at `1000 0000`.
+**Note:** all PPU instructions start with `1--- ----` so the first instruction starts at `1000 0000` followed by the opcode.
 **Note**: PPU instructions can potentially be misinterpreted as CPU instructions so it is on the programmer to ensure they are outside of execution space of the CPU before the programmer loads the instructions into VRAM using `LFM` and `WTM` to load the initial PPU program.
-- `1000 0000` - `PPU_NOP` - waste a clock cycle
-- `1000 0001` - `PPU_DRW` `line_to_draw (0-134)` - draw a line using the pixel data in VRAM (variable time to execute)
-- `1000 0010` - `PPU_LFM` `memory_address_of_two_bytes_to_load_into_ppu_register` - Load value to general purpose register from RAM
-- `1000 0011` - `PPU_WTV` `memory_address_of_ram_to_write_to_or_ram` - Write value from general purpose register to RAM
-- `1000 0100` - `PPU_BRR` - bitshift value in register to right by 1, storing result in the register
-- `1000 0101` - `PPU_BLR` - bitshift value in register to right by 1, storing result in the register
-- `1000 0111` - `PPU_ORA` - bitwise OR between a provided value and that in the register, storing result in the register
-- `1000 1000` - `PPU_XOR` - bitwise XOR between a provided value and that in the register, storing result in the register
-- `1000 1001` - `PPU_AND` - bitwise AND between a provided value and that in the register, storing result in the register
-- `1000 1010` - `PPU_DEC` - decrement one to the current value in the register
-- `1000 1011` - `PPU_INC` - increment one to the current value in the register
+- `1000 0000` `0000 0000` - `PPU_NOP` - waste a clock cycle
+- `1000 0000` `0000 0001` - `PPU_DRW` `line_to_draw (0-134)` - draw a line using the pixel data in VRAM (variable time to execute)
+- `1000 0000` `0000 0010` - `PPU_LFM` `memory_address_of_two_bytes_to_load_into_ppu_register` - Load value to general purpose register from RAM
+- `1000 0000` `0000 0011` - `PPU_WTV` `memory_address_of_ram_to_write_to_or_ram` - Write value from general purpose register to RAM
+- `1000 0000` `0000 0100` - `PPU_BRR` - bitshift value in register to right by 1, storing result in the register
+- `1000 0000` `0000 0101` - `PPU_BLR` - bitshift value in register to right by 1, storing result in the register
+- `1000 0000` `0000 0111` - `PPU_ORA` - bitwise OR between a provided value and that in the register, storing result in the register
+- `1000 0000` `0000 1000` - `PPU_XOR` - bitwise XOR between a provided value and that in the register, storing result in the register
+- `1000 0000` `0000 1001` - `PPU_AND` - bitwise AND between a provided value and that in the register, storing result in the register
+- `1000 0000` `0000 1010` - `PPU_DEC` - decrement one to the current value in the register
+- `1000 0000` `0000 1011` - `PPU_INC` - increment one to the current value in the register
 
 ## Memory
 The device has a total of 65,536 bytes (16kb) of addressable space.
