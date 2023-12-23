@@ -12,6 +12,7 @@ The CPU contains several registers:
   - Equality register (`0x0` - inequality, `0x1` - equality)
   - Active register (`0x0` - `X` register, `0x1` - `Y` register)
   - Illegal division register (`0x0` - `X` division good, `0x1` - `Y` illegal divide by zero operation)
+  - Halt register (`0x0` - continue after cycle, `0x1` - halt after cycle)
 
 ## CPU opcodes
 - `0000 0000` - `NOP` - Waste clock cycle
