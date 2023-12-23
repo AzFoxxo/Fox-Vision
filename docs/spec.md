@@ -2,11 +2,16 @@
 
 ## Processor
 The CPU is a single threaded 8MHz RISC chip. It uses the FoxVision16 architecture.
+
+### Registers
 The CPU contains several registers:
 - X - 16 bit reg (general purpose register #1)
 - Y - 16 bit reg (general purpose register #2)
 - PC - 16 bit reg (program counter register, points the current location in RAM the CPU is executing)
-- OSR - 8 bit register (bit 1: Equality? bit 2: active general purpose register)
+- OSR - 8 bit register
+  - Equality register (`0x0` - inequality, `0x1` - equality)
+  - Active register (`0x0` - `X` register, `0x1` - `Y` register)
+  - Illegal division register (`0x0` - `X` division good, `0x1` - `Y` illegal divide by zero operation)
 
 ## CPU opcodes
 - `0000 0000` - `NOP` - Waste clock cycle
@@ -22,7 +27,7 @@ The CPU contains several registers:
 - `0000 1010` - `JPZ` - Jump if zero to 2 byte wide address
 - `0000 1011` - `JNZ` - Jump if not zero to 2 byte wide address
 - `0000 1100` - `JMP` - Jump to 2 byte wide address.
-- `0000 1101` - `CLR` - Clear equality flag
+- `0000 1101` - `CLR` - Clear all OSR registers (set to zero)
 - `0000 1110` - `HLT` - Halt program execution (quit/power-off)
 - `0000 1111` - `BSL` - Bitshift to left value in active register
 - `0001 0000` - `BSR` - Bitshift to right value in active register
