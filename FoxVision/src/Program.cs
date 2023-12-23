@@ -90,6 +90,7 @@ namespace FoxVision
                     case "SRA":
                     case "PPU_DRW":
                     case "DWR":
+                    case "DBG_LGC":
                         // Convert byte array to ushort
                         Console.ForegroundColor = ConsoleColor.Cyan;
                         Console.Write($"({ROM[i + 1]})");
