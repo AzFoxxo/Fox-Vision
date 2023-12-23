@@ -31,18 +31,18 @@ namespace Fox16Shared
             {"ORA", 18},
             {"XOR", 19},
             {"DWR", 20},
-            // PPU opcode
-            {"PPU_NOP", PPU_OFFSET + 1},
-            {"PPU_DRW", PPU_OFFSET + 2},
-            {"PPU_LFM", PPU_OFFSET + 3},
-            {"PPU_WTV", PPU_OFFSET + 4},
-            {"PPU_BRR", PPU_OFFSET + 5},
-            {"PPU_BLR", PPU_OFFSET + 6},
-            {"PPU_ORA", PPU_OFFSET + 7},
-            {"PPU_XOR", PPU_OFFSET + 8},
-            {"PPU_AND", PPU_OFFSET + 9},
-            {"PPU_DEC", PPU_OFFSET + 10},
-            {"PPU_INC", PPU_OFFSET + 11}
+            // PPU opcodes
+            {"PPU_NOP", PPU_OFFSET},
+            {"PPU_DRW", PPU_OFFSET + 1},
+            {"PPU_LFM", PPU_OFFSET + 2},
+            {"PPU_WTV", PPU_OFFSET + 3},
+            {"PPU_BRR", PPU_OFFSET + 4},
+            {"PPU_BLR", PPU_OFFSET + 5},
+            {"PPU_ORA", PPU_OFFSET + 6},
+            {"PPU_XOR", PPU_OFFSET + 7},
+            {"PPU_AND", PPU_OFFSET + 8},
+            {"PPU_DEC", PPU_OFFSET + 9},
+            {"PPU_INC", PPU_OFFSET + 10}
         };
 
         /// <summary>
