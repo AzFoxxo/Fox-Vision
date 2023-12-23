@@ -36,6 +36,53 @@ The CPU contains several registers:
 - `0000 0000` `0001 0010` - `ORA` - OR bitwise value in active register by value in non-active register
 - `0000 0000` `0001 0011` - `XOR` - XOR bitwise value in active register by value in non-active register
 - `0000 0000` `0001 0100` - `DWR` - Direct write (to) register sets the value given (16 bit decimal) to the active register
+### Extension debug opcodes
+**Note:** These are instructions which are only for us for testing the virtual machine, they allow console I/O, printing memory, etc.
+**Note:** All extension debug instruction start with `11` so the first instruction is `1100 0000` `0000 0000`. `11` is not used by the spec so is safe to use for debug commands.
+- `1100 0000` `0000 0000` - `DBG_LGC` - Log a character to the console (see [Extension debug character encoding](#extension-debug-character-encoding))
+- `1100 0000` `0000 0001` - `DGB_MEM` - Log the memory in hex to the console
+- `1100 0000` `0000 0010` - `DGB_INP` - Prompt the user for input which is then converted to an unsigned uint16 (active register used)
+
+## Extension debug character encoding
+- For `#` use value: `0`
+- For `A` use value: `1`
+- For `B` use value: `2`
+- For `C` use value: `3`
+- For `D` use value: `4`
+- For `E` use value: `5`
+- For `F` use value: `6`
+- For `G` use value: `7`
+- For `H` use value: `8`
+- For `I` use value: `9`
+- For `J` use value: `10`
+- For `K` use value: `11`
+- For `L` use value: `12`
+- For `M` use value: `13`
+- For `N` use value: `14`
+- For `O` use value: `15`
+- For `P` use value: `16`
+- For `Q` use value: `17`
+- For `R` use value: `18`
+- For `S` use value: `19`
+- For `T` use value: `20`
+- For `U` use value: `21`
+- For `V` use value: `22`
+- For `W` use value: `23`
+- For `X` use value: `24`
+- For `Y` use value: `25`
+- For `Z` use value: `26`
+- For `0` use value: `27`
+- For `1` use value: `29`
+- For `2` use value: `30`
+- For `3` use value: `31`
+- For `4` use value: `32`
+- For `5` use value: `33`
+- For `6` use value: `34`
+- For `7` use value: `35`
+- For `8` use value: `36`
+- For `9` use value: `37`
+- For `\n` (newline) use value: `38`
+- For ` ` (space) use value: `39`
 
 ### Instruction breakdown
 first 16 bits: opcode
