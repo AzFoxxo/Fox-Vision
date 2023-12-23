@@ -32,8 +32,8 @@ The CPU contains several registers:
 - `0001 0100` - `DWR` - Direct write (to) register sets the value given (16 bit decimal) to the active register
 
 ### Instruction breakdown
-8 bits: opcode
-9-24 bits: addresses/values
+first 16 bits: opcode
+second 16 bits: addresses/values (if applicable)
 
 # Graphics
 Fox Vision supports a display size of 240x135.

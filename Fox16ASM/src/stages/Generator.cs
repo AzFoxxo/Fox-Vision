@@ -44,8 +44,8 @@ namespace Fox16ASM
                 using (var writer = new EndianBinaryWriter(EndianBitConverter.Big, stream))
                 {
                     
-                    writer.Write(Convert.ToByte(Opcodes.instructions["NOP"]));
-                    writer.Write(Convert.ToByte(Opcodes.instructions["HLT"]));
+                    writer.Write(Convert.ToUInt16(Opcodes.instructions["NOP"]));
+                    writer.Write(Convert.ToUInt16(Opcodes.instructions["HLT"]));
                 }
             }
         }
@@ -99,10 +99,10 @@ namespace Fox16ASM
                         if (token.type == TokenType.Opcode)
                         {
                             // Get the value of the opcode from Opcodes.instructions
-                            if (Opcodes.instructions.TryGetValue(Convert.ToString(token.value), out byte value))
+                            if (Opcodes.instructions.TryGetValue(Convert.ToString(token.value), out ushort value))
                             {
                                 Console.WriteLine(value);
-                                writer.Write(Convert.ToByte(value));
+                                writer.Write(Convert.ToUInt16(value));
                             }
                             // TODO: Error handling
                         }

@@ -6,8 +6,8 @@ namespace Fox16Shared
     /// </summary>
     public class Opcodes
     {
-        public const byte PPU_OFFSET = 128;
-        public static Dictionary<string, byte> instructions = new Dictionary<string, byte>()
+        public const ushort PPU_OFFSET = 0xF000;
+        public static Dictionary<string, ushort> instructions = new()
         {
             // CPU opcodes
             {"NOP", 0},
@@ -44,5 +44,23 @@ namespace Fox16Shared
             {"PPU_DEC", PPU_OFFSET + 10},
             {"PPU_INC", PPU_OFFSET + 11}
         };
+
+        /// <summary>
+        /// Get key using value, if several keys correspond to the same value, return an array
+        /// </summary>
+        /// <param name="value">Value to search for</param>
+        /// <returns>Array of keys</returns>
+        public static string[] GetKey(ushort value)
+        {
+            List<string> keys = new List<string>();
+            foreach (KeyValuePair<string, ushort> pair in instructions)
+            {
+                if (pair.Value == value)
+                {
+                    keys.Add(pair.Key);
+                }
+            }
+            return keys.ToArray();
+        }
     }
 }
