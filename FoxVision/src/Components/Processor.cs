@@ -1,3 +1,6 @@
+#define SKIP_DEBUG
+
+using System.Diagnostics;
 using FoxVision.Components;
 
 namespace FoxVision
@@ -15,6 +18,12 @@ namespace FoxVision
         // Registers
         private ushort regX, regY, regPC;
         private ushort flgEqual, flgActiveReg, flgDivZero, flgHalt;
+        private const long clock = 8_000_000;
+        private const long ticksInSec = 10_000_000;
+        private const long timeToWait = clock / ticksInSec;
+
+        // CPU timer
+        Stopwatch timer;
 
         ContiguousMemory RAM;
 
@@ -37,17 +46,15 @@ namespace FoxVision
             flgEqual = 0x0;
             flgActiveReg = 0x0;
 
+            // Create a new CPU timer
+            timer = new Stopwatch();
+
             Console.WriteLine("Processor created");
-            SetValueOfTheActiveRegister(1);
-            SetValueOfTheInactiveRegister(1);
-            ChangeActiveRegister(0x1);
-            SetValueOfTheActiveRegister(1);
-            SetValueOfTheInactiveRegister(1);
         }
 
         internal bool ExecuteCycle()
         {
-            Thread.Sleep(1000);
+            timer.Start();
 
             // Read the data from RAM and validate bounds of second ushort
             ushort[] data = [RAM.ReadUnchecked(regPC), 0x0];
@@ -59,6 +66,16 @@ namespace FoxVision
 
             // Bounds check PC
             if (regPC > RAM.Size) regPC = 0;
+
+            timer.Stop();
+            long elapsed_time = timer.ElapsedTicks;
+
+            // Calculate how long to wait
+            while (true)
+            {
+                if (elapsed_time >= timeToWait)
+                    break;
+            }
 
             // Return if halt OSR flag has been set
             return flgHalt != 0x0;
@@ -80,15 +97,15 @@ namespace FoxVision
                     break;
                 case 0x1:
                     LogInstructionExecuting("LFM");
-                    SetValueOfTheActiveRegister(RAM.ReadUnchecked((ushort)(data-1)));
+                    SetValueOfTheActiveRegister(RAM.ReadUnchecked((ushort)(data - 1)));
                     return 2;
                 case 0x2:
                     LogInstructionExecuting("WTM");
-                    RAM.WriteUnchecked((ushort)(data-1), GetValueOfTheActiveRegister());
+                    RAM.WriteUnchecked((ushort)(data - 1), GetValueOfTheActiveRegister());
                     return 2;
                 case 0x3:
                     LogInstructionExecuting("SRA");
-                    ChangeActiveRegister(RAM.ReadUnchecked((ushort)(data-1)));
+                    ChangeActiveRegister(RAM.ReadUnchecked((ushort)(data - 1)));
                     return 2;
                 case 0x4:
                     LogInstructionExecuting("AXY");
@@ -188,12 +205,15 @@ namespace FoxVision
         /// <param name="opcode">String of the opcode</param>
         private void LogInstructionExecuting(string opcode)
         {
-#if DEBUG
+            // Skip
+            #if SKIP_DEBUG
+            return;
+            #endif
+
             Console.Write("Executing: ");
             Console.ForegroundColor = ConsoleColor.Blue;
             Console.WriteLine(opcode);
             Console.ForegroundColor = ConsoleColor.White;
-#endif
         }
 
         /// <summary>
