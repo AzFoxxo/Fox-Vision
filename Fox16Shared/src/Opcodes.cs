@@ -7,6 +7,7 @@ namespace Fox16Shared
     public class Opcodes
     {
         public const ushort PPU_OFFSET = 0xF000;
+        public const ushort DEBUG_EXTENSION_OFFSET = 0xC000;
         public static Dictionary<string, ushort> instructions = new()
         {
             // CPU opcodes
@@ -42,7 +43,11 @@ namespace Fox16Shared
             {"PPU_XOR", PPU_OFFSET + 7},
             {"PPU_AND", PPU_OFFSET + 8},
             {"PPU_DEC", PPU_OFFSET + 9},
-            {"PPU_INC", PPU_OFFSET + 10}
+            {"PPU_INC", PPU_OFFSET + 10},
+            // Debug extension opcodes
+            {"DBG_LGC", DEBUG_EXTENSION_OFFSET},
+            {"DGB_MEM", DEBUG_EXTENSION_OFFSET + 1},
+            {"DGB_INP", DEBUG_EXTENSION_OFFSET + 2}
         };
 
         /// <summary>
