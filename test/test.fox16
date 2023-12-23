@@ -15,7 +15,7 @@ EQU ; equal
 LEQ ; less
 JPZ test_one
 :test_one
-JNZ test_one
+JNZ test_two
 :test_two
 JMP test_three
 :test_three
@@ -51,4 +51,4 @@ DBG_LGC %38
 DGB_MEM
 DGB_MEM
 DGB_INP
-JMP :halt
+JMP halt
