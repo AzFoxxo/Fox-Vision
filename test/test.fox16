@@ -19,13 +19,15 @@ JNZ test_one
 :test_two
 JMP test_three
 :test_three
-CLR ; Clear equality bit
+CLR ; Clear OSR registers
 BSL ; bitshift left
 BSR ; Bitshift right
 AND ; And
 ORA ; Or
 XOR ; Xor
 DWR %621 ; Direct right to register
+JMP debug
+:halt
 HLT ; HALT machine
 
 ; PPU
@@ -40,3 +42,12 @@ PPU_XOR $FFFF
 PPU_AND $FFFF
 PPU_DEC
 PPU_INC
+
+; Debug extension stuff
+:debug
+DBG_LGC %1
+DBG_LGC %2
+DBG_LGC %38
+DGB_MEM
+DGB_MEM
+JMP :halt
