@@ -21,7 +21,7 @@ The CPU contains several registers:
 - `0000 1001` - `LEQ` - Check if X register is less than Y register.
 - `0000 1010` - `JPZ` - Jump if zero to 2 byte wide address
 - `0000 1011` - `JNZ` - Jump if not zero to 2 byte wide address
-- `0000 1100` - `JPL` - Jump if less than to 2 byte wide address
+- `0000 1100` - `JMP` - Jump to 2 byte wide address.
 - `0000 1101` - `CLR` - Clear equality flag
 - `0000 1110` - `HLT` - Halt program execution (quit/power-off)
 - `0000 1111` - `BSL` - Bitshift to left value in active register
