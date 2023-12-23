@@ -122,7 +122,7 @@ namespace Fox16ASM
                         if (label.name == null)
                         {
                             // Invalid label name
-                            Console.WriteLine("Error: Invalid label name");
+                            Console.WriteLine($"Error: Invalid label name {parts[1]}");
                             return null;
                         }
 
