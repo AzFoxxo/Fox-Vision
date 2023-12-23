@@ -3,12 +3,12 @@ namespace Fox16ASM
 {
     struct Label
     {
-        public ushort address;
+        public ushort line;
         public string name;
 
         public Label(ushort address, string name)
         {
-            this.address = address;
+            this.line = address;
             this.name = name;
         }
     }

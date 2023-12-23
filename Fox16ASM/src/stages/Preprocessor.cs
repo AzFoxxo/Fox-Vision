@@ -15,11 +15,11 @@ namespace Fox16ASM
             var lines = RemoveCommentsAndWhitespace(filename);
 
             // Find all labels in the file
-            List<Label> labels = new();
+            List<Label> labels = [];
             (labels, lines) = FindLabels(lines);
 
             // Resolve the labels
-            LabelResolution(lines, labels); // TODO: Possible null value?
+            LabelResolutionLine(lines, labels); // TODO: Possible null value?
 
             foreach (var line in lines)
             {
@@ -58,16 +58,16 @@ namespace Fox16ASM
         /// <returns></returns>
         private static Tuple<List<Label>, string[]> FindLabels(string[] lines)
         {
-            List<Label> labels = new();
+            List<Label> labels = [];
             for (int i = 0; i < lines.Length - 1; i++)
             {
-                if (lines[i].Trim().StartsWith(":"))
+                if (lines[i].Trim().StartsWith(':'))
                 {
                     // Store the name and discard the character letter `:`
                     var name = lines[i].Trim()[1..];
 
                     // Get the current line number (factoring in labels)
-                    byte lineNumber = ((byte)(i - labels.Count));
+                    ushort lineNumber = ((ushort)(i - labels.Count));
 
                     // Print label in red
                     Console.ForegroundColor = ConsoleColor.Red;
@@ -88,12 +88,12 @@ namespace Fox16ASM
         }
 
         /// <summary>
-        /// Label resolution: replaces all labels with the address
+        /// Label resolution: replaces all labels with the lines they are on
         /// </summary>
         /// <param name="lines"></param>
         /// <param name="labels"></param>
         /// <returns>All lines with labels replaced</returns>
-        private static string[]? LabelResolution(string[] lines, List<Label> labels)
+        private static string[]? LabelResolutionLine(string[] lines, List<Label> labels)
         {
             // Loop through all instructions
             for (int i = 0; i < lines.Length; i++)
@@ -127,7 +127,7 @@ namespace Fox16ASM
                         }
 
                         // Replace label
-                        lines[i] = lines[i].Replace(parts[1], "$" + label.address.ToString("X"));
+                        lines[i] = lines[i].Replace(parts[1], ":" + label.line);
                         Console.WriteLine($"Now: {lines[i]}");
                     }
                 }

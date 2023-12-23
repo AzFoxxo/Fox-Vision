@@ -5,6 +5,7 @@ namespace Fox16ASM
         Opcode,
         Hexadecimal,
         Decimal,
+        Label,
         Terminator
     }
 }

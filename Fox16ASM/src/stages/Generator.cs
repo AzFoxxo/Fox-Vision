@@ -36,7 +36,7 @@ namespace Fox16ASM
         /// Write the footer to the file
         /// </summary>
         /// <param name="outputFile">ROM filename</param>
-        private void WriteFooter(string outputFile)
+        private static void WriteFooter(string outputFile)
         {
             // Pad the file with a NOP and a HLT instruction
             using (var stream = File.Open(outputFile, FileMode.Append))
@@ -54,7 +54,7 @@ namespace Fox16ASM
         /// Write the header to the file
         /// </summary>
         /// <param name="outputFile">ROM filename</param>
-        private void WriteHeader(string outputFile)
+        private static void WriteHeader(string outputFile)
         {
             using (var stream = File.Open(outputFile, FileMode.OpenOrCreate, FileAccess.Write))
             {
@@ -74,8 +74,11 @@ namespace Fox16ASM
         /// </summary>
         /// <param name="tokens">tokens to write</param>
         /// <param name="outputFile">ROM filename</param>
-        private void WriteROM(Token[] tokens, string outputFile)
+        private static void WriteROM(Token[] tokens, string outputFile)
         {
+            // Keep track of how many unsigned uint16s have been written
+            ushort dataWritten = 0;
+
             // Write the tokens to the file
             using (var stream = File.Open(outputFile, FileMode.Append))
             {
@@ -85,24 +88,34 @@ namespace Fox16ASM
                     {
                         // Skip all terminating tokens
                         if (token.type == TokenType.Terminator) continue;
-                        if (token.type == TokenType.Decimal)
+                        else if (token.type == TokenType.Decimal)
                         {
                             // Write the decimal value as a ushort
                             writer.Write(Convert.ToUInt16(token.value));
+                            dataWritten++;
                         }
-                        if (token.type == TokenType.Hexadecimal)
+                        else if (token.type == TokenType.Label)
+                        {
+                            // Write the decimal value as a ushort
+                            dataWritten++;
+                            writer.Write(dataWritten);
+                            Console.WriteLine($"Label written at address: {dataWritten:X4}");
+                        }
+                        else if (token.type == TokenType.Hexadecimal)
                         {
                             // Write the hexadecimal value as a ushort
                             Console.WriteLine(token.value);
                             writer.Write(Convert.ToUInt16(token.value));
+                            dataWritten++;
                         }
-                        if (token.type == TokenType.Opcode)
+                        else if (token.type == TokenType.Opcode)
                         {
                             // Get the value of the opcode from Opcodes.instructions
                             if (Opcodes.instructions.TryGetValue(Convert.ToString(token.value), out ushort value))
                             {
                                 Console.WriteLine(value);
                                 writer.Write(Convert.ToUInt16(value));
+                                dataWritten++;
                             }
                             // TODO: Error handling
                         }
