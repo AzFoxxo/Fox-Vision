@@ -18,7 +18,7 @@ The CPU contains several registers:
 - `0000 0110` - `MXY` - Multiply X by Y and store result in active register
 - `0000 0111` - `DXY` - Divide X by Y and store result in active register
 - `0000 1000` - `EQU` - Check if X and Y registers are equal and store result in 
-- `0000 1001` - `LEQ` - Check if active register is more than non-active register (e.g. X (active) < Y (non-active))
+- `0000 1001` - `LEQ` - Check if X register is less than Y register.
 - `0000 1010` - `JPZ` - Jump if zero to 2 byte wide address
 - `0000 1011` - `JNZ` - Jump if not zero to 2 byte wide address
 - `0000 1100` - `JPL` - Jump if less than to 2 byte wide address
