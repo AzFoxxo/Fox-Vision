@@ -67,15 +67,15 @@ namespace FoxVision
             // Bounds check PC
             if (regPC > RAM.Size) regPC = 0;
 
-            timer.Stop();
-            long elapsed_time = timer.ElapsedTicks;
-
             // Calculate how long to wait
             while (true)
             {
-                if (elapsed_time >= timeToWait)
+                if (timer.ElapsedTicks >= timeToWait)
                     break;
             }
+
+            timer.Reset();
+            timer.Stop();
 
             // Return if halt OSR flag has been set
             return flgHalt != 0x0;

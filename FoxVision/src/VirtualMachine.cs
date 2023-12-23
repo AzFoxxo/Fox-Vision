@@ -34,6 +34,10 @@ namespace FoxVision
             {
                 
             }
+
+            // Exit
+            Console.WriteLine("Processor has been halted");
+            Console.WriteLine("Now exiting");
         }
     }
 }
