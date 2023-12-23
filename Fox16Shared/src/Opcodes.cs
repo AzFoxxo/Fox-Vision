@@ -22,7 +22,7 @@ namespace Fox16Shared
             {"LEQ", 9},
             {"JPZ", 10},
             {"JNZ", 11},
-            {"JPL", 12},
+            {"JMP", 12},
             {"CLR", 13},
             {"HLT", 14},
             {"BSL", 15},

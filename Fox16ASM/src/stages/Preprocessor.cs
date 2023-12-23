@@ -99,7 +99,7 @@ namespace Fox16ASM
             for (int i = 0; i < lines.Length; i++)
             {
                 // If line begins with a jump instruction find and replace the label with the direct address
-                if (lines[i].Trim().StartsWith("JPZ") || lines[i].Trim().StartsWith("JNZ") || lines[i].Trim().StartsWith("JPL"))
+                if (lines[i].Trim().StartsWith("JPZ") || lines[i].Trim().StartsWith("JNZ") || lines[i].Trim().StartsWith("JMP"))
                 {
                     // Print until the space in yellow
                     Console.ForegroundColor = ConsoleColor.Yellow;

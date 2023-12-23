@@ -17,7 +17,7 @@ JPZ test_one
 :test_one
 JNZ test_one
 :test_two
-JPL test_three
+JMP test_three
 :test_three
 CLR ; Clear equality bit
 BSL ; bitshift left
