@@ -112,11 +112,11 @@ The PPU will initially idle executing `NOP`s until VRAM has instructions to inst
 - `1000 0000` `0000 0011` - `PPU_WTV` `memory_address_of_ram_to_write_to_or_ram` - Write value from general purpose register to RAM
 - `1000 0000` `0000 0100` - `PPU_BRR` - bitshift value in register to right by 1, storing result in the register
 - `1000 0000` `0000 0101` - `PPU_BLR` - bitshift value in register to right by 1, storing result in the register
-- `1000 0000` `0000 0111` - `PPU_ORA` - bitwise OR between a provided value and that in the register, storing result in the register
-- `1000 0000` `0000 1000` - `PPU_XOR` - bitwise XOR between a provided value and that in the register, storing result in the register
-- `1000 0000` `0000 1001` - `PPU_AND` - bitwise AND between a provided value and that in the register, storing result in the register
-- `1000 0000` `0000 1010` - `PPU_DEC` - decrement one to the current value in the register
-- `1000 0000` `0000 1011` - `PPU_INC` - increment one to the current value in the register
+- `1000 0000` `0000 0110` - `PPU_ORA` - bitwise OR between a provided value and that in the register, storing result in the register
+- `1000 0000` `0000 0111` - `PPU_XOR` - bitwise XOR between a provided value and that in the register, storing result in the register
+- `1000 0000` `0000 1000` - `PPU_AND` - bitwise AND between a provided value and that in the register, storing result in the register
+- `1000 0000` `0000 1001` - `PPU_DEC` - decrement one to the current value in the register
+- `1000 0000` `0000 1010` - `PPU_INC` - increment one to the current value in the register
 
 ## Memory
 The device has a total of 65,536 bytes (16kb) of addressable space.
