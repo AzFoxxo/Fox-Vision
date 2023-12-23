@@ -57,7 +57,7 @@ namespace Fox16Shared
         /// <returns>Array of keys</returns>
         public static string[] GetKey(ushort value)
         {
-            List<string> keys = new List<string>();
+            List<string> keys = [];
             foreach (KeyValuePair<string, ushort> pair in instructions)
             {
                 if (pair.Value == value)
@@ -65,7 +65,7 @@ namespace Fox16Shared
                     keys.Add(pair.Key);
                 }
             }
-            return keys.ToArray();
+            return [.. keys];
         }
     }
 }

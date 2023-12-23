@@ -34,7 +34,7 @@ namespace Fox16ASM
         /// </summary>
         /// <param name="filename">File to process</param>
         /// <returns>string representation of cleaned file</returns>
-        private string[] RemoveCommentsAndWhitespace(string filename)
+        private static string[] RemoveCommentsAndWhitespace(string filename)
         {
             // Read the file
             var lines = File.ReadAllLines(filename);
