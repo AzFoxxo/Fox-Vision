@@ -1,6 +1,7 @@
 #define SKIP_DEBUG
 
 using System.Diagnostics;
+using Fox16Shared;
 using FoxVision.Components;
 
 namespace FoxVision
@@ -62,7 +63,12 @@ namespace FoxVision
                 data[1] = RAM.ReadUnchecked((ushort)(regPC + 1));
 
             // Decode and execute the instruction
-            regPC += DecodeExecuteInstruction(data[0], data[1]);
+            ushort oldPC = regPC;
+            ushort diffPC = DecodeExecuteInstruction(data[0], data[1]);
+            
+            // If regPC and oldPC are the same, add diffPC
+            if (regPC == oldPC)
+                regPC += diffPC; // This ensures if PC was modified by a jump instruction, it isn't modified
 
             // Bounds check PC
             if (regPC > RAM.Size) regPC = 0;
@@ -93,34 +99,34 @@ namespace FoxVision
             {
                 case 0x0:
                 NOP:
-                    LogInstructionExecuting("NOP");
+                    LogInstructionExecuting("NOP", data);
                     break;
                 case 0x1:
-                    LogInstructionExecuting("LFM");
+                    LogInstructionExecuting("LFM", data);
                     SetValueOfTheActiveRegister(RAM.ReadUnchecked((ushort)(data - 1)));
                     return 2;
                 case 0x2:
-                    LogInstructionExecuting("WTM");
+                    LogInstructionExecuting("WTM", data);
                     RAM.WriteUnchecked((ushort)(data - 1), GetValueOfTheActiveRegister());
                     return 2;
                 case 0x3:
-                    LogInstructionExecuting("SRA");
+                    LogInstructionExecuting("SRA", data);
                     ChangeActiveRegister(RAM.ReadUnchecked((ushort)(data - 1)));
                     return 2;
                 case 0x4:
-                    LogInstructionExecuting("AXY");
+                    LogInstructionExecuting("AXY", data);
                     SetValueOfTheActiveRegister((ushort)(regX + regY));
                     break;
                 case 0x5:
-                    LogInstructionExecuting("SXY");
+                    LogInstructionExecuting("SXY", data);
                     SetValueOfTheActiveRegister((ushort)(regX - regY));
                     break;
                 case 0x6:
-                    LogInstructionExecuting("MXY");
+                    LogInstructionExecuting("MXY", data);
                     SetValueOfTheActiveRegister((ushort)(regX * regY));
                     break;
                 case 0x7:
-                    LogInstructionExecuting("DXY");
+                    LogInstructionExecuting("DXY", data);
                     if (regX == 0)
                     {
                         SetValueOfTheActiveRegister(0);
@@ -130,63 +136,91 @@ namespace FoxVision
                     SetValueOfTheActiveRegister((ushort)(regX / regY));
                     break;
                 case 0x8:
-                    LogInstructionExecuting("EQU");
+                    LogInstructionExecuting("EQU", data);
                     if (regX == regY) flgEqual = 0x1; else flgEqual = 0x0;
                     break;
                 case 0x9:
-                    LogInstructionExecuting("LEQ");
+                    LogInstructionExecuting("LEQ", data);
                     if (regX < regY) flgEqual = 0x1; else flgEqual = 0x0;
                     break;
                 case 0xA:
-                    LogInstructionExecuting("JPZ");
-                    if (flgEqual == 0x0) regPC = RAM.ReadUnchecked(data);
+                    LogInstructionExecuting("JPZ", data);
+                    if (flgEqual == 0x0) regPC = data;
                     return 2;
                 case 0xB:
-                    LogInstructionExecuting("JNZ");
-                    if (flgEqual != 0x0) regPC = RAM.ReadUnchecked(data);
+                    LogInstructionExecuting("JNZ", data);
+                    if (flgEqual != 0x0) regPC = data;
                     return 2;
                 case 0xC:
-                    LogInstructionExecuting("JMP");
-                    regPC = RAM.ReadUnchecked(data);
+                    LogInstructionExecuting("JMP", data);
+                    regPC = data;
                     return 2;
                 case 0xD:
-                    LogInstructionExecuting("CLR");
+                    LogInstructionExecuting("CLR", data);
                     flgEqual = 0x0;
                     flgActiveReg = 0x0;
                     flgDivZero = 0x0;
                     flgHalt = 0x0;
                     break;
                 case 0xE:
-                    LogInstructionExecuting("HLT");
+                    LogInstructionExecuting("HLT", data);
                     flgHalt = 0x1;
                     break;
                 case 0xF:
-                    LogInstructionExecuting("BSL");
+                    LogInstructionExecuting("BSL", data);
                     SetValueOfTheActiveRegister((ushort)(GetValueOfTheActiveRegister() << 1));
                     break;
                 case 0x10:
-                    LogInstructionExecuting("BRL");
+                    LogInstructionExecuting("BRL", data);
                     SetValueOfTheActiveRegister((ushort)(GetValueOfTheActiveRegister() >> 1));
                     break;
                 case 0x11:
-                    LogInstructionExecuting("AND");
+                    LogInstructionExecuting("AND", data);
                     var and = (ushort)(GetValueOfTheActiveRegister() & GetValueOfTheInactiveRegister());
                     SetValueOfTheActiveRegister(and);
                     break;
                 case 0x12:
-                    LogInstructionExecuting("ORA");
+                    LogInstructionExecuting("ORA", data);
                     var or = (ushort)(GetValueOfTheActiveRegister() | GetValueOfTheInactiveRegister());
                     SetValueOfTheActiveRegister(or);
                     break;
                 case 0x13:
-                    LogInstructionExecuting("ORA");
+                    LogInstructionExecuting("ORA", data);
                     var xor = (ushort)(GetValueOfTheActiveRegister() ^ GetValueOfTheInactiveRegister());
                     SetValueOfTheActiveRegister(xor);
                     break;
                 case 0x14:
-                    LogInstructionExecuting("DWR");
+                    LogInstructionExecuting("DWR", data);
                     SetValueOfTheActiveRegister(data);
                     return 2;
+                // Extension debug instructions
+                case 0xC000:
+                    LogInstructionExecuting("DBG_LGC", data);
+                    char chr = DebugCharacters.GetCharacter(data);
+                    Console.Write(chr);
+                    return 2;
+                case 0xC001:
+                    LogInstructionExecuting("DGB_MEM", data);
+
+                    // Print all memory
+                    for (ushort i = 0; i < RAM.Size; i++)
+                    {
+                        Console.ForegroundColor = ConsoleColor.Red;
+                        Console.Write($"${i:X4}");
+                        Console.ForegroundColor = ConsoleColor.White;
+                        Console.Write(" ");
+                        Console.ForegroundColor = ConsoleColor.Blue;
+                        Console.WriteLine($"{RAM.ReadUnchecked(i):X4} ");
+                    }
+                    Console.ForegroundColor = ConsoleColor.White;
+                    break;
+                case 0xC002:
+                    ushort chrIn = 0x28; // 40 - not recognised key
+                    char keyIN = (char)Console.ReadKey().Key;
+                    DebugCharacters.codes.TryGetValue(keyIN, out chrIn);
+                    LogInstructionExecuting("DGB_INP", data);
+                    SetValueOfTheActiveRegister(data);
+                    break;
                 default:
                     Console.ForegroundColor = ConsoleColor.Red;
                     Console.WriteLine("Illegal instruction");
@@ -203,7 +237,7 @@ namespace FoxVision
         /// Debug log the opcode currently being executed
         /// </summary>
         /// <param name="opcode">String of the opcode</param>
-        private void LogInstructionExecuting(string opcode)
+        private void LogInstructionExecuting(string opcode, ushort data)
         {
             // Skip
             #if SKIP_DEBUG
@@ -212,8 +246,9 @@ namespace FoxVision
 
             Console.Write("Executing: ");
             Console.ForegroundColor = ConsoleColor.Blue;
-            Console.WriteLine(opcode);
+            Console.Write(opcode);
             Console.ForegroundColor = ConsoleColor.White;
+            Console.WriteLine($" at ${regPC:X4} ({regPC}) with data {data}");
         }
 
         /// <summary>
