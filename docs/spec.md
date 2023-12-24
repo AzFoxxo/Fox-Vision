@@ -71,7 +71,8 @@ The CPU contains several registers:
 - For `X` use value: `24`
 - For `Y` use value: `25`
 - For `Z` use value: `26`
-- For `0` use value: `27`
+- For `-` use value: `27`
+- For `0` use value: `28`
 - For `1` use value: `29`
 - For `2` use value: `30`
 - For `3` use value: `31`
