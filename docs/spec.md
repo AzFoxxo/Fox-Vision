@@ -44,6 +44,7 @@ The CPU contains several registers:
 - `1100 0000` `0000 0010` - `DGB_INP` - Prompt the user for input which is then converted to an unsigned uint16 (active register used)
 
 ## Extension debug character encoding
+**Note:** Unknown displays `?` when outputting and unknown reading in, is converted to `40`
 - For `#` use value: `0`
 - For `A` use value: `1`
 - For `B` use value: `2`
