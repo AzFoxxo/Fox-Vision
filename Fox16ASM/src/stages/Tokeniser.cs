@@ -8,7 +8,7 @@ namespace Fox16ASM
         /// Convert lines to tokens
         /// </summary>
         /// <returns>Returns a list of tokens which can be fed to the next stage of compilation</returns>
-        public Token[] ConvertLinesToTokens(string[] lines)
+        public static Token[] ConvertLinesToTokens(string[] lines)
         {
             List<Token> tokens = [];
 
@@ -36,6 +36,8 @@ namespace Fox16ASM
                     Console.Write($"{token.value}");
                 else if (type == TokenType.Opcode)
                     Console.Write($"{token.value}");
+                else if (type == TokenType.LabelDeclaration)
+                    Console.Write($"{token.value}");
                 else if (type == TokenType.Label)
                     Console.Write($"{token.value}");
                 else
@@ -54,6 +56,8 @@ namespace Fox16ASM
             // Slice the lines at spaces
             var parts = line.Split(' ');
 
+            Token lastToken = new(0, TokenType.Null);
+
             List<Token> tokens = [];
             foreach (var part in parts)
             {
@@ -71,12 +75,19 @@ namespace Fox16ASM
                 // If part starts with a :, treat it as a label
                 else if (part.StartsWith(':'))
                 {
-                    tokens.Add(new Token(part.Remove(0, 1), TokenType.Label));
+                    tokens.Add(new Token(part.Remove(0, 1), TokenType.LabelDeclaration));
                 }
                 // If part starts with letter A-Z, convert to opcode
                 else if (Char.IsLetter(part[0]))
                 {
-                    tokens.Add(new Token(part, TokenType.Opcode));
+                    // If previous instruction was JMP, JNZ or JPZ, TokenType should be Label
+                    if (lastToken.type == TokenType.Opcode && (
+                    (string)lastToken.value == "JMP" ||
+                    (string)lastToken.value == "JNZ" ||
+                    (string)lastToken.value == "JPZ"))
+                        tokens.Add(new Token(part, TokenType.Label));
+                    else
+                        tokens.Add(new Token(part, TokenType.Opcode));
                 }
                 // Invalid token found
                 else
@@ -85,6 +96,10 @@ namespace Fox16ASM
                     Console.WriteLine($"Invalid token found {part}");
                     Environment.Exit(1);
                 }
+
+                // Update the last token
+                if (tokens.Count > 0)
+                    lastToken = tokens[^1];
             }
 
             // Add line terminator

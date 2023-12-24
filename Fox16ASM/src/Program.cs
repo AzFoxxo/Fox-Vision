@@ -29,19 +29,18 @@ namespace Fox16ASM
             }
 
             // Invoke the preprocessor
-            Preprocessor preprocessor = new Preprocessor();
-            string[] lines = preprocessor.Process(filePath);
+            Preprocessor preprocessor = new();
+            (string[] lines, Label[] labels) = preprocessor.Process(filePath);
 
             // Tokeniser the cleaned and processed lines
-            Tokeniser tokeniser = new Tokeniser();
-            var tokens = tokeniser.ConvertLinesToTokens(lines);
+            Tokeniser tokeniser = new();
+            var tokens = Tokeniser.ConvertLinesToTokens(lines);
 
             // Lexical validation
-            // Remove terminating tokens
 
             // Generation
-            Generator generator = new Generator();
-            generator.Generate(tokens, "fox16.bin");
+            Generator generator = new();
+            Generator.Generate(tokens, labels, "fox16.bin");
         }
     }
 }

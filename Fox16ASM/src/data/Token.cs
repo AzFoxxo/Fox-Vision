@@ -1,15 +1,9 @@
 
 namespace Fox16ASM
 {
-    struct Token
+    struct Token(object value, TokenType type)
     {
-        public object value;
-        public TokenType type;
-
-        public Token(object value, TokenType type)
-        {
-            this.value = value;
-            this.type = type;
-        }
+        public object value = value;
+        public TokenType type = type;
     }
 }

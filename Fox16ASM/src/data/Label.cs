@@ -1,15 +1,9 @@
 
 namespace Fox16ASM
 {
-    struct Label
+    struct Label(ushort address, string name)
     {
-        public ushort line;
-        public string name;
-
-        public Label(ushort address, string name)
-        {
-            this.line = address;
-            this.name = name;
-        }
+        public ushort address = address;
+        public string name = name;
     }
 }
