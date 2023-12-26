@@ -1,0 +1,3 @@
+:main
+DBG_LGC %1
+JMP main
