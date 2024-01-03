@@ -7,5 +7,10 @@ The project is composed of three different parts:
 - `FoxVision` - A virtual machine that executes ROM files 
 - `Fox16Shared` - Shared code between the assembler and virtual machine
 
+## Features
+- [X] Custom assembly language
+- [X] Assembler
+- [X] Virtual machine
+
 ## Technical specification
 For a full list of technical speciations, see [Spec](docs/spec.md).
