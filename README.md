@@ -12,5 +12,9 @@ The project is composed of three different parts:
 - [X] Assembler
 - [X] Virtual machine
 
+## Todo
+- [ ] - Finalise graphics drawing spec
+- [ ] - Implement graphics renderer
+
 ## Technical specification
 For a full list of technical speciations, see [Spec](docs/spec.md).
