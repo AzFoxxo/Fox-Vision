@@ -76,11 +76,6 @@ namespace FoxVision
                     case "JNZ":
                     case "JMP":
                     case "JPZ":
-                    case "PPU_LFM":
-                    case "PPU_WTV":
-                    case "PPU_AND":
-                    case "PPU_XOR":
-                    case "PPU_ORA":
                         // Convert byte array to ushort
                         Console.Write($"{ROM[i + 1]:x4} ({ROM[i + 1]})");
                         i += 1;
@@ -88,7 +83,6 @@ namespace FoxVision
                         break;
 
                     case "SRA":
-                    case "PPU_DRW":
                     case "DWR":
                     case "DBG_LGC":
                         // Convert byte array to ushort

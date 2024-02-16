@@ -30,19 +30,6 @@ JMP debug
 :halt
 HLT ; HALT machine
 
-; PPU
-PPU_NOP
-PPU_DRW %1
-PPU_LFM $FFFF
-PPU_WTV $FFFF
-PPU_BRR
-PPU_BLR
-PPU_ORA $FFFF
-PPU_XOR $FFFF
-PPU_AND $FFFF
-PPU_DEC
-PPU_INC
-
 ; Debug extension stuff
 :debug
 DGB_MEM
