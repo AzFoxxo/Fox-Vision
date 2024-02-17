@@ -31,6 +31,7 @@ namespace Fox16Shared
             {"ORA", 18},
             {"XOR", 19},
             {"DWR", 20},
+            // V1.1
             {"ILM", 21},
             {"IWR", 22},
             // Debug extension opcodes
