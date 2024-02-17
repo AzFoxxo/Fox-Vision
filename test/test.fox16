@@ -26,6 +26,11 @@ AND ; And
 ORA ; Or
 XOR ; Xor
 DWR %621 ; Direct right to register
+
+; Inactive read and write memory
+ILM
+IWR
+
 JMP debug
 :halt
 HLT ; HALT machine
