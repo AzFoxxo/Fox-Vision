@@ -31,6 +31,8 @@ namespace Fox16Shared
             {"ORA", 18},
             {"XOR", 19},
             {"DWR", 20},
+            {"ILM", 21},
+            {"IWR", 22},
             // Debug extension opcodes
             {"DBG_LGC", DEBUG_EXTENSION_OFFSET},
             {"DGB_MEM", DEBUG_EXTENSION_OFFSET + 1},
