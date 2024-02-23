@@ -34,6 +34,9 @@ namespace Fox16Shared
             // V1.1
             {"ILM", 21},
             {"IWR", 22},
+            // V1.2
+            {"INC", 23},
+            {"DEC", 24},
             // Debug extension opcodes
             {"DBG_LGC", DEBUG_EXTENSION_OFFSET},
             {"DGB_MEM", DEBUG_EXTENSION_OFFSET + 1},
