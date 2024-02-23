@@ -31,6 +31,10 @@ DWR %621 ; Direct right to register
 ILM
 IWR
 
+; V1.2 shorthand
+INC
+DEC
+
 JMP debug
 :halt
 HLT ; HALT machine
