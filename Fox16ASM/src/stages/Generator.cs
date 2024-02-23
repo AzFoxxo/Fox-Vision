@@ -1,3 +1,4 @@
+using System;
 using System.IO;
 using MiscUtil.IO;
 using MiscUtil.Conversion;
@@ -129,7 +130,14 @@ namespace Fox16ASM
             {
                 if (tokens[i].type == TokenType.LabelDeclaration)
                 {
-                    labels[labelCount].address = (ushort)(i - tokensToSkip); 
+                    // Resolve EOF label resolutions (skip)
+                    if (labelCount > labels.Length - 1) {
+                        Console.ForegroundColor = ConsoleColor.Red;
+                        Console.WriteLine("Attempted to resolve EOF label.");
+                        Console.WriteLine("Skipping label, will not be written to ROM");
+                        continue;
+                    }
+                    labels[labelCount].address = (ushort)(i - tokensToSkip);
                     Console.WriteLine($"Label address {labels[labelCount].address} for {labels[labelCount].name}");
                     labelCount++;
                     tokensToSkip++;
