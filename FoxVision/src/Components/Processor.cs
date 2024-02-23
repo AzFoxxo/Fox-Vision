@@ -202,6 +202,15 @@ namespace FoxVision
                     LogInstructionExecuting("IWR", data);
                     RAM.WriteUnchecked(GetValueOfTheInactiveRegister(), GetValueOfTheActiveRegister());
                     break;
+                    // V1.2
+                case 0x17:
+                    LogInstructionExecuting("INC", data);
+                    SetValueOfTheActiveRegister((ushort)(GetValueOfTheActiveRegister() + 1));
+                    break;
+                case 0x18:
+                    LogInstructionExecuting("DEC", data);
+                    SetValueOfTheActiveRegister((ushort)(GetValueOfTheActiveRegister() - 1));
+                    break;
                 // Extension debug instructions
                 case 0xC000:
                     LogInstructionExecuting("DBG_LGC", data);
