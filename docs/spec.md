@@ -42,7 +42,7 @@ The CPU contains several registers:
 - ### CPU shorthand additions (V1.2)
 - `0000 0000` `0001 0111` - `INC` - Increase the value in the active register by one
 - `0000 0000` `0001 1000` - `DEC` - Decrease the value in the active register by one
-### Extension debug opcodes
+### Extension debug opcodes (EDO)
 **Note:** These are instructions which are only for us for testing the virtual machine, they allow console I/O, printing memory, etc.
 **Note:** All extension debug instruction start with `11` so the first instruction is `1100 0000` `0000 0000`. `11` is not used by the spec so is safe to use for debug commands.
 - `1100 0000` `0000 0000` - `DBG_LGC` - Log a character to the console (see [Extension debug character encoding](#extension-debug-character-encoding))

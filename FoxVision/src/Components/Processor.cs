@@ -9,7 +9,7 @@ namespace FoxVision
     /*
     *   This class is the main processor for the virtual machine.
     *   It does not deal with graphical operations.
-    *   Note: This class defers from the technical specification
+    *   Note: This class differs from the technical specification
     *   in regard to the OSR register. Unlike the 8 bit OSR register,
     *   separate unsigned 16 bit variables are used for each flag.
     *   This is done in an attempt to simplify the design of the processor.
@@ -53,6 +53,11 @@ namespace FoxVision
             Console.WriteLine("Processor created");
         }
 
+
+        /// <summary>
+        /// Execute CPU cycle
+        /// </summary>
+        /// <returns>Return weather the CPU has halted in the cycle</returns>
         internal bool ExecuteCycle()
         {
             timer.Start();
