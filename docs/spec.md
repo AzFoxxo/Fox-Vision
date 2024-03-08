@@ -97,12 +97,101 @@ first 16 bits: opcode
 second 16 bits: addresses/values (if applicable)
 
 # Graphics
-Fox Vision supports a display size of 240x135 which automatically reads the 8100 bytes reserved for graphics and uses 12 bytes colour maps and updates the screen 60 times a second.
+Fox Vision supports a display size of 100x100 with four bits used to represent each colour (colours are predefined) and retrieves this data from RAM 60 times a second to display it.
 
-The VRAM is the least 8kb of RAM, it split into the following sections
-- 80 bytes are reserved (not used currently)
-- 12 bytes are used to store RGB colours for each of the 4 colours supported.
-- 8100 bytes are used to store colours, two bits per pixel (going horizontal from left to right and then from top to bottom)
+The total memory size for an uncompressed frame is as follows:
+`4bits * (100 * 100) = 40000 bits (5000 bytes or 5kb approx)`
+
+VRAM starts at address `FFFF` and descents the next 5000bytes.
+
+## List of supported colours
+<table>
+<tr>
+  <th>Colour Name</th>
+  <th>Hex (RGB)</th>
+  <th>Hex (4bit representation)</th>
+</tr>
+<tr>
+  <td>Black</td>
+  <td>#1a1c2c</td>
+  <td>0x0</td>
+</tr>
+<tr>
+  <td>Purple</td>
+  <td>#5d275d</td>
+  <td>0x1</td>
+</tr>
+<tr>
+  <td>Red</td>
+  <td>#b13e53</td>
+  <td>0x2</td>
+</tr>
+<tr>
+  <td>Orange</td>
+  <td>#ef7d57</td>
+  <td>0x3</td>
+</tr>
+<tr>
+  <td>Yellow</td>
+  <td>#ffcd75</td>
+  <td>0x4</td>
+</tr>
+<tr>
+  <td>Light Green</td>
+  <td>#a7f070</td>
+  <td>0x5</td>
+</tr>
+<tr>
+  <td>Green</td>
+  <td>#38b764</td>
+  <td>0x6</td>
+</tr>
+<tr>
+  <td>Dark Green</td>
+  <td>#257179</td>
+  <td>0x7</td>
+</tr>
+<tr>
+  <td>Dark Blue</td>
+  <td>#29366f</td>
+  <td>0x8</td>
+</tr>
+<tr>
+  <td>Blue</td>
+  <td>#3b5dc9</td>
+  <td>0x9</td>
+</tr>
+<tr>
+  <td>Light Blue</td>
+  <td>#41a6f6</td>
+  <td>0xA</td>
+</tr>
+<tr>
+  <td>Turquoise</td>
+  <td>#73eff7</td>
+  <td>0xB</td>
+</tr>
+<tr>
+  <td>White</td>
+  <td>#f4f4f4</td>
+  <td>0xC</td>
+</tr>
+<tr>
+  <td>Light Grey</td>
+  <td>#94b0c2</td>
+  <td>0xD</td>
+</tr>
+<tr>
+  <td>Grey</td>
+  <td>#566c86</td>
+  <td>0xE</td>
+</tr>
+<tr>
+  <td>Dark Grey</td>
+  <td>#333c57</td>
+  <td>0xF</td>
+</tr>
+</table> 
 
 
 ## Memory
