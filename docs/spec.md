@@ -104,6 +104,8 @@ The total memory size for an uncompressed frame is as follows:
 
 VRAM starts at address `FFFF` and descents the next 5000bytes.
 
+FFFF corresponds to top-left corner, moving right then down.
+
 ## List of supported colours
 <table>
 <tr>
