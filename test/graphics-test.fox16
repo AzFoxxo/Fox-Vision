@@ -1,0 +1,14 @@
+; Register X will store the current address to write
+; Register Y will contain the value to write
+
+
+:main
+DWR $FFFF ; Set the value of the X register directly
+JMP aaaaa
+
+:aaaaa
+SRA %0 ; Change to X register
+IWR ; Write the value in X register to address stored in Y
+SRA %1 ; Change to Y register
+DEC ; Decrease the Y register
+JMP aaaaa

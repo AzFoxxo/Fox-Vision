@@ -37,7 +37,12 @@ namespace FoxVision
 
             DebugLogROMAsData(ROM);
 
-            vm = new VirtualMachine(ROM);
+            // Run VM on a new thread
+            Task task = new Task(delegate { vm = new VirtualMachine(ROM); });
+            task.Start();
+
+            // Create the window
+            PixelDot.Core.Entry(["800", "800", "8"]); // Create new GUI with a size 800x800 with a real drawable area of 100px    
         }
 
         /// <summary>

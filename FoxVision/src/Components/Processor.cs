@@ -1,4 +1,4 @@
-#define SKIP_DEBUG
+// #define SKIP_DEBUG
 
 using System.Diagnostics;
 using Fox16Shared;
