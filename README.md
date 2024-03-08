@@ -15,7 +15,7 @@ The project is composed of three different parts:
 - [X] Virtual machine
 
 ## Todo
-- [ ] - Finalise graphics drawing spec
+- [X] - Finalise graphics drawing spec
 - [ ] - Implement graphics renderer
 
 ## Technical specification
