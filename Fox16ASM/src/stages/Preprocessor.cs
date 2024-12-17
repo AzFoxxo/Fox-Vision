@@ -16,6 +16,63 @@ namespace Fox16ASM
             // Remove whitespace and comments from the file
             var lines = RemoveCommentsAndWhitespace(filename);
 
+            // Evaluate EFOX16
+            if (filename.EndsWith(".efox16"))
+            {
+                Console.WriteLine("EFox16 file detected!");
+
+                // Check if file contains `@efox16_required`, run EFox16 preprocessor
+                if (lines.Any(line => line.Contains("@efox16_required")))
+                {
+                    Console.WriteLine("EFox16 preprocessor support is enabled!");
+
+                    // Check if any line has @const directive
+                    if (lines.Any(line => line.StartsWith("@const")))
+                    {
+                        // Find all @const directives
+                        var constLines = lines.Where(line => line.StartsWith("@const")).ToArray();
+
+                        // Split at space and error handling
+                        foreach (var line in constLines)
+                        {
+                            var parts = line.Split(' ');
+                            if (parts.Length != 3)
+                            {
+                                Console.WriteLine("Invalid @const directive: " + line);
+                                continue;
+                            }
+
+                            // Get the name and value
+                            var name = parts[1];
+                            var value = parts[2];
+
+                            // Replace all instances of name with value
+                            lines = lines.Select(line => line.Replace($"<{name}>", value)).ToArray();
+
+
+                        }
+                    }
+
+
+                    // Delete all preprocessor lines
+                    // TODO: This will simply delete unsupported preprocessor directives, add warning
+                    lines = lines.Where(line => !line.StartsWith('@')).ToArray();
+
+
+                    // Print all lines
+                    foreach (var line in lines)
+                    {
+                        Console.ForegroundColor = ConsoleColor.Green;
+                        Console.WriteLine(line);
+                    }
+
+                }
+                else
+                {
+                    Console.WriteLine("EFox16 preprocessor requirement has not been requested despite efox16 file being supplied");
+                }
+            }
+
             // Find all labels in the file
             labels = FindLabels(lines);
 

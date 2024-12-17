@@ -1,0 +1,104 @@
+@efox16_required
+; Extended Fox Assembly 16 bit
+; Address denotion $HEX(16 bit only)
+; constant denotion %DEC(16 bit only)
+
+; Define a compile time constant
+
+; Debug character table
+@const HASH %0
+@const A %1
+@const B %2
+@const C %3
+@const D %4
+@const E %5
+@const F %6
+@const G %7
+@const H %8
+@const I %9
+@const J %10
+@const K %11
+@const L %12
+@const M %13
+@const N %14
+@const O %15
+@const P %16
+@const Q %17
+@const R %18
+@const S %19
+@const T %20
+@const U %21
+@const V %22
+@const W %23
+@const X %24
+@const Y %25
+@const Z %26
+@const DASH %27
+@const 0 %28
+@const 1 %29
+@const 2 %30
+@const 3 %31
+@const 4 %32
+@const 5 %33
+@const 6 %34
+@const 7 %35
+@const 8 %36
+@const 9 %37
+@const NL %38
+@const SPACE %39
+
+
+:main
+
+; Extended test
+DBG_LGC <T>
+DBG_LGC <E>
+DBG_LGC <S>
+DBG_LGC <T>
+DBG_LGC <NL>
+
+
+NOP ; Nothing
+LFM $FFFF
+WTM $FFFF
+SRA %1
+AXY ; Add
+SXY ; Sub
+MXY ; Mul
+DXY ; Div
+EQU ; equal
+LEQ ; less
+JPZ test_one
+:test_one
+JNZ test_two
+:test_two
+JMP test_three
+:test_three
+CLR ; Clear OSR registers
+BSL ; bitshift left
+BSR ; Bitshift right
+AND ; And
+ORA ; Or
+XOR ; Xor
+DWR %621 ; Direct right to register
+
+; Inactive read and write memory
+ILM
+IWR
+
+; V1.2 shorthand
+INC
+DEC
+
+JMP debug
+:halt
+HLT ; HALT machine
+
+; Debug extension stuff
+:debug
+DGB_MEM
+DBG_LGC %1
+DBG_LGC %2
+DBG_LGC %38
+DGB_INP
+JMP halt

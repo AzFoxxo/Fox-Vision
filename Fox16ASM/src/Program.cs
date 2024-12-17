@@ -22,7 +22,7 @@ namespace Fox16ASM
             }
 
             // Check file has valid extension
-            if (Path.GetExtension(filePath) != ".fox16")
+            if (Path.GetExtension(filePath) != ".fox16" && Path.GetExtension(filePath) != ".efox16")
             {
                 Console.WriteLine("Invalid file extension: " + filePath);
                 return;
