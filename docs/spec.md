@@ -53,7 +53,7 @@ The CPU contains several registers:
 
 ### IO functions (V1.3)
 
-**Note**: Allow IO related opcodes use 1xxx xxxx xxxx xxxx format.
+**Note**: All IO related opcodes use 1xxx xxxx xxxx xxxx format.
 
 - `1000 0000` `0000 0000` - `GSWP` - Swap the VRAM with the RAM
 - `1000 0000` `0000 0001` - `GCLR` - Zero out the VRAM
