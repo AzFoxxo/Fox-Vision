@@ -7,6 +7,7 @@ namespace Fox16Shared
     public class Opcodes
     {
         public const ushort DEBUG_EXTENSION_OFFSET = 0xC000;
+        public const ushort IO_EXTENSION_OFFSET = 0x8000;
         public static Dictionary<string, ushort> instructions = new()
         {
             // CPU opcodes
@@ -37,6 +38,9 @@ namespace Fox16Shared
             // V1.2
             {"INC", 23},
             {"DEC", 24},
+            // V1.3
+            {"GSWP", IO_EXTENSION_OFFSET},
+            {"GCLR", IO_EXTENSION_OFFSET + 1},
             // Debug extension opcodes
             {"DBG_LGC", DEBUG_EXTENSION_OFFSET},
             {"DGB_MEM", DEBUG_EXTENSION_OFFSET + 1},
