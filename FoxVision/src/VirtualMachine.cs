@@ -4,8 +4,9 @@ namespace FoxVision
 {
     internal class VirtualMachine
     {
-        private ContiguousMemory _unprotectedMemory;
-        private Processor _processor;
+        private readonly ContiguousMemory _unprotectedMemory;
+        private readonly Processor _processor;
+        private readonly GraphicsUnit _graphicsUnit;
         internal VirtualMachine(ushort[] ROM)
         {
             // Create a new block of contiguous memory for the RAM
@@ -26,8 +27,11 @@ namespace FoxVision
 
             Console.WriteLine("ROM copied to RAM");
 
+            // Create the graphics unit
+            _graphicsUnit = new(192, 108);
+
             // Create the CPU
-            _processor = new(_unprotectedMemory);
+            _processor = new(_unprotectedMemory, _graphicsUnit);
             
             // Enter CPU cycle
             while (!_processor.ExecuteCycle())

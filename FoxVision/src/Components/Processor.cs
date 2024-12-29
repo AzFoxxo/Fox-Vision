@@ -1,10 +1,9 @@
-#define SKIP_DEBUG
+// #define SKIP_DEBUG
 
 using System.Diagnostics;
 using Fox16Shared;
-using FoxVision.Components;
 
-namespace FoxVision
+namespace FoxVision.Components
 {
     /*
     *   This class is the main processor for the virtual machine.
@@ -24,15 +23,16 @@ namespace FoxVision
         private const long timeToWait = clock / ticksInSec;
 
         // CPU timer
-        Stopwatch timer;
+        private readonly Stopwatch timer;
 
-        ContiguousMemory RAM;
+        private readonly ContiguousMemory RAM;
+        private readonly GraphicsUnit graphicsUnit;
 
         /// <summary>
         ///  Create the CPU
         /// </summary>
         /// <param name="RAM">Reference to the RAM</param>
-        internal Processor(ContiguousMemory RAM)
+        internal Processor(ContiguousMemory RAM, GraphicsUnit graphicsUnit)
         {
             // Set RAM reference
             this.RAM = RAM;
@@ -46,6 +46,9 @@ namespace FoxVision
             // Set flags
             flgEqual = 0x0;
             flgActiveReg = 0x0;
+
+            // Set graphics unit
+            this.graphicsUnit = graphicsUnit;
 
             // Create a new CPU timer
             timer = new Stopwatch();
@@ -70,7 +73,7 @@ namespace FoxVision
             // Decode and execute the instruction
             ushort oldPC = regPC;
             ushort diffPC = DecodeExecuteInstruction(data[0], data[1]);
-            
+
             // If regPC and oldPC are the same, add diffPC
             if (regPC == oldPC)
                 regPC += diffPC; // This ensures if PC was modified by a jump instruction, it isn't modified
@@ -207,7 +210,7 @@ namespace FoxVision
                     LogInstructionExecuting("IWR", data);
                     RAM.WriteUnchecked(GetValueOfTheInactiveRegister(), GetValueOfTheActiveRegister());
                     break;
-                    // V1.2
+                // V1.2
                 case 0x17:
                     LogInstructionExecuting("INC", data);
                     SetValueOfTheActiveRegister((ushort)(GetValueOfTheActiveRegister() + 1));
@@ -215,6 +218,23 @@ namespace FoxVision
                 case 0x18:
                     LogInstructionExecuting("DEC", data);
                     SetValueOfTheActiveRegister((ushort)(GetValueOfTheActiveRegister() - 1));
+                    break;
+                // V1.3
+                case 0x8000:
+                    LogInstructionExecuting("GSWP", data);
+                    // Lock the thread down
+                    if (graphicsUnit != null)
+                        lock (graphicsUnit) graphicsUnit.SwapBuffer(RAM);
+                    else
+                        throw new InvalidOperationException("graphicsUnit not created.");
+                    break;
+                case 0x8001:
+                    LogInstructionExecuting("GCLR", data);
+                    // Lock the thread down
+                    if (graphicsUnit != null)
+                        lock (graphicsUnit) graphicsUnit.Clear();
+                    else
+                        throw new InvalidOperationException("graphicsUnit not created.");
                     break;
                 // Extension debug instructions
                 case 0xC000:
@@ -263,9 +283,9 @@ namespace FoxVision
         private void LogInstructionExecuting(string opcode, ushort data)
         {
             // Skip
-            #if SKIP_DEBUG
+#if SKIP_DEBUG
             return;
-            #endif
+#endif
 
             Console.Write("Executing: ");
             Console.ForegroundColor = ConsoleColor.Blue;

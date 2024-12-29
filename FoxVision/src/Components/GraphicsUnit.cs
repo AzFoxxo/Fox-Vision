@@ -6,12 +6,14 @@ namespace FoxVision.Components
     */
     internal class GraphicsUnit
     {
-        private readonly ContiguousMemory _memory;
+        public readonly uint Width;
+        public readonly uint Height;
+        public readonly uint SizeInBytes;
+
         private const uint defaultWidth = 192;
         private const uint defaultHeight = 108;
         private const uint maxMemorySize = 0xFFFF / 2; // 32KB limit
-        private readonly uint _width;
-        private readonly uint _height;
+        private readonly ContiguousMemory _memory;
 
         /// <summary>
         /// Create a new graphics unit based on the screen size
@@ -21,19 +23,40 @@ namespace FoxVision.Components
         internal GraphicsUnit(uint width, uint height)
         {
             // Size screen size
-            _width = width > 0 ? width : defaultWidth;
-            _height = height > 0 ? height : defaultHeight;
+            Width = width > 0 ? width : defaultWidth;
+            Height = height > 0 ? height : defaultHeight;
 
             // Calculate the size of the memory block
-            var bytes = (width * height) / 2;
+            SizeInBytes = (width * height) / 2;
 
             // Check memory size is valid
-            if (bytes > maxMemorySize)
+            if (SizeInBytes > maxMemorySize)
                 throw new ArgumentOutOfRangeException("Graphics memory size is too large! Reduce screen width and height to fit within 32kb (half RAM size) limit.");
 
-            _memory = new ContiguousMemory(bytes);
+            _memory = new ContiguousMemory(SizeInBytes);
 
             Console.WriteLine("Created graphics unit");
+            Console.WriteLine($"Screen size: {Width}x{Height}");
+            Console.WriteLine($"Display buffer size: {SizeInBytes} bytes");
+        }
+
+        /// <summary>
+        /// Clear the screen buffer
+        /// </summary>
+        internal void Clear()
+        {
+            for (ushort i = 0; i < SizeInBytes; i++)
+                _memory.WriteUnchecked(i, 0x00);
+        }
+
+        /// <summary>
+        /// Copy pixel data to the buffer
+        /// </summary>
+        /// <param name="memory">Reference to the RAM of the CPU</param>
+        internal void SwapBuffer(ContiguousMemory memory)
+        {
+            for (ushort i = 0; i < SizeInBytes; i++)
+                _memory.WriteUnchecked(i, memory.ReadUnchecked(i));
         }
 
         /// <summary>
