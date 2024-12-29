@@ -1,0 +1,60 @@
+@efox16_required
+
+; Counter immediately after the last byte of reserved memory
+@const CTR_ADDR $7D01
+; Combined colour to set to the whole byte to (two pixels worth)
+@const COL_COMB $FEB0
+; Cut off value for the counter
+@const CUT_OFF %55167
+
+; Set the counter to FFFF
+DWR $FFFF ; Set register value to FFFF
+SRA %1 ; Change to second register
+DWR <CTR_ADDR> ; Set address to CTR_ADDR
+SRA %0 ; Change to first register
+IWR ; Write the value in the active (A) register to the address in the inactive (B) register
+
+; Do-while loop while
+
+; B register here should correspond to the value in the counter
+; A register should contain the colour to set
+
+; Set the current address to the COL_COMB value
+DWR <COL_COMB> ; Set register value to COL_COMB
+
+; Write A register to the current address
+IWR
+
+; Here the registers need to be
+; A: Address to write to
+; B: Value to write
+
+; Decrement the counter
+SRA %1 ; Change to second register
+DEC
+
+; Write the counter back to the CTR_ADDR
+SRA %0 ; Change to first register
+DWR <CTR_ADDR> ; Set address to CTR_ADDR
+SRA %1 ; Change to second register
+IWR ; Write B to address contained in A
+
+; Here check if the counter is less than cut off - 55167
+; A should contain the value of the cut off
+; B should contain the value of the counter
+SRA %0 ; Change to first register
+DWR <CUT_OFF> ; Set register value to CUT_OFF
+
+; Check active is less than inactive (A < B)
+LEQ
+
+; If false, jump to the loop
+JMZ loop
+
+; End of loop
+
+; Swap the graphics buffer
+GSWP
+
+; Halt the machine
+HLT
