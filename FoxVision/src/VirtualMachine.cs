@@ -9,7 +9,7 @@ namespace FoxVision
         internal VirtualMachine(ushort[] ROM)
         {
             // Create a new block of contiguous memory for the RAM
-            _unprotectedMemory = new(ushort.MaxValue);
+            _unprotectedMemory = new(ushort.MaxValue+1);
 
             // Copy the first 4kb of ROM into the unprotected memory or all room, whichever is smaller
             var size = Math.Min(ROM.Length, 4096);
