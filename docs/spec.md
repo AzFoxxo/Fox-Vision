@@ -1,10 +1,13 @@
 # Specification of the Fox Vision architecture
 
 ## Processor
+
 The CPU is a single threaded 8MHz RISC chip. It uses the FoxVision16 architecture.
 
 ### Registers
+
 The CPU contains several registers:
+
 - X - 16 bit reg (general purpose register #1)
 - Y - 16 bit reg (general purpose register #2)
 - PC - 16 bit reg (program counter register, points the current location in RAM the CPU is executing)
@@ -15,6 +18,7 @@ The CPU contains several registers:
   - Halt register (`0x0` - continue after cycle, `0x1` - halt after cycle)
 
 ## CPU opcodes (V1.0)
+
 - `0000 0000` `0000 0000` - `NOP` - Waste clock cycle
 - `0000 0000` `0000 0001` - `LFM` - Load 2 byte value from memory in active register
 - `0000 0000` `0000 0010` - `WTM` - Write to memory the value of the active register
@@ -23,7 +27,7 @@ The CPU contains several registers:
 - `0000 0000` `0000 0101` - `SXY` - Subtract X from Y and store result in active register
 - `0000 0000` `0000 0110` - `MXY` - Multiply X by Y and store result in active register
 - `0000 0000` `0000 0111` - `DXY` - Divide X by Y and store result in active register
-- `0000 0000` `0000 1000` - `EQU` - Check if X and Y registers are equal and store result in 
+- `0000 0000` `0000 1000` - `EQU` - Check if X and Y registers are equal and store result in
 - `0000 0000` `0000 1001` - `LEQ` - Check if X register is less than Y register.
 - `0000 0000` `0000 1010` - `JPZ` - Jump if zero to 2 byte wide address
 - `0000 0000` `0000 1011` - `JNZ` - Jump if not zero to 2 byte wide address
@@ -36,21 +40,37 @@ The CPU contains several registers:
 - `0000 0000` `0001 0010` - `ORA` - OR bitwise value in active register by value in non-active register
 - `0000 0000` `0001 0011` - `XOR` - XOR bitwise value in active register by value in non-active register
 - `0000 0000` `0001 0100` - `DWR` - Direct write (to) register sets the value given (16 bit decimal) to the active register
+
 ### CPU usability additions (V1.1)
+
 - `0000 0000` `0001 0101` - `ILM` - Indirect load from memory - load address stored in active register
 - `0000 0000` `0001 0110` - `IWR` - Indirect write register to memory - write value in active register to address stored in inactive register
-- ### CPU shorthand additions (V1.2)
+
+### CPU shorthand additions (V1.2)
+
 - `0000 0000` `0001 0111` - `INC` - Increase the value in the active register by one
 - `0000 0000` `0001 1000` - `DEC` - Decrease the value in the active register by one
+
+### IO functions (V1.3)
+
+**Note**: Allow IO related opcodes use 1xxx xxxx xxxx xxxx format.
+
+- `1000 0000` `0000 0000` - `GSWP` - Swap the VRAM with the RAM
+- `1000 0000` `0000 0001` - `GCLR` - Zero out the VRAM
+
 ### Extension debug opcodes (EDO)
+
 **Note:** These are instructions which are only for us for testing the virtual machine, they allow console I/O, printing memory, etc.
 **Note:** All extension debug instruction start with `11` so the first instruction is `1100 0000` `0000 0000`. `11` is not used by the spec so is safe to use for debug commands.
+
 - `1100 0000` `0000 0000` - `DBG_LGC` - Log a character to the console (see [Extension debug character encoding](#extension-debug-character-encoding))
 - `1100 0000` `0000 0001` - `DGB_MEM` - Log the memory in hex to the console
 - `1100 0000` `0000 0010` - `DGB_INP` - Prompt the user for input which is then converted to an unsigned uint16 (active register used)
 
 ## Extension debug character encoding
+
 **Note:** Unknown displays `?` when outputting and unknown reading in, is converted to `40`
+
 - For `#` use value: `0`
 - For `A` use value: `1`
 - For `B` use value: `2`
@@ -90,112 +110,140 @@ The CPU contains several registers:
 - For `8` use value: `36`
 - For `9` use value: `37`
 - For `\n` (newline) use value: `38`
-- For ` ` (space) use value: `39`
+- For `` (space) use value: `39`
 
 ### Instruction breakdown
+
 first 16 bits: opcode
 second 16 bits: addresses/values (if applicable)
 
-# Graphics
-Fox Vision supports a display size of 100x100 with four bits used to represent each colour (colours are predefined) and retrieves this data from RAM 60 times a second to display it.
+## Graphics
 
-The total memory size for an uncompressed frame is as follows:
-`4bits * (100 * 100) = 40000 bits (5000 bytes or 5kb approx)`
+Fox Vision supports a display size of 192 by 108 with four bits used to represent each colour (colours are predefined) and there is a special display buffer outside of the general purpose RAM which the frame is copied into where the frame is updated every 60th of a second.
+
+The total memory of a frame is
+`4bits * (192 * 108) = 82944 bits (10368 bytes or 10.368kb)`
 
 VRAM starts at address `FFFF` and descents the next 5000bytes.
 
 FFFF corresponds to top-left corner, moving right then down.
 
-## List of supported colours
+### Graphics memory
+
+The graphics memory is 10.368kb of read only memory which can be swapped out with the contents of RAM using the `GSWP` instruction. The `GSWP` instruction will take an unknown amount of clock cycles to complete as it must wait for drawing to the display to finish.
+
+#### Data packing
+
+Data is stored from `FFFF` in RAM, each byte contains two pixels, the first pixel is the leftmost and vice versa.
+
+### List of supported colours
+
 <table>
 <tr>
   <th>Colour Name</th>
   <th>Hex (RGB)</th>
-  <th>Hex (4bit representation)</th>
+  <th>Hexadecimal</th>
+  <th>Decimal</th>
 </tr>
 <tr>
   <td>Black</td>
   <td>#1a1c2c</td>
   <td>0x0</td>
+  <td>0</td>
 </tr>
 <tr>
   <td>Purple</td>
   <td>#5d275d</td>
   <td>0x1</td>
+  <td>1</td>
 </tr>
 <tr>
   <td>Red</td>
   <td>#b13e53</td>
   <td>0x2</td>
+  <td>2</td>
 </tr>
 <tr>
   <td>Orange</td>
   <td>#ef7d57</td>
   <td>0x3</td>
+  <td>3</td>
 </tr>
 <tr>
   <td>Yellow</td>
   <td>#ffcd75</td>
   <td>0x4</td>
+  <td>4</td>
 </tr>
 <tr>
   <td>Light Green</td>
   <td>#a7f070</td>
   <td>0x5</td>
+  <td>5</td>
 </tr>
 <tr>
   <td>Green</td>
   <td>#38b764</td>
   <td>0x6</td>
+  <td>6</td>
 </tr>
 <tr>
   <td>Dark Green</td>
   <td>#257179</td>
   <td>0x7</td>
+  <td>7</td>
 </tr>
 <tr>
   <td>Dark Blue</td>
   <td>#29366f</td>
   <td>0x8</td>
+  <td>8</td>
 </tr>
 <tr>
   <td>Blue</td>
   <td>#3b5dc9</td>
   <td>0x9</td>
+  <td>9</td>
 </tr>
 <tr>
   <td>Light Blue</td>
   <td>#41a6f6</td>
   <td>0xA</td>
+  <td>10</td>
 </tr>
 <tr>
   <td>Turquoise</td>
   <td>#73eff7</td>
   <td>0xB</td>
+  <td>11</td>
 </tr>
 <tr>
   <td>White</td>
   <td>#f4f4f4</td>
   <td>0xC</td>
+  <td>12</td>
 </tr>
 <tr>
   <td>Light Grey</td>
   <td>#94b0c2</td>
   <td>0xD</td>
+  <td>13</td>
 </tr>
 <tr>
   <td>Grey</td>
   <td>#566c86</td>
   <td>0xE</td>
+  <td>14</td>
 </tr>
 <tr>
   <td>Dark Grey</td>
   <td>#333c57</td>
   <td>0xF</td>
+  <td>15</td>
 </tr>
-</table> 
-
+</table>
 
 ## Memory
+
 The device has a total of 65,536 bytes (16kb) of addressable space.
-This memory is broken up into several sections, the first 4kb is reserved for ROM and with the rest for general purpose use
+This memory is broken up into several sections, the first 4kb is reserved for ROM and with the rest for general purpose use.
