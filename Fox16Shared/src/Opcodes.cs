@@ -11,44 +11,44 @@ namespace Fox16Shared
         public static Dictionary<string, ushort> instructions = new()
         {
             // CPU opcodes
-            {"NOP", 0},
-            {"LFM", 1},
-            {"WTM", 2},
-            {"SRA", 3},
-            {"AXY", 4},
-            {"SXY", 5},
-            {"MXY", 6},
-            {"DXY", 7},
-            {"EQU", 8},
-            {"LEQ", 9},
-            {"JPZ", 10},
-            {"JNZ", 11},
-            {"JMP", 12},
-            {"CLR", 13},
-            {"HLT", 14},
-            {"BSL", 15},
-            {"BSR", 16},
-            {"AND", 17},
-            {"ORA", 18},
-            {"XOR", 19},
-            {"DWR", 20},
+            {"NOP", 0},     // Unchanged
+            {"LFM", 1},     // Defunct
+            {"WTM", 2},     // Defunct
+            {"SRA", 3},     // Defunct
+            {"AXY", 4},     // ADD (changed behavior)
+            {"SXY", 5},     // SUB (changed behavior)
+            {"MXY", 6},     // MUL (changed behavior)
+            {"DXY", 7},     // DIV (changed behavior)
+            {"EQU", 8},     // CMP (changed behavior)
+            {"LEQ", 9},     // Defunct
+            {"JPZ", 10},    // JZ (changed behavior)
+            {"JNZ", 11},    // JNZ (changed behavior)
+            {"JMP", 12},    // JMP (unchanged)
+            {"CLR", 13},    // Defunct
+            {"HLT", 14},    // HLT (unchanged)
+            {"BSL", 15},    // SHL (changed behavior)
+            {"BSR", 16},    // SHR (changed behavior)
+            {"AND", 17},    // AND (changed behavior)
+            {"ORA", 18},    // OR (changed behavior)
+            {"XOR", 19},    // XOR (changed behavior)
+            {"DWR", 20},    // Defunct
             // V1.1
-            {"ILM", 21},
-            {"IWR", 22},
+            {"ILM", 21},    // Defunct
+            {"IWR", 22},    // Defunct
             // V1.2
-            {"INC", 23},
-            {"DEC", 24},
+            {"INC", 23},    // INC (changed behavior)
+            {"DEC", 24},    // DEC (changed behavior)
             // V1.4
-            {"SDM", 25},
-            {"SSM", 26},
-            {"MOV", 27},
+            {"SDM", 25},    // Defunct
+            {"SSM", 26},    // Defunct
+            {"MOV", 27},    // MOV (changed behavior)
             // V1.3
-            {"GSWP", IO_EXTENSION_OFFSET},
-            {"GCLR", IO_EXTENSION_OFFSET + 1},
+            {"GSWP", IO_EXTENSION_OFFSET},  // Unchanged
+            {"GCLR", IO_EXTENSION_OFFSET + 1}, // Unchanged
             // Debug extension opcodes
-            {"DBG_LGC", DEBUG_EXTENSION_OFFSET},
-            {"DGB_MEM", DEBUG_EXTENSION_OFFSET + 1},
-            {"DGB_INP", DEBUG_EXTENSION_OFFSET + 2}
+            {"DBG_LGC", DEBUG_EXTENSION_OFFSET}, // Unchanged
+            {"DGB_MEM", DEBUG_EXTENSION_OFFSET + 1}, // Unchanged
+            {"DGB_INP", DEBUG_EXTENSION_OFFSET + 2} // Unchanged
         };
 
         /// <summary>

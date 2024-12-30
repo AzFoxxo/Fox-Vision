@@ -1,0 +1,77 @@
+; Unified Fox 16 Assembly Language
+; This language includes EFOX16 and FOX16 features
+
+; Registers
+; RX - General purpose register
+; RY - General purpose register
+; RZ - General purpose register
+
+; Compile time constants
+#define compile_time_constant_hex 0x1234 ; Hex
+#define compile_time_constant_dec 1234 ; Decimal
+#define compile_time_constant_bin 0b1010 ; Binary
+
+my_label:
+    ; Label name here
+
+
+; Jumps
+JMP my_label ; Unconditional jump
+JZ my_label ; Jump if zero
+JNZ my_label ; Jump if not zero
+JL my_label ; Jump if less than
+JLE my_label ; Jump if less than or equal
+JG my_label ; Jump if greater than
+JGE my_label ; Jump if greater than or equal
+
+; Comparison
+CMP RX, RY ; Compare RX and RY
+CMP RX, 0x1234 ; Compare RX and constant
+CMP 0x1234, RY ; Compare constant and RY
+CMP RX, [RY] ; Compare RX and memory at RY (becomes )
+
+; Move
+MOV RX, RY ; Move RY to RX
+MOV RX, 0x1234 ; Move constant to RX
+MOV RX, [RY] ; Move memory at RY to RX
+MOV [RX], RY ; Move RY to memory at RX
+MOV [RX], 0x1234 ; Move constant to memory at RX
+
+; Arithmetic (Registers and immediate values only)
+ADD RX, RY ; RX = RX + RY
+ADD RX, 0x1234 ; RX = RX + constant
+
+SUB RX, RY ; RX = RX - RY
+SUB RX, 0x1234 ; RX = RX - constant
+
+MUL RX, RY ; RX = RX * RY
+MUL RX, 0x1234 ; RX = RX * constant
+
+DIV RX, RY ; RX = RX / RY and RZ = RX % RY
+DIV RX, 0x1234 ; RX = RX / constant and RZ = RX % constant
+
+INC RX ; RX = RX + 1
+DEC RX ; RX = RX - 1
+
+; Bitshift (registers and immediate values only)
+SHL RX, RY ; RX = RX << RY
+SHL RX, 0x1234 ; RX = RX << constant
+
+SHR RX, RY ; RX = RX >> RY
+SHR RX, 0x1234 ; RX = RX >> constant
+
+; Logic (registers and immediate values only)
+AND RX, RY ; RX = RX & RY
+AND RX, 0x1234 ; RX = RX & constant
+
+OR RX, RY ; RX = RX | RY
+OR RX, 0x1234 ; RX = RX | constant
+
+XOR RX, RY ; RX = RX ^ RY
+XOR RX, 0x1234 ; RX = RX ^ constant
+
+NOT RX ; RX = ~RX
+
+; Basic instructions
+NOP
+HLT
