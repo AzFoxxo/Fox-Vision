@@ -83,12 +83,21 @@ namespace FoxVision
                         break;
 
                     case "SRA":
+                    case "SSM":
+                    case "SDM":
                     case "DWR":
                     case "DBG_LGC":
                         // Convert byte array to ushort
                         Console.ForegroundColor = ConsoleColor.Cyan;
                         Console.Write($"({ROM[i + 1]})");
                         i += 1;
+                        break;
+
+                    case "MOV":
+                        // Convert byte array to ushort
+                        Console.ForegroundColor = ConsoleColor.Yellow;
+                        Console.Write($"({ROM[i + 1]} -> {ROM[i + 2]})");
+                        i += 2;
                         break;
 
                     default:

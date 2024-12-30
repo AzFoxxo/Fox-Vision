@@ -8,6 +8,7 @@ namespace Fox16ASM
         LabelDeclaration,
         Label,
         Terminator,
-        Null
+        Null,
+        Register,
     }
 }

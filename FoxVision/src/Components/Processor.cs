@@ -1,4 +1,5 @@
 // #define SKIP_DEBUG
+#define SKIP_VERBOSE_DEBUGGING
 
 using System.Diagnostics;
 using Fox16Shared;
@@ -16,8 +17,8 @@ namespace FoxVision.Components
     internal class Processor
     {
         // Registers
-        private ushort regX, regY, regPC;
-        private ushort flgEqual, flgActiveReg, flgDivZero, flgHalt;
+        private ushort regX, regY, regPC, regHold;
+        private ushort flgEqual, flgActiveReg, flgDivZero, flgHalt, flgSource, flgDest;
         private const long clock = 8_000_000;
         private const long ticksInSec = 10_000_000;
         private const long timeToWait = clock / ticksInSec;
@@ -42,6 +43,8 @@ namespace FoxVision.Components
             regY = 0x0;
             regPC = 0x0;
             flgHalt = 0x0;
+            flgSource = 0x0;
+            flgDest = 0x0;
 
             // Set flags
             flgEqual = 0x0;
@@ -66,13 +69,19 @@ namespace FoxVision.Components
             timer.Start();
 
             // Read the data from RAM and validate bounds of second ushort
-            ushort[] data = [RAM.ReadUnchecked(regPC), 0x0];
+            ushort[] data = [RAM.ReadUnchecked(regPC), 0x0, 0x0]; // Instruction
             if (regPC != RAM.Size)
-                data[1] = RAM.ReadUnchecked((ushort)(regPC + 1));
+                data[1] = RAM.ReadUnchecked((ushort)(regPC + 1)); // Data
+            if (regPC + 1 != RAM.Size)
+                data[2] = RAM.ReadUnchecked((ushort)(regPC + 2)); // Extended data
+            
 
             // Decode and execute the instruction
             ushort oldPC = regPC;
-            ushort diffPC = DecodeExecuteInstruction(data[0], data[1]);
+            ushort diffPC = DecodeExecuteInstruction(data[0], data[1], data[2]);
+
+            // Show the processor status (debug)
+            LogProcessorStatus();
 
             // If regPC and oldPC are the same, add diffPC
             if (regPC == oldPC)
@@ -100,7 +109,7 @@ namespace FoxVision.Components
         /// </summary>
         /// <param name="data">two uint16s of RAM (first opcode, second data)</param>
         /// <returns></returns>
-        private ushort DecodeExecuteInstruction(ushort opcode, ushort data)
+        private ushort DecodeExecuteInstruction(ushort opcode, ushort data, ushort extData)
         {
             // Determine which opcode is being executed
             switch (opcode)
@@ -219,6 +228,70 @@ namespace FoxVision.Components
                     LogInstructionExecuting("DEC", data);
                     SetValueOfTheActiveRegister((ushort)(GetValueOfTheActiveRegister() - 1));
                     break;
+                // V1.4
+                case 0x19:
+                    LogInstructionExecuting("SDM", data);
+                    if (flgDest == 0x0)
+                        flgDest = (ushort)SourceDest.Memory;
+                    else if (flgDest == 0x1)
+                        flgDest = (ushort)SourceDest.Register;
+                    else
+                        #if DEBUG
+                        throw new InvalidOperationException("Invalid destination source");
+                        #else
+                        Console.WriteLine("Invalid destination source");
+                        #endif
+                    return 2;
+                case 0x1A:
+                    LogInstructionExecuting("SSM", data);
+                    if (flgSource == 0x0)
+                        flgSource = (ushort)SourceDest.Memory;
+                    else if (flgSource == 0x1)
+                        flgSource = (ushort)SourceDest.Register;
+                    else if (flgSource == 0x2)
+                        flgSource = (ushort)SourceDest.Immediate;
+                    else
+                        #if DEBUG
+                        throw new InvalidOperationException("Invalid source source");
+                        #else
+                        Console.WriteLine("Invalid source source");
+                        #endif
+                    return 2;
+                    case 0x1B:
+                    LogInstructionExecuting("MOV", data, extData, true);
+
+                    // Load the value and move to the hold register
+                    switch (flgSource)
+                    {
+                        case (ushort)SourceDest.Immediate:
+                            regHold = data;
+                            break;
+                        case (ushort)SourceDest.Register:
+                            if (extData == 0x0)
+                                regHold = regX;
+                            else
+                                regHold = regY;
+                            break;
+                        case (ushort)SourceDest.Memory:
+                            regHold = RAM.ReadUnchecked((ushort)(data - 1));
+                            break;
+                    }
+
+                    // Write the value to the destination
+                    switch (flgDest)
+                    {
+                        case (ushort)SourceDest.Register:
+                            if (extData == 0x0)
+                                regX = regHold;
+                            else
+                                regY = regHold;
+                            break;
+                        case (ushort)SourceDest.Memory:
+                            RAM.WriteUnchecked((ushort)(data - 1), regHold);
+                            break;
+                    }
+
+                    return 3;
                 // V1.3
                 case 0x8000:
                     LogInstructionExecuting("GSWP", data);
@@ -277,10 +350,20 @@ namespace FoxVision.Components
         }
 
         /// <summary>
+        /// Log the processor status - the values of registers and flags
+        /// </summary>
+        private void LogProcessorStatus()
+        {
+            #if !SKIP_DEBUGGING && !SKIP_VERBOSE_DEBUGGING
+            Console.WriteLine($"Processor status: A {regX:X4} ({regX}), B {regY:X4} ({regY}), PC {regPC:X4} ({regPC}), Flags: E {flgEqual}, DZ {flgDivZero}, H {flgHalt}");
+            #endif
+        }
+
+        /// <summary>
         /// Debug log the opcode currently being executed
         /// </summary>
         /// <param name="opcode">String of the opcode</param>
-        private void LogInstructionExecuting(string opcode, ushort data)
+        private void LogInstructionExecuting(string opcode, ushort data, ushort extData = 0x0, bool extended = false)
         {
             // Skip
 #if SKIP_DEBUG
@@ -291,7 +374,10 @@ namespace FoxVision.Components
             Console.ForegroundColor = ConsoleColor.Blue;
             Console.Write(opcode);
             Console.ForegroundColor = ConsoleColor.White;
-            Console.WriteLine($" at ${regPC:X4} ({regPC}) with data {data}");
+            if (extended)
+                Console.WriteLine($" at ${regPC:X4} ({regPC}) with data {data} and extended data {extData}");
+            else
+                Console.WriteLine($" at ${regPC:X4} ({regPC}) with data {data}");
         }
 
         /// <summary>

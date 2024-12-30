@@ -38,6 +38,10 @@ namespace Fox16Shared
             // V1.2
             {"INC", 23},
             {"DEC", 24},
+            // V1.4
+            {"SDM", 25},
+            {"SSM", 26},
+            {"MOV", 27},
             // V1.3
             {"GSWP", IO_EXTENSION_OFFSET},
             {"GCLR", IO_EXTENSION_OFFSET + 1},

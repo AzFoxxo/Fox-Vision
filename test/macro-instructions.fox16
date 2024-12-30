@@ -1,0 +1,31 @@
+; Breakdown
+
+; Register to X
+
+; Register to register
+MOV #A #B
+
+
+; Register to memory
+    MOV #A $FFFF
+
+
+; Memory to X
+
+; Memory to register
+ MOV $FFFF #A
+
+; Memory to memory
+MOV $FFFF $FFFF
+
+
+
+; Immediate to X
+
+; Immediate to register
+MOV !%1 #A
+MOV !$FFFF #B
+
+; Immediate to memory
+MOV !%1 $FFFF
+MOV !$FFFF $FFFF

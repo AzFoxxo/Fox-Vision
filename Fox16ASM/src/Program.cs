@@ -32,6 +32,10 @@ namespace Fox16ASM
             Preprocessor preprocessor = new();
             (string[] lines, Label[] labels) = preprocessor.Process(filePath);
 
+            // Macro instruction resolution
+            MacroResolution macroResolution = new();
+            lines = macroResolution.Resolve(lines);
+
             // Tokeniser the cleaned and processed lines
             Tokeniser tokeniser = new();
             var tokens = Tokeniser.ConvertLinesToTokens(lines);
