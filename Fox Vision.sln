@@ -9,6 +9,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "FoxVision", "FoxVision\FoxV
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Fox16Shared", "Fox16Shared\Fox16Shared.csproj", "{E7B01C7F-6008-4648-8D2D-02A930670C91}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "UniversalFoxAssembler", "UniversalFoxAssembler\UniversalFoxAssembler.csproj", "{18ED6B7B-DDE9-4833-B116-E523D832ED81}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -30,5 +32,9 @@ Global
 		{E7B01C7F-6008-4648-8D2D-02A930670C91}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{E7B01C7F-6008-4648-8D2D-02A930670C91}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{E7B01C7F-6008-4648-8D2D-02A930670C91}.Release|Any CPU.Build.0 = Release|Any CPU
+		{18ED6B7B-DDE9-4833-B116-E523D832ED81}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{18ED6B7B-DDE9-4833-B116-E523D832ED81}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{18ED6B7B-DDE9-4833-B116-E523D832ED81}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{18ED6B7B-DDE9-4833-B116-E523D832ED81}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 EndGlobal
