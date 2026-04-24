@@ -3,24 +3,31 @@ namespace FoxVision.Components
     internal class ContiguousMemory
     {
         private ushort[] _memory;
-        internal ushort Size {get; private set;}
+        private readonly object _memoryLock = new();
+        internal ushort MaxAddress { get; private set; }
 
         internal ContiguousMemory(ushort size)
         {
-            _memory = new ushort[size];
-            this.Size = size;
+            _memory = new ushort[size + 1];
+            this.MaxAddress = size;
 
-            Console.WriteLine($"Created contiguous memory of size {size}bytes");
+            Console.WriteLine($"Created contiguous memory with addresses 0x0000 to 0x{size:X4}");
         }
 
         internal void WriteUnchecked(ushort address, ushort data)
         {
-            _memory[address] = data;
+            lock (_memoryLock)
+            {
+                _memory[address] = data;
+            }
         }
 
         internal ushort ReadUnchecked(ushort address)
         {
-            return _memory[address];
+            lock (_memoryLock)
+            {
+                return _memory[address];
+            }
         }
     }
 }

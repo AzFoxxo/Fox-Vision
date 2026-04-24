@@ -8,6 +8,7 @@ namespace Fox16ASM
 {
     class Generator
     {
+        private static DebugFlags _debugFlags = new();
         /// <summary>
         /// Generate the ROM file using the tokens
         /// Directly generate machine code from tokens
@@ -15,8 +16,10 @@ namespace Fox16ASM
         /// <param name="tokens">tokens</param>
         /// <param name="labels">label declarations to resolve jumps</param>
         /// <param name="outputFile">ROM filename</param>
-        public static void Generate(Token[] tokens, Label[] labels, string outputFile)
+        /// <param name="debugFlags">debug output flags</param>
+        public static void Generate(Token[] tokens, Label[] labels, string outputFile, DebugFlags debugFlags)
         {
+            _debugFlags = debugFlags;
             // Delete the file if it exists
             if (File.Exists(outputFile)) File.Delete(outputFile);
 
@@ -89,15 +92,18 @@ namespace Fox16ASM
                 else if (token.type == TokenType.Hexadecimal)
                 {
                     // Write the hexadecimal value as a ushort
-                    Console.WriteLine(token.value);
+                    if (_debugFlags.ShowTokens)
+                        Console.WriteLine($"HEX: {token.value}");
                     writer.Write(Convert.ToUInt16(token.value));
                 }
                 else if (token.type == TokenType.Opcode)
                 {
                     // Get the value of the opcode from Opcodes.instructions
-                    if (Opcodes.instructions.TryGetValue(Convert.ToString(token.value), out ushort value))
+                    if (token.value is string opcode && Opcodes.instructions.TryGetValue(opcode, out ushort value))
                     {
-                        Console.WriteLine(value);
+                        // Debug: Print the instruction opcode value being written
+                        if (_debugFlags.ShowTokens)
+                            Console.WriteLine($"OPCODE: {value}");
                         writer.Write(Convert.ToUInt16(value));
                     }
                     // TODO: Error handling
@@ -116,7 +122,9 @@ namespace Fox16ASM
                         }
                     }
 
-                    Console.WriteLine($"Label resolved to address: {value:X4}");
+                    // Debug: Print the resolved label address (in hexadecimal)
+                    if (_debugFlags.ShowLabels)
+                        Console.WriteLine($"LABEL REFERENCE: {value:X4}");
                     writer.Write(Convert.ToUInt16(value));
                 }
             }
@@ -131,14 +139,17 @@ namespace Fox16ASM
                 if (tokens[i].type == TokenType.LabelDeclaration)
                 {
                     // Resolve EOF label resolutions (skip)
-                    if (labelCount > labels.Length - 1) {
+                    if (labelCount > labels.Length - 1)
+                    {
                         Console.ForegroundColor = ConsoleColor.Red;
                         Console.WriteLine("Attempted to resolve EOF label.");
                         Console.WriteLine("Skipping label, will not be written to ROM");
                         continue;
                     }
                     labels[labelCount].address = (ushort)(i - tokensToSkip);
-                    Console.WriteLine($"Label address {labels[labelCount].address} for {labels[labelCount].name}");
+                    // Debug: Print the label declaration and its assigned address
+                    if (_debugFlags.ShowLabels)
+                        Console.WriteLine($"LABEL DECL: {labels[labelCount].address} = {labels[labelCount].name}");
                     labelCount++;
                     tokensToSkip++;
                 }

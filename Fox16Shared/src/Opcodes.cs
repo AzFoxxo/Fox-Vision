@@ -37,10 +37,14 @@ namespace Fox16Shared
             // V1.2
             {"INC", 23},
             {"DEC", 24},
+            // V1.4
+            {"MOV", 25},
+            {"STR", 26},
+            {"LOD", 27},
             // Debug extension opcodes
             {"DBG_LGC", DEBUG_EXTENSION_OFFSET},
-            {"DGB_MEM", DEBUG_EXTENSION_OFFSET + 1},
-            {"DGB_INP", DEBUG_EXTENSION_OFFSET + 2}
+            {"DBG_MEM", DEBUG_EXTENSION_OFFSET + 1},
+            {"DBG_INP", DEBUG_EXTENSION_OFFSET + 2},
         };
 
         /// <summary>

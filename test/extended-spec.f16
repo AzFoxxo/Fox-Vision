@@ -1,4 +1,3 @@
-@efox16_required
 ; Extended Fox Assembly 16 bit
 ; Address denotion $HEX(16 bit only)
 ; constant denotion %DEC(16 bit only)

@@ -2,45 +2,114 @@
 
 namespace Fox16ASM
 {
+    class DebugFlags
+    {
+        public bool ShowTokens { get; set; } = false;
+        public bool ShowLabels { get; set; } = false;
+    }
+
     class Program
     {
         static void Main(string[] args)
         {
-            // Check arguments are valid
-            if (args.Length != 1)
+            string? inputFile = null;
+            string outputFile = "vfox16.bin";
+            bool showHelp = false;
+            var debugFlags = new DebugFlags();
+
+            // Parse command-line arguments
+            for (int i = 0; i < args.Length; i++)
             {
-                Console.WriteLine("Usage:\n\tfox16asm my-assembly-file.fox16");
+                switch (args[i])
+                {
+                    case "-h":
+                    case "--help":
+                        showHelp = true;
+                        break;
+                    case "-i":
+                    case "--input":
+                        if (i + 1 < args.Length)
+                        {
+                            inputFile = args[++i];
+                        }
+                        else
+                        {
+                            Console.WriteLine("Error: -i/--input requires a file argument");
+                            return;
+                        }
+                        break;
+                    case "-o":
+                    case "--output":
+                        if (i + 1 < args.Length)
+                        {
+                            outputFile = args[++i];
+                        }
+                        else
+                        {
+                            Console.WriteLine("Error: -o/--output requires a file argument");
+                            return;
+                        }
+                        break;
+                    case "--tokens":
+                        debugFlags.ShowTokens = true;
+                        break;
+                    case "--labels":
+                        debugFlags.ShowLabels = true;
+                        break;
+                    default:
+                        Console.WriteLine($"Error: Unknown argument '{args[i]}'");
+                        return;
+                }
+            }
+
+            // Show help if requested
+            if (showHelp)
+            {
+                Console.WriteLine("Fox16 Assembler");
+                Console.WriteLine("Usage: fox16asm [options]");
+                Console.WriteLine("Options:");
+                Console.WriteLine("  -i, --input <file>    Input assembly file (.f16)");
+                Console.WriteLine("  -o, --output <rom>    Output ROM file (default: vfox16.bin)");
+                Console.WriteLine("  --tokens              Show token debug output");
+                Console.WriteLine("  --labels              Show label resolution debug output");
+                Console.WriteLine("  -h, --help            Show this help message");
                 return;
             }
-            string filePath = args[0];
+
+            // Check input file was provided
+            if (inputFile is null)
+            {
+                Console.WriteLine("Error: Input file required");
+                Console.WriteLine("Usage: fox16asm -i <file> [-o <rom>]");
+                return;
+            }
 
             // Check file exists
-            if (!File.Exists(filePath))
+            if (!File.Exists(inputFile))
             {
-                Console.WriteLine("File not found: " + filePath);
+                Console.WriteLine("File not found: " + inputFile);
                 return;
             }
 
             // Check file has valid extension
-            if (Path.GetExtension(filePath) != ".fox16" && Path.GetExtension(filePath) != ".efox16")
+            if (Path.GetExtension(inputFile) != ".f16")
             {
-                Console.WriteLine("Invalid file extension: " + filePath);
+                Console.WriteLine("Invalid file extension: " + inputFile);
+                Console.WriteLine("Expected .f16 extension");
                 return;
             }
 
             // Invoke the preprocessor
             Preprocessor preprocessor = new();
-            (string[] lines, Label[] labels) = preprocessor.Process(filePath);
+            (string[] lines, Label[] labels) = preprocessor.Process(inputFile, debugFlags);
 
             // Tokeniser the cleaned and processed lines
-            Tokeniser tokeniser = new();
-            var tokens = Tokeniser.ConvertLinesToTokens(lines);
+            var tokens = Tokeniser.ConvertLinesToTokens(lines, debugFlags);
 
             // Lexical validation
 
             // Generation
-            Generator generator = new();
-            Generator.Generate(tokens, labels, "fox16.bin");
+            Generator.Generate(tokens, labels, outputFile, debugFlags);
         }
     }
 }

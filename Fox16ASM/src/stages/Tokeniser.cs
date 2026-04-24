@@ -1,5 +1,3 @@
-using System.IO;
-
 namespace Fox16ASM
 {
     class Tokeniser
@@ -8,8 +6,9 @@ namespace Fox16ASM
         /// Convert lines to tokens
         /// </summary>
         /// <returns>Returns a list of tokens which can be fed to the next stage of compilation</returns>
-        public static Token[] ConvertLinesToTokens(string[] lines)
+        public static Token[] ConvertLinesToTokens(string[] lines, DebugFlags debugFlags = null)
         {
+            debugFlags ??= new DebugFlags();
             List<Token> tokens = [];
 
             foreach (var line in lines)
@@ -18,34 +17,37 @@ namespace Fox16ASM
                 tokens.AddRange(ConsumeLine(line));
             }
 
-            // Print all tokens
-            foreach (var token in tokens)
+            // Print all tokens (if debug flag is enabled)
+            if (debugFlags.ShowTokens)
             {
-                var type = token.type;
-                
-                Console.ForegroundColor = ConsoleColor.Red;
-                Console.Write(type);
-                
-                Console.ForegroundColor = ConsoleColor.White;
-                Console.Write(": ");
+                foreach (var token in tokens)
+                {
+                    var type = token.type;
 
-                Console.ForegroundColor = ConsoleColor.Green;
-                if (type == TokenType.Hexadecimal)
-                    Console.Write($"{token.value:X4} ({token.value})");
-                else if (type == TokenType.Decimal)
-                    Console.Write($"{token.value}");
-                else if (type == TokenType.Opcode)
-                    Console.Write($"{token.value}");
-                else if (type == TokenType.LabelDeclaration)
-                    Console.Write($"{token.value}");
-                else if (type == TokenType.Label)
-                    Console.Write($"{token.value}");
-                else
-                    Console.Write("N\\A");
+                    Console.ForegroundColor = ConsoleColor.Red;
+                    Console.Write(type);
+
+                    Console.ForegroundColor = ConsoleColor.White;
+                    Console.Write(": ");
+
+                    Console.ForegroundColor = ConsoleColor.Green;
+                    if (type == TokenType.Hexadecimal)
+                        Console.Write($"{token.value:X4} ({token.value})");
+                    else if (type == TokenType.Decimal)
+                        Console.Write($"{token.value}");
+                    else if (type == TokenType.Opcode)
+                        Console.Write($"{token.value}");
+                    else if (type == TokenType.LabelDeclaration)
+                        Console.Write($"{token.value}");
+                    else if (type == TokenType.Label)
+                        Console.Write($"{token.value}");
+                    else
+                        Console.Write("N\\A");
 
 
-                Console.WriteLine();
+                    Console.WriteLine();
 
+                }
             }
 
             return [.. tokens];
@@ -53,10 +55,10 @@ namespace Fox16ASM
 
         private static Token[] ConsumeLine(string line)
         {
-            // Slice the lines at spaces
-            var parts = line.Split(' ');
+            // Allow commas as operand separators and split on whitespace.
+            var parts = line.Replace(",", " ").Split(' ', StringSplitOptions.RemoveEmptyEntries);
 
-            Token lastToken = new(0, TokenType.Null);
+            var lineHasOpcode = false;
 
             List<Token> tokens = [];
             foreach (var part in parts)
@@ -80,14 +82,28 @@ namespace Fox16ASM
                 // If part starts with letter A-Z, convert to opcode
                 else if (Char.IsLetter(part[0]))
                 {
-                    // If previous instruction was JMP, JNZ or JPZ, TokenType should be Label
-                    if (lastToken.type == TokenType.Opcode && (
-                    (string)lastToken.value == "JMP" ||
-                    (string)lastToken.value == "JNZ" ||
-                    (string)lastToken.value == "JPZ"))
-                        tokens.Add(new Token(part, TokenType.Label));
+                    var symbol = part.ToUpperInvariant();
+
+                    // The first alpha token is the instruction mnemonic.
+                    if (!lineHasOpcode)
+                    {
+                        tokens.Add(new Token(symbol, TokenType.Opcode));
+                        lineHasOpcode = true;
+                    }
+                    // Register operands for multi-operand instructions.
+                    else if (symbol == "X")
+                    {
+                        tokens.Add(new Token((ushort)0x8000, TokenType.Hexadecimal));
+                    }
+                    else if (symbol == "Y")
+                    {
+                        tokens.Add(new Token((ushort)0x8001, TokenType.Hexadecimal));
+                    }
                     else
-                        tokens.Add(new Token(part, TokenType.Opcode));
+                    {
+                        // Remaining alpha tokens are label/symbol operands.
+                        tokens.Add(new Token(part, TokenType.Label));
+                    }
                 }
                 // Invalid token found
                 else
@@ -96,10 +112,6 @@ namespace Fox16ASM
                     Console.WriteLine($"Invalid token found {part}");
                     Environment.Exit(1);
                 }
-
-                // Update the last token
-                if (tokens.Count > 0)
-                    lastToken = tokens[^1];
             }
 
             // Add line terminator

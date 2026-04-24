@@ -1,5 +1,3 @@
-using System.Runtime.InteropServices;
-
 namespace Fox16Shared
 {
     /// <summary>
@@ -60,7 +58,6 @@ namespace Fox16Shared
         /// <returns>character</returns>
         public static char GetCharacter(ushort value)
         {
-            List<char> keys = [];
             foreach (KeyValuePair<char, ushort> pair in codes)
             {
                 if (pair.Value == value)

@@ -1,0 +1,43 @@
+; MOI instruction test
+; Verifies MOV, STR, and LOD with a simple PASS/FAIL output.
+
+:main
+
+; Print test banner: MOI
+DBG_LGC %13
+DBG_LGC %15
+DBG_LGC %9
+DBG_LGC %38
+
+; MOV immediate -> X, then MOV X -> Y
+MOV %1337 X
+MOV X Y
+EQU
+JNZ test_mem
+
+JMP fail
+
+:test_mem
+; STR X -> memory, then LOD Y <- memory
+STR X $2000
+LOD Y $2000
+EQU
+JNZ pass
+
+JMP fail
+
+:pass
+DBG_LGC %16
+DBG_LGC %1
+DBG_LGC %19
+DBG_LGC %19
+DBG_LGC %38
+HLT
+
+:fail
+DBG_LGC %6
+DBG_LGC %1
+DBG_LGC %9
+DBG_LGC %12
+DBG_LGC %38
+HLT
