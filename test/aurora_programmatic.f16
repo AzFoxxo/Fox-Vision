@@ -1,0 +1,81 @@
+; Programmatic aurora-style generator
+; Uses V1.4+ instructions only (no SRA-dependent instruction forms)
+; Fills 100x100 pixels => 5000 packed bytes in VRAM descending from $FFFF.
+
+; RAM variables
+; $2000 = row (0..99)
+; $2001 = colPair (0..49)
+; $2002 = computed VRAM address
+; $2003 = hi nibble shifted (bits 7..4)
+; $2004 = row*3 scratch
+
+:main
+MOV %0 X
+STR X $2000
+
+:row_loop
+LOD X $2000
+MOV %100 Y
+CMP
+JGE done
+
+MOV %0 X
+STR X $2001
+
+:col_loop
+LOD X $2001
+MOV %50 Y
+CMP
+JGE next_row
+
+; index = row*50 + colPair
+LOD X $2000
+MUL %50 X
+LOD Y $2001
+ADD Y X
+
+; address = $FFFF - index
+MOV $FFFF Y
+SUB X Y
+STR Y $2002
+
+; hi = ((row + colPair) & 0xF) << 4
+LOD X $2000
+LOD Y $2001
+ADD Y X
+AND %15 X
+SHL %4 X
+STR X $2003
+
+; lo = ((row*3 + colPair*5) & 0xF)
+LOD X $2000
+MUL %3 X
+STR X $2004
+LOD X $2001
+MUL %5 X
+LOD Y $2004
+ADD Y X
+AND %15 X
+
+; packed = hi | lo
+LOD Y $2003
+OR X Y
+
+; write packed byte to computed VRAM address
+LOD X $2002
+STR Y X
+
+; colPair++
+LOD X $2001
+ADD %1 X
+STR X $2001
+JMP col_loop
+
+:next_row
+LOD X $2000
+ADD %1 X
+STR X $2000
+JMP row_loop
+
+:done
+HLT

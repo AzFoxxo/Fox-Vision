@@ -799,6 +799,7 @@ namespace FoxVision.Components
                     return;
                 }
 
+                dialog.Destroy();
                 return;
             }
         }

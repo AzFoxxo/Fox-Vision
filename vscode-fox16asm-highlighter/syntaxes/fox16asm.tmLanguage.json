@@ -1,0 +1,90 @@
+{
+    "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+    "name": "Fox16ASM",
+    "scopeName": "source.fox16asm",
+    "patterns": [
+        {
+            "include": "#comments"
+        },
+        {
+            "include": "#labels"
+        },
+        {
+            "include": "#directives"
+        },
+        {
+            "include": "#keywords"
+        },
+        {
+            "include": "#registers"
+        },
+        {
+            "include": "#numbers"
+        },
+        {
+            "include": "#constants"
+        }
+    ],
+    "repository": {
+        "comments": {
+            "patterns": [
+                {
+                    "name": "comment.line.semicolon.fox16asm",
+                    "match": ";.*$"
+                }
+            ]
+        },
+        "labels": {
+            "patterns": [
+                {
+                    "name": "entity.name.label.fox16asm",
+                    "match": "^\\s*:[A-Za-z_][A-Za-z0-9_]*"
+                }
+            ]
+        },
+        "directives": {
+            "patterns": [
+                {
+                    "name": "keyword.control.directive.fox16asm",
+                    "match": "^\\s*@(?:const)\\b"
+                }
+            ]
+        },
+        "keywords": {
+            "patterns": [
+                {
+                    "name": "keyword.instruction.fox16asm",
+                    "match": "\\b(?:NOP|LFM|WTM|SRA|AXY|SXY|MXY|DXY|EQU|LEQ|JPZ|JNZ|JMP|CLR|HLT|BSL|BSR|AND|ORA|OR|XOR|DWR|ILM|IWR|INC|DEC|MOV|STR|LOD|CMP|JEQ|JNE|JLT|JGT|JLE|JGE|ADD|SUB|MUL|DIV|SHL|SHR|DBG_LGC|DBG_MEM|DBG_INP|DGB_MEM|DGB_INP)\\b"
+                }
+            ]
+        },
+        "registers": {
+            "patterns": [
+                {
+                    "name": "variable.language.register.fox16asm",
+                    "match": "\\b(?:X|Y|STATUS)\\b"
+                }
+            ]
+        },
+        "numbers": {
+            "patterns": [
+                {
+                    "name": "constant.numeric.decimal.fox16asm",
+                    "match": "%[0-9]+\\b"
+                },
+                {
+                    "name": "constant.numeric.hex.fox16asm",
+                    "match": "\\$[0-9A-Fa-f]+\\b"
+                }
+            ]
+        },
+        "constants": {
+            "patterns": [
+                {
+                    "name": "constant.other.named.fox16asm",
+                    "match": "<[A-Za-z_][A-Za-z0-9_]*>"
+                }
+            ]
+        }
+    }
+}

@@ -1,0 +1,25 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Run Extension",
+            "type": "extensionHost",
+            "request": "launch",
+            "runtimeExecutable": "${execPath}",
+            "args": [
+                "--extensionDevelopmentPath=${workspaceFolder}",
+                "--new-window"
+            ]
+        },
+        {
+            "name": "Run Extension (Explicit Paths)",
+            "type": "extensionHost",
+            "request": "launch",
+            "runtimeExecutable": "/usr/bin/code-insiders",
+            "args": [
+                "--extensionDevelopmentPath=/home/az/Fox-Vision/vscode-fox16asm-highlighter",
+                "--new-window"
+            ]
+        }
+    ]
+}

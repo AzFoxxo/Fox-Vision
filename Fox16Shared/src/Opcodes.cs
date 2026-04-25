@@ -63,6 +63,9 @@ namespace Fox16Shared
             {"DBG_LGC", DEBUG_EXTENSION_OFFSET},
             {"DBG_MEM", DEBUG_EXTENSION_OFFSET + 1},
             {"DBG_INP", DEBUG_EXTENSION_OFFSET + 2},
+            // Legacy aliases
+            {"DGB_MEM", DEBUG_EXTENSION_OFFSET + 1},
+            {"DGB_INP", DEBUG_EXTENSION_OFFSET + 2},
         };
 
         /// <summary>

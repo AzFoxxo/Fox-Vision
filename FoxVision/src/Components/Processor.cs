@@ -104,12 +104,12 @@ namespace FoxVision
 
                 case 0x1:
                     LogInstructionExecuting("LFM", first_operand);
-                    SetValueOfTheActiveRegister(RAM.ReadUnchecked((ushort)(first_operand - 1)));
+                    SetValueOfTheActiveRegister(RAM.ReadUnchecked(first_operand));
                     return 2;
 
                 case 0x2:
                     LogInstructionExecuting("WTM", first_operand);
-                    RAM.WriteUnchecked((ushort)(first_operand - 1), GetValueOfTheActiveRegister());
+                    RAM.WriteUnchecked(first_operand, GetValueOfTheActiveRegister());
                     return 2;
 
                 case 0x3:
@@ -198,7 +198,7 @@ namespace FoxVision
                     break;
 
                 case 0x10:
-                    LogInstructionExecuting("BRL", first_operand);
+                    LogInstructionExecuting("BSR", first_operand);
                     SetValueOfTheActiveRegister((ushort)(GetValueOfTheActiveRegister() >> 1));
                     break;
 
@@ -263,7 +263,7 @@ namespace FoxVision
                     LogInstructionExecuting("STR", first_operand);
                     {
                         ushort srcRegister = first_operand;
-                        ushort dstAddress = second_operand;
+                        ushort dstAddressOperand = second_operand;
 
                         ushort value = srcRegister switch
                         {
@@ -281,7 +281,15 @@ namespace FoxVision
                             goto NOP;
                         }
 
-                        RAM.WriteUnchecked((ushort)(dstAddress - 1), value);
+                        if (!TryResolveMemoryAddressOperand(dstAddressOperand, out ushort dstAddress))
+                        {
+                            Console.ForegroundColor = ConsoleColor.Red;
+                            Console.WriteLine($"Illegal STR destination address operand {dstAddressOperand:X4}");
+                            Console.ResetColor();
+                            goto NOP;
+                        }
+
+                        RAM.WriteUnchecked(dstAddress, value);
                     }
                     return 3;
 
@@ -290,8 +298,17 @@ namespace FoxVision
                     LogInstructionExecuting("LOD", first_operand);
                     {
                         ushort dstRegister = first_operand;
-                        ushort srcAddress = second_operand;
-                        ushort value = RAM.ReadUnchecked((ushort)(srcAddress - 1));
+                        ushort srcAddressOperand = second_operand;
+
+                        if (!TryResolveMemoryAddressOperand(srcAddressOperand, out ushort srcAddress))
+                        {
+                            Console.ForegroundColor = ConsoleColor.Red;
+                            Console.WriteLine($"Illegal LOD source address operand {srcAddressOperand:X4}");
+                            Console.ResetColor();
+                            goto NOP;
+                        }
+
+                        ushort value = RAM.ReadUnchecked(srcAddress);
 
                         if (!TryWriteMovDestination(dstRegister, value))
                         {
@@ -422,6 +439,11 @@ namespace FoxVision
                     LogInstructionExecuting("DBG_LGC", first_operand);
                     Console.Write(DebugCharacters.GetCharacter(first_operand));
                     return 2;
+
+                case 0xC001:
+                    LogInstructionExecuting("DBG_MEM", first_operand);
+                    DumpMemoryHex();
+                    break;
 
                 case 0xC002:
                     LogInstructionExecuting("DBG_INP", first_operand);
@@ -559,6 +581,39 @@ namespace FoxVision
 
             ushort result = operation(srcValue, dstValue);
             return TryWriteMovDestination(dstOperand, result);
+        }
+
+        private bool TryResolveMemoryAddressOperand(ushort operand, out ushort address)
+        {
+            switch (operand)
+            {
+                case 0x8000:
+                    address = regX;
+                    return true;
+                case 0x8001:
+                    address = regY;
+                    return true;
+                case 0x8002:
+                    address = 0;
+                    return false;
+                default:
+                    address = operand;
+                    return true;
+            }
+        }
+
+        private void DumpMemoryHex()
+        {
+            const int wordsPerLine = 16;
+            for (int i = 0; i <= RAM.MaxAddress; i += wordsPerLine)
+            {
+                Console.Write($"{i:X4}: ");
+                for (int j = 0; j < wordsPerLine && i + j <= RAM.MaxAddress; j++)
+                {
+                    Console.Write($"{RAM.ReadUnchecked((ushort)(i + j)):X4} ");
+                }
+                Console.WriteLine();
+            }
         }
     }
 }

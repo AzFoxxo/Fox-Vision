@@ -1,0 +1,37 @@
+{
+    "name": "fox16asm-highlighter",
+    "displayName": "Fox16ASM Highlighter",
+    "description": "Very simple syntax highlighting for Fox Vision .f16 assembly files.",
+    "version": "0.0.1",
+    "publisher": "azfoxxo",
+    "license": "MIT",
+    "engines": {
+        "vscode": "^1.75.0"
+    },
+    "main": "./extension.js",
+    "categories": [
+        "Programming Languages"
+    ],
+    "contributes": {
+        "languages": [
+            {
+                "id": "fox16asm",
+                "aliases": [
+                    "Fox16ASM",
+                    "Fox Vision Assembly"
+                ],
+                "extensions": [
+                    ".f16"
+                ],
+                "configuration": "./language-configuration.json"
+            }
+        ],
+        "grammars": [
+            {
+                "language": "fox16asm",
+                "scopeName": "source.fox16asm",
+                "path": "./syntaxes/fox16asm.tmLanguage.json"
+            }
+        ]
+    }
+}

@@ -1,0 +1,476 @@
+; Conway's Game of Life (programmatic)
+; Uses explicit operand instructions only (no SRA-dependent instruction forms).
+; Board is 32x32 cells stored in RAM and rendered to top-left of VRAM.
+
+@const CUR_BASE %16384      ; $4000
+@const NEXT_BASE %17408     ; $4400
+@const BOARD_W %32
+@const BOARD_H %32
+@const BOARD_SIZE %1024
+
+; RAM state
+@const CUR_PTR $3000
+@const NEXT_PTR $3001
+@const YVAR $3002
+@const XVAR $3003
+@const IVAR $3004
+@const ADDR $3005
+@const SUM $3006
+@const CELL $3007
+@const ROW_BASE $3008
+@const TMP $3009
+@const NY $300A
+@const NX $300B
+@const RY $300C
+@const RB $300D
+@const HI $300E
+@const LO $300F
+@const IDXA $3010
+@const IDXB $3011
+@const DELAY $3012
+@const VIDX $3013
+@const IDX $3014
+@const RETID $3015
+
+:main
+; Set buffer bases
+MOV <CUR_BASE> X
+STR X <CUR_PTR>
+MOV <NEXT_BASE> X
+STR X <NEXT_PTR>
+
+; Clear both buffers
+MOV %0 X
+STR X <IVAR>
+
+:clear_loop
+LOD X <IVAR>
+MOV <BOARD_SIZE> Y
+CMP
+JGE seed_board
+
+; clear current
+LOD X <CUR_PTR>
+LOD Y <IVAR>
+ADD Y X
+STR X <ADDR>
+MOV %0 X
+LOD Y <ADDR>
+STR X Y
+
+; clear next
+LOD X <NEXT_PTR>
+LOD Y <IVAR>
+ADD Y X
+STR X <ADDR>
+MOV %0 X
+LOD Y <ADDR>
+STR X Y
+
+; i++
+LOD X <IVAR>
+ADD %1 X
+STR X <IVAR>
+JMP clear_loop
+
+:seed_board
+; Seed a few known patterns into current buffer.
+MOV %1 X
+
+; Glider A (origin near top-left)
+STR X $4022
+STR X $4043
+STR X $4061
+STR X $4062
+STR X $4063
+
+; Glider B
+STR X $4155
+STR X $4176
+STR X $4194
+STR X $4195
+STR X $4196
+
+; Blinker
+STR X $428A
+STR X $428B
+STR X $428C
+
+:sim_loop
+; ------------------------------------------------------------
+; Render current board to top-left 32x32 pixels.
+; ------------------------------------------------------------
+MOV %0 X
+STR X <RY>
+
+:render_row_loop
+LOD X <RY>
+MOV <BOARD_H> Y
+CMP
+JGE step_prepare
+
+LOD X <RY>
+MUL <BOARD_W> X
+STR X <ROW_BASE>
+
+MOV %0 X
+STR X <RB>
+
+:render_byte_loop
+LOD X <RB>
+MOV %16 Y
+CMP
+JGE render_next_row
+
+; x2 = RB * 2
+LOD X <RB>
+MUL %2 X
+STR X <IDXA>
+
+; idxA = row_base + x2
+LOD X <ROW_BASE>
+LOD Y <IDXA>
+ADD Y X
+STR X <IDXA>
+
+; idxB = idxA + 1
+LOD X <IDXA>
+ADD %1 X
+STR X <IDXB>
+
+; cellA -> HI nibble (F0 if alive else 00)
+LOD X <CUR_PTR>
+LOD Y <IDXA>
+ADD Y X
+LOD Y X
+MOV %0 X
+CMP
+JEQ cella_dead
+MOV %240 X
+:cella_dead
+STR X <HI>
+
+; cellB -> LO nibble (0F if alive else 00)
+LOD X <CUR_PTR>
+LOD Y <IDXB>
+ADD Y X
+LOD Y X
+MOV %0 X
+CMP
+JEQ cellb_dead
+MOV %15 X
+:cellb_dead
+STR X <LO>
+
+; packed = HI | LO
+LOD X <HI>
+LOD Y <LO>
+OR Y X
+STR X <TMP>
+
+; vram index = RY*50 + RB
+LOD X <RY>
+MUL %50 X
+LOD Y <RB>
+ADD Y X
+STR X <VIDX>
+
+; addr = $FFFF - vram index
+MOV $FFFF X
+LOD Y <VIDX>
+SUB Y X
+
+; write packed
+LOD Y <TMP>
+STR Y X
+
+; RB++
+LOD X <RB>
+ADD %1 X
+STR X <RB>
+JMP render_byte_loop
+
+:render_next_row
+LOD X <RY>
+ADD %1 X
+STR X <RY>
+JMP render_row_loop
+
+; ------------------------------------------------------------
+; Prepare next generation buffer.
+; ------------------------------------------------------------
+:step_prepare
+MOV %0 X
+STR X <IVAR>
+
+:clear_next_loop
+LOD X <IVAR>
+MOV <BOARD_SIZE> Y
+CMP
+JGE step_rows
+
+LOD X <NEXT_PTR>
+LOD Y <IVAR>
+ADD Y X
+MOV %0 Y
+STR Y X
+
+LOD X <IVAR>
+ADD %1 X
+STR X <IVAR>
+JMP clear_next_loop
+
+; Process only inner cells (1..30) to avoid bounds checks.
+:step_rows
+MOV %1 X
+STR X <YVAR>
+
+:y_loop
+LOD X <YVAR>
+MOV %31 Y
+CMP
+JGE swap_buffers
+
+MOV %1 X
+STR X <XVAR>
+
+:x_loop
+LOD X <XVAR>
+MOV %31 Y
+CMP
+JGE y_next
+
+; idx = y*32 + x
+LOD X <YVAR>
+MUL <BOARD_W> X
+LOD Y <XVAR>
+ADD Y X
+STR X <IDX>
+
+; cell = current[idx]
+LOD X <CUR_PTR>
+LOD Y <IDX>
+ADD Y X
+LOD Y X
+STR Y <CELL>
+
+; sum = 0
+MOV %0 X
+STR X <SUM>
+
+; -------- neighbor accumulation (8 neighbors) --------
+; (x-1, y-1)
+LOD X <YVAR>
+SUB %1 X
+STR X <NY>
+LOD X <XVAR>
+SUB %1 X
+STR X <NX>
+MOV %1 X
+STR X <RETID>
+JMP add_neighbor
+:ret_n1
+
+; (x, y-1)
+LOD X <YVAR>
+SUB %1 X
+STR X <NY>
+LOD X <XVAR>
+STR X <NX>
+MOV %2 X
+STR X <RETID>
+JMP add_neighbor
+:ret_n2
+
+; (x+1, y-1)
+LOD X <YVAR>
+SUB %1 X
+STR X <NY>
+LOD X <XVAR>
+ADD %1 X
+STR X <NX>
+MOV %3 X
+STR X <RETID>
+JMP add_neighbor
+:ret_n3
+
+; (x-1, y)
+LOD X <YVAR>
+STR X <NY>
+LOD X <XVAR>
+SUB %1 X
+STR X <NX>
+MOV %4 X
+STR X <RETID>
+JMP add_neighbor
+:ret_n4
+
+; (x+1, y)
+LOD X <YVAR>
+STR X <NY>
+LOD X <XVAR>
+ADD %1 X
+STR X <NX>
+MOV %5 X
+STR X <RETID>
+JMP add_neighbor
+:ret_n5
+
+; (x-1, y+1)
+LOD X <YVAR>
+ADD %1 X
+STR X <NY>
+LOD X <XVAR>
+SUB %1 X
+STR X <NX>
+MOV %6 X
+STR X <RETID>
+JMP add_neighbor
+:ret_n6
+
+; (x, y+1)
+LOD X <YVAR>
+ADD %1 X
+STR X <NY>
+LOD X <XVAR>
+STR X <NX>
+MOV %7 X
+STR X <RETID>
+JMP add_neighbor
+:ret_n7
+
+; (x+1, y+1)
+LOD X <YVAR>
+ADD %1 X
+STR X <NY>
+LOD X <XVAR>
+ADD %1 X
+STR X <NX>
+MOV %8 X
+STR X <RETID>
+JMP add_neighbor
+:ret_n8
+
+; Conway rules
+LOD X <CELL>
+MOV %1 Y
+CMP
+JEQ rule_alive
+
+; dead cell: becomes alive iff sum == 3
+LOD X <SUM>
+MOV %3 Y
+CMP
+JEQ set_alive
+JMP set_dead
+
+:rule_alive
+; alive cell: survives iff 2 <= sum <= 3
+LOD X <SUM>
+MOV %2 Y
+CMP
+JLT set_dead
+LOD X <SUM>
+MOV %3 Y
+CMP
+JGT set_dead
+JMP set_alive
+
+:set_alive
+MOV %1 X
+STR X <TMP>
+JMP write_next
+
+:set_dead
+MOV %0 X
+STR X <TMP>
+
+:write_next
+LOD X <IDX>
+LOD Y <NEXT_PTR>
+ADD Y X
+LOD Y <TMP>
+STR Y X
+
+; x++
+LOD X <XVAR>
+ADD %1 X
+STR X <XVAR>
+JMP x_loop
+
+:y_next
+LOD X <YVAR>
+ADD %1 X
+STR X <YVAR>
+JMP y_loop
+
+; Swap current/next buffers
+:swap_buffers
+LOD X <CUR_PTR>
+LOD Y <NEXT_PTR>
+STR Y <CUR_PTR>
+STR X <NEXT_PTR>
+
+; Small delay so generations are visible.
+MOV %45000 X
+STR X <DELAY>
+
+:delay_loop
+LOD X <DELAY>
+MOV %0 Y
+CMP
+JEQ sim_loop
+SUB %1 X
+STR X <DELAY>
+JMP delay_loop
+
+; -------- shared neighbor loader --------
+:add_neighbor
+; idxN = ny*32 + nx
+LOD X <NY>
+MUL <BOARD_W> X
+LOD Y <NX>
+ADD Y X
+
+; addrN = cur_ptr + idxN
+LOD Y <CUR_PTR>
+ADD Y X
+
+; value = mem[addrN]
+LOD Y X
+
+; sum += value
+LOD X <SUM>
+ADD Y X
+STR X <SUM>
+
+; explicit return dispatch
+LOD X <RETID>
+MOV %1 Y
+CMP
+JEQ ret_n1
+LOD X <RETID>
+MOV %2 Y
+CMP
+JEQ ret_n2
+LOD X <RETID>
+MOV %3 Y
+CMP
+JEQ ret_n3
+LOD X <RETID>
+MOV %4 Y
+CMP
+JEQ ret_n4
+LOD X <RETID>
+MOV %5 Y
+CMP
+JEQ ret_n5
+LOD X <RETID>
+MOV %6 Y
+CMP
+JEQ ret_n6
+LOD X <RETID>
+MOV %7 Y
+CMP
+JEQ ret_n7
+JMP ret_n8

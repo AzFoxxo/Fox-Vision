@@ -77,6 +77,8 @@ namespace Fox16ASM
             // Find the address of each label
             LabelResolveAddress(tokens, labels);
 
+            var errorCount = 0;
+
             // Write the tokens to the file
             using var stream = File.Open(outputFile, FileMode.Append);
             using var writer = new EndianBinaryWriter(EndianBitConverter.Big, stream);
@@ -106,20 +108,37 @@ namespace Fox16ASM
                             Console.WriteLine($"OPCODE: {value}");
                         writer.Write(Convert.ToUInt16(value));
                     }
-                    // TODO: Error handling
+                    else
+                    {
+                        Console.ForegroundColor = ConsoleColor.Red;
+                        Console.WriteLine($"Unknown opcode: {token.value}");
+                        Console.ForegroundColor = ConsoleColor.White;
+                        errorCount++;
+                    }
                 }
                 else if (token.type == TokenType.Label)
                 {
                     // Get the address of the label
                     var value = 0;
+                    var resolved = false;
                     foreach (var label in labels)
                     {
                         // Check if the name of the label matches the token value
                         if (label.name == (string)token.value)
                         {
                             value = label.address;
+                            resolved = true;
                             break;
                         }
+                    }
+
+                    if (!resolved)
+                    {
+                        Console.ForegroundColor = ConsoleColor.Red;
+                        Console.WriteLine($"Unresolved label/symbol: {token.value}");
+                        Console.ForegroundColor = ConsoleColor.White;
+                        errorCount++;
+                        continue;
                     }
 
                     // Debug: Print the resolved label address (in hexadecimal)
@@ -127,6 +146,11 @@ namespace Fox16ASM
                         Console.WriteLine($"LABEL REFERENCE: {value:X4}");
                     writer.Write(Convert.ToUInt16(value));
                 }
+            }
+
+            if (errorCount > 0)
+            {
+                throw new InvalidOperationException($"Code generation failed with {errorCount} error(s).");
             }
         }
 

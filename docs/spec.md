@@ -4,19 +4,25 @@
 The CPU is a single threaded 8MHz RISC chip. It uses the FoxVision16 architecture.
 
 ### Registers
-The CPU contains several registers:
-- X - 16 bit reg (general purpose register #1)
-- Y - 16 bit reg (general purpose register #2)
-- PC - 16 bit reg (program counter register, points the current location in RAM the CPU is executing)
-- Status register - 8 bit register
-  - Bit 0: Equality/result flag (`0x0` - false, `0x1` - true)
-  - Bit 1: Less-than flag (`0x0` - false, `0x1` - true)
-  - Bit 2: Greater-than flag (`0x0` - false, `0x1` - true)
-  - Bit 3: Not-equal flag (`0x0` - false, `0x1` - true)
-  - Bit 4: Active register (`0x0` - `X` register, `0x1` - `Y` register)
-  - Bit 5: Illegal division flag (`0x0` - divide good, `0x1` - divide by zero occurred)
-  - Bit 6: Halt flag (`0x0` - continue after cycle, `0x1` - halt after cycle)
-  - Bit 7: Reserved for future use (must be treated as implementation-defined)
+| ID  | Register | Size   | Read/Write | Description                                                                                             |
+| --- | -------- | ------ | ---------- | ------------------------------------------------------------------------------------------------------- |
+| 0x0 | X        | 16-bit | Yes        | General-purpose register #1                                                                             |
+| 0x1 | Y        | 16-bit | Yes        | General-purpose register #2                                                                             |
+| 0x2 | PC       | 16-bit | No         | Program counter (only modified internally by CPU control-flow logic; not directly accessible)           |
+| 0x3 | STATUS   | 8-bit  | Limited    | CPU flags register (read-only via instructions; written only by CPU operations like CMP, DIV, HLT, CLR) |
+
+
+| Bit | Name                   | Meaning                                              |
+| --- | ---------------------- | ---------------------------------------------------- |
+| 0   | Equality / Result flag | `0x0` = false, `0x1` = true                          |
+| 1   | Less-than flag         | `0x0` = false, `0x1` = true                          |
+| 2   | Greater-than flag      | `0x0` = false, `0x1` = true                          |
+| 3   | Not-equal flag         | `0x0` = false, `0x1` = true                          |
+| 4   | Active register        | `0x0` = X register, `0x1` = Y register               |
+| 5   | Illegal division flag  | `0x0` = OK, `0x1` = divide-by-zero occurred          |
+| 6   | Halt flag              | `0x0` = continue execution, `0x1` = halt after cycle |
+| 7   | Reserved               | Implementation-defined (must not be relied upon)     |
+
 
 `JPZ` and `JNZ` evaluate bit 0. `EQU` writes bit 0 using equality. `LEQ` preserves legacy flow by writing bit 0 using the less-than result while also updating less-than/greater-than/not-equal bits.
 
