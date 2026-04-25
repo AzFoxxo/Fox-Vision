@@ -8,11 +8,19 @@ The CPU contains several registers:
 - X - 16 bit reg (general purpose register #1)
 - Y - 16 bit reg (general purpose register #2)
 - PC - 16 bit reg (program counter register, points the current location in RAM the CPU is executing)
-- OSR - 8 bit register
-  - Equality register (`0x0` - inequality, `0x1` - equality)
-  - Active register (`0x0` - `X` register, `0x1` - `Y` register)
-  - Illegal division register (`0x0` - `X` division good, `0x1` - `Y` illegal divide by zero operation)
-  - Halt register (`0x0` - continue after cycle, `0x1` - halt after cycle)
+- Status register - 8 bit register
+  - Bit 0: Equality/result flag (`0x0` - false, `0x1` - true)
+  - Bit 1: Less-than flag (`0x0` - false, `0x1` - true)
+  - Bit 2: Greater-than flag (`0x0` - false, `0x1` - true)
+  - Bit 3: Not-equal flag (`0x0` - false, `0x1` - true)
+  - Bit 4: Active register (`0x0` - `X` register, `0x1` - `Y` register)
+  - Bit 5: Illegal division flag (`0x0` - divide good, `0x1` - divide by zero occurred)
+  - Bit 6: Halt flag (`0x0` - continue after cycle, `0x1` - halt after cycle)
+  - Bit 7: Reserved for future use (must be treated as implementation-defined)
+
+`JPZ` and `JNZ` evaluate bit 0. `EQU` writes bit 0 using equality. `LEQ` preserves legacy flow by writing bit 0 using the less-than result while also updating less-than/greater-than/not-equal bits.
+
+`CMP` (V1.5) writes all comparison bits using `X` vs `Y` and writes bit 0 using equality.
 
 ## CPU opcodes (V1.0)
 - `0000 0000` `0000 0000` - `NOP` - Waste clock cycle
@@ -28,7 +36,7 @@ The CPU contains several registers:
 - `0000 0000` `0000 1010` - `JPZ` - Jump if zero to 2 byte wide address
 - `0000 0000` `0000 1011` - `JNZ` - Jump if not zero to 2 byte wide address
 - `0000 0000` `0000 1100` - `JMP` - Jump to 2 byte wide address
-- `0000 0000` `0000 1101` - `CLR` - Clear all OSR registers (set to zero)
+- `0000 0000` `0000 1101` - `CLR` - Clear all Status register bits (set to zero)
 - `0000 0000` `0000 1110` - `HLT` - Halt program execution (quit/power-off)
 - `0000 0000` `0000 1111` - `BSL` - Bitshift left value in active register
 - `0000 0000` `0001 0000` - `BSR` - Bitshift right value in active register
@@ -96,6 +104,16 @@ Multi-operand Instructions (MOIs) use multiple operands to simplify writing asse
 - `0000 0000` `0001 1001` - `MOV` `SRC` `DST`
 - `0000 0000` `0001 1010` - `STR` `SRC` `DST`
 - `0000 0000` `0001 1011` - `LOD` `SRC` `DST`
+
+### Extended comparison and jump instructions (V1.5)
+
+- `0000 0000` `0001 1100` - `CMP` - Compare `X` and `Y`, update Status comparison bits
+- `0000 0000` `0001 1101` - `JEQ` - Jump if equal (Status bit 0)
+- `0000 0000` `0001 1110` - `JNE` - Jump if not equal (Status bit 3)
+- `0000 0000` `0001 1111` - `JLT` - Jump if less-than (Status bit 1)
+- `0000 0000` `0010 0000` - `JGT` - Jump if greater-than (Status bit 2)
+- `0000 0000` `0010 0001` - `JLE` - Jump if less-than or equal
+- `0000 0000` `0010 0010` - `JGE` - Jump if greater-than or equal
 
 ### Extension debug opcodes (EDO)
 

@@ -41,6 +41,14 @@ namespace Fox16Shared
             {"MOV", 25},
             {"STR", 26},
             {"LOD", 27},
+            // V1.5
+            {"CMP", 28},
+            {"JEQ", 29},
+            {"JNE", 30},
+            {"JLT", 31},
+            {"JGT", 32},
+            {"JLE", 33},
+            {"JGE", 34},
             // Debug extension opcodes
             {"DBG_LGC", DEBUG_EXTENSION_OFFSET},
             {"DBG_MEM", DEBUG_EXTENSION_OFFSET + 1},

@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Text;
 using Cairo;
 using Gtk;
 
@@ -64,6 +65,11 @@ namespace FoxVision.Components
         private readonly Window _window;
         private readonly DrawingArea _drawingArea;
         private uint _frameTimerId;
+        private Window? _memoryWindow;
+        private TextView? _memoryTextView;
+        private Entry? _memoryStartEntry;
+        private Entry? _memoryLengthEntry;
+        private uint _memoryTimerId;
 
         private bool _disposed;
 
@@ -208,6 +214,10 @@ namespace FoxVision.Components
                 }
             };
             emulatorMenu.Append(logInstructionItem);
+
+            var liveMemoryItem = new Gtk.MenuItem("Live memory");
+            liveMemoryItem.Activated += (_, _) => ShowLiveMemoryWindow();
+            emulatorMenu.Append(liveMemoryItem);
 
             emulatorMenu.ShowAll();
             emulatorButton.Popup = emulatorMenu;
@@ -786,11 +796,150 @@ namespace FoxVision.Components
                 if (applyValue(value))
                 {
                     dialog.Destroy();
-                    Gtk.Application.Quit();
+                    return;
                 }
 
                 return;
             }
+        }
+
+        private void ShowLiveMemoryWindow()
+        {
+            if (_memoryWindow is not null)
+            {
+                _memoryWindow.Present();
+                return;
+            }
+
+            var memoryWindow = new Window("FoxVision Live Memory")
+            {
+                DefaultWidth = 700,
+                DefaultHeight = 500,
+                Resizable = true
+            };
+
+            var layout = new Box(Orientation.Vertical, 8)
+            {
+                MarginTop = 10,
+                MarginBottom = 10,
+                MarginStart = 10,
+                MarginEnd = 10
+            };
+
+            var controls = new Box(Orientation.Horizontal, 8);
+            _memoryStartEntry = new Entry("$0000") { WidthChars = 10 };
+            _memoryLengthEntry = new Entry("128") { WidthChars = 8 };
+
+            controls.PackStart(new Label("Start") { Halign = Align.Start }, false, false, 0);
+            controls.PackStart(_memoryStartEntry, false, false, 0);
+            controls.PackStart(new Label("Words") { Halign = Align.Start }, false, false, 0);
+            controls.PackStart(_memoryLengthEntry, false, false, 0);
+
+            var refreshNowButton = new Button("Refresh now");
+            refreshNowButton.Clicked += (_, _) => RefreshMemoryWindow();
+            controls.PackEnd(refreshNowButton, false, false, 0);
+
+            _memoryTextView = new TextView
+            {
+                Editable = false,
+                Monospace = true,
+                CursorVisible = false,
+                WrapMode = WrapMode.None
+            };
+
+            var scroller = new ScrolledWindow();
+            scroller.Add(_memoryTextView);
+
+            layout.PackStart(controls, false, false, 0);
+            layout.PackStart(scroller, true, true, 0);
+
+            memoryWindow.Add(layout);
+            memoryWindow.DeleteEvent += (_, _) => CloseMemoryWindow();
+            memoryWindow.Destroyed += (_, _) => CloseMemoryWindow();
+
+            _memoryWindow = memoryWindow;
+            _memoryTimerId = GLib.Timeout.Add(200, () =>
+            {
+                if (_disposed || _memoryWindow is null)
+                    return false;
+
+                RefreshMemoryWindow();
+                return true;
+            });
+
+            RefreshMemoryWindow();
+            memoryWindow.ShowAll();
+        }
+
+        private void RefreshMemoryWindow()
+        {
+            if (_memoryTextView is null || _memoryStartEntry is null || _memoryLengthEntry is null)
+                return;
+
+            if (!TryParseUShortInput(_memoryStartEntry.Text, out ushort startAddress))
+            {
+                _memoryTextView.Buffer.Text = "Invalid start address. Use decimal, 0xFFFF, or $FFFF.";
+                return;
+            }
+
+            if (!int.TryParse(_memoryLengthEntry.Text, out int wordCount) || wordCount <= 0)
+            {
+                _memoryTextView.Buffer.Text = "Invalid word count. Enter a positive integer.";
+                return;
+            }
+
+            wordCount = Math.Min(wordCount, 4096);
+            var sb = new StringBuilder(wordCount * 8);
+            ushort current = startAddress;
+            for (int i = 0; i < wordCount; i++)
+            {
+                if (i % 8 == 0)
+                {
+                    if (i > 0)
+                        sb.AppendLine();
+                    sb.Append($"${current:X4}: ");
+                }
+
+                ushort value = _ram.ReadUnchecked(current);
+                sb.Append($"{value:X4} ");
+
+                if (current == _ram.MaxAddress)
+                    break;
+
+                current++;
+            }
+
+            _memoryTextView.Buffer.Text = sb.ToString().TrimEnd();
+        }
+
+        private void CloseMemoryWindow()
+        {
+            if (_memoryTimerId != 0)
+            {
+                GLib.Source.Remove(_memoryTimerId);
+                _memoryTimerId = 0;
+            }
+
+            _memoryWindow = null;
+            _memoryTextView = null;
+            _memoryStartEntry = null;
+            _memoryLengthEntry = null;
+        }
+
+        private static bool TryParseUShortInput(string? text, out ushort value)
+        {
+            value = 0;
+            if (string.IsNullOrWhiteSpace(text))
+                return false;
+
+            var trimmed = text.Trim();
+            if (trimmed.StartsWith("$", StringComparison.Ordinal))
+                return ushort.TryParse(trimmed[1..], System.Globalization.NumberStyles.HexNumber, null, out value);
+
+            if (trimmed.StartsWith("0x", StringComparison.OrdinalIgnoreCase))
+                return ushort.TryParse(trimmed[2..], System.Globalization.NumberStyles.HexNumber, null, out value);
+
+            return ushort.TryParse(trimmed, out value);
         }
 
         private static EmulatorOptions CloneOptions(EmulatorOptions options)
@@ -838,6 +987,12 @@ namespace FoxVision.Components
             _disposed = true;
             if (_frameTimerId != 0)
                 GLib.Source.Remove(_frameTimerId);
+
+            if (_memoryWindow is not null)
+                _memoryWindow.Destroy();
+
+            if (_memoryTimerId != 0)
+                GLib.Source.Remove(_memoryTimerId);
             _window.Destroy();
         }
     }

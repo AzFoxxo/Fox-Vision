@@ -8,7 +8,15 @@ namespace FoxVision
     internal class Processor
     {
         private ushort regX, regY, regPC;
-        private ushort flgEqual, flgActiveReg, flgHalt;
+        private byte regStatus;
+
+        private const byte StatusPredicateMask = 1 << 0;
+        private const byte StatusLessThanMask = 1 << 1;
+        private const byte StatusGreaterThanMask = 1 << 2;
+        private const byte StatusNotEqualMask = 1 << 3;
+        private const byte StatusActiveRegisterMask = 1 << 4;
+        private const byte StatusIllegalDivisionMask = 1 << 5;
+        private const byte StatusHaltMask = 1 << 6;
 
         private readonly Stopwatch timer;
         private readonly ContiguousMemory RAM;
@@ -23,10 +31,7 @@ namespace FoxVision
             regX = 0;
             regY = 0;
             regPC = 0;
-
-            flgEqual = 0;
-            flgActiveReg = 0;
-            flgHalt = 0;
+            regStatus = 0;
 
             timer = new Stopwatch();
             SetExecutionSpeedHz(executionSpeedHz);
@@ -67,7 +72,7 @@ namespace FoxVision
             timer.Reset();
             timer.Stop();
 
-            return flgHalt != 0;
+            return IsHalted;
         }
 
         internal bool IsPaused
@@ -131,31 +136,44 @@ namespace FoxVision
                     LogInstructionExecuting("DXY", first_operand);
                     if (regY == 0)
                     {
+                        SetIllegalDivision(true);
                         SetValueOfTheActiveRegister(0);
                         break;
                     }
+                    SetIllegalDivision(false);
                     SetValueOfTheActiveRegister((ushort)(regX / regY));
                     break;
 
                 case 0x8:
                     LogInstructionExecuting("EQU", first_operand);
-                    flgEqual = (ushort)(regX == regY ? 1 : 0);
+                    {
+                        bool equal = regX == regY;
+                        bool lessThan = regX < regY;
+                        bool greaterThan = regX > regY;
+                        SetComparisonFlags(equal, lessThan, greaterThan, !equal);
+                    }
                     break;
 
                 case 0x9:
                     LogInstructionExecuting("LEQ", first_operand);
-                    flgEqual = (ushort)(regX < regY ? 1 : 0);
+                    {
+                        bool lessThan = regX < regY;
+                        bool greaterThan = regX > regY;
+                        bool equal = regX == regY;
+                        // Preserve legacy LEQ flow: JPZ/JNZ consume the predicate bit.
+                        SetComparisonFlags(lessThan, lessThan, greaterThan, !equal);
+                    }
                     break;
 
                 case 0xA:
                     LogInstructionExecuting("JPZ", first_operand);
-                    if (flgEqual == 0)
+                    if (!IsPredicateSet)
                         regPC = first_operand;
                     return 2;
 
                 case 0xB:
                     LogInstructionExecuting("JNZ", first_operand);
-                    if (flgEqual != 0)
+                    if (IsPredicateSet)
                         regPC = first_operand;
                     return 2;
 
@@ -166,14 +184,12 @@ namespace FoxVision
 
                 case 0xD:
                     LogInstructionExecuting("CLR", first_operand);
-                    flgEqual = 0;
-                    flgActiveReg = 0;
-                    flgHalt = 0;
+                    regStatus = 0;
                     break;
 
                 case 0xE:
                     LogInstructionExecuting("HLT", first_operand);
-                    flgHalt = 1;
+                    SetHaltFlag(true);
                     break;
 
                 case 0xF:
@@ -286,6 +302,54 @@ namespace FoxVision
                     }
                     return 3;
 
+                // CMP - Compare X and Y and update Status bits.
+                case 0x1C:
+                    LogInstructionExecuting("CMP", first_operand);
+                    {
+                        bool equal = regX == regY;
+                        bool lessThan = regX < regY;
+                        bool greaterThan = regX > regY;
+                        SetComparisonFlags(equal, lessThan, greaterThan, !equal);
+                    }
+                    break;
+
+                // JEQ/JNE/JLT/JGT/JLE/JGE - Status-driven conditional jumps.
+                case 0x1D:
+                    LogInstructionExecuting("JEQ", first_operand);
+                    if (IsEqual)
+                        regPC = first_operand;
+                    return 2;
+
+                case 0x1E:
+                    LogInstructionExecuting("JNE", first_operand);
+                    if (IsNotEqual)
+                        regPC = first_operand;
+                    return 2;
+
+                case 0x1F:
+                    LogInstructionExecuting("JLT", first_operand);
+                    if (IsLessThan)
+                        regPC = first_operand;
+                    return 2;
+
+                case 0x20:
+                    LogInstructionExecuting("JGT", first_operand);
+                    if (IsGreaterThan)
+                        regPC = first_operand;
+                    return 2;
+
+                case 0x21:
+                    LogInstructionExecuting("JLE", first_operand);
+                    if (IsLessThan || IsEqual)
+                        regPC = first_operand;
+                    return 2;
+
+                case 0x22:
+                    LogInstructionExecuting("JGE", first_operand);
+                    if (IsGreaterThan || IsEqual)
+                        regPC = first_operand;
+                    return 2;
+
                 case 0xC000:
                     LogInstructionExecuting("DBG_LGC", first_operand);
                     Console.Write(DebugCharacters.GetCharacter(first_operand));
@@ -316,20 +380,66 @@ namespace FoxVision
         }
 
         private void ChangeActiveRegister(ushort regID)
-            => flgActiveReg = (ushort)(regID == 0 ? 0 : 1);
+            => SetActiveRegister(regID != 0);
 
         private ushort GetValueOfTheActiveRegister()
-            => flgActiveReg == 0 ? regX : regY;
+            => IsActiveRegisterY ? regY : regX;
 
         private ushort GetValueOfTheInactiveRegister()
-            => flgActiveReg == 0 ? regY : regX;
+            => IsActiveRegisterY ? regX : regY;
 
         private void SetValueOfTheActiveRegister(ushort value)
         {
-            if (flgActiveReg == 0)
-                regX = value;
-            else
+            if (IsActiveRegisterY)
                 regY = value;
+            else
+                regX = value;
+        }
+
+        private bool IsPredicateSet
+            => (regStatus & StatusPredicateMask) != 0;
+
+        private bool IsEqual
+            => IsPredicateSet;
+
+        private bool IsLessThan
+            => (regStatus & StatusLessThanMask) != 0;
+
+        private bool IsGreaterThan
+            => (regStatus & StatusGreaterThanMask) != 0;
+
+        private bool IsNotEqual
+            => (regStatus & StatusNotEqualMask) != 0;
+
+        private bool IsActiveRegisterY
+            => (regStatus & StatusActiveRegisterMask) != 0;
+
+        private bool IsHalted
+            => (regStatus & StatusHaltMask) != 0;
+
+        private void SetComparisonFlags(bool predicate, bool lessThan, bool greaterThan, bool notEqual)
+        {
+            SetStatusFlag(StatusPredicateMask, predicate);
+            SetStatusFlag(StatusLessThanMask, lessThan);
+            SetStatusFlag(StatusGreaterThanMask, greaterThan);
+            SetStatusFlag(StatusNotEqualMask, notEqual);
+        }
+
+        private void SetActiveRegister(bool useY)
+            => SetStatusFlag(StatusActiveRegisterMask, useY);
+
+        private void SetIllegalDivision(bool illegal)
+            => SetStatusFlag(StatusIllegalDivisionMask, illegal);
+
+        private void SetHaltFlag(bool halt)
+            => SetStatusFlag(StatusHaltMask, halt);
+
+        private void SetStatusFlag(byte mask, bool enabled)
+        {
+            if (enabled)
+                regStatus |= mask;
+            else
+                regStatus &= (byte)~mask;
         }
 
         private ushort ResolveMovSourceValue(ushort src)

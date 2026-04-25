@@ -1,0 +1,35 @@
+; V1.5 CMP/Jxx instruction test
+; Expects output: PASS
+
+:main
+MOV %5 X
+MOV %7 Y
+CMP
+JLT less
+JMP fail
+
+:less
+JNE ne_ok
+JMP fail
+
+:ne_ok
+JEQ fail
+JGE fail
+JLE pass
+JMP fail
+
+:pass
+DBG_LGC %16
+DBG_LGC %1
+DBG_LGC %19
+DBG_LGC %19
+DBG_LGC %38
+HLT
+
+:fail
+DBG_LGC %6
+DBG_LGC %1
+DBG_LGC %9
+DBG_LGC %12
+DBG_LGC %38
+HLT

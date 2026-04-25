@@ -366,6 +366,12 @@ namespace FoxVision
                     case 0xA:
                     case 0xB:
                     case 0xC:
+                    case 0x1D:
+                    case 0x1E:
+                    case 0x1F:
+                    case 0x20:
+                    case 0x21:
+                    case 0x22:
                         // Convert byte array to ushort
                         if (i + 1 < ROM.Length)
                         {
