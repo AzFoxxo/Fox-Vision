@@ -1,0 +1,5 @@
+MOV %3 X
+MOV %1 Y
+SRA %1
+AND
+HLT

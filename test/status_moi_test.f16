@@ -1,0 +1,5 @@
+; STATUS source smoke test
+MOV STATUS X
+STR STATUS $1001
+ADD STATUS X
+HLT

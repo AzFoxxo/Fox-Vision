@@ -49,6 +49,16 @@ namespace Fox16Shared
             {"JGT", 32},
             {"JLE", 33},
             {"JGE", 34},
+            // V1.6
+            {"ADD", 35},
+            {"SUB", 36},
+            {"MUL", 37},
+            {"DIV", 38},
+            {"AND2", 39},
+            {"OR", 40},
+            {"XOR2", 41},
+            {"SHL", 42},
+            {"SHR", 43},
             // Debug extension opcodes
             {"DBG_LGC", DEBUG_EXTENSION_OFFSET},
             {"DBG_MEM", DEBUG_EXTENSION_OFFSET + 1},

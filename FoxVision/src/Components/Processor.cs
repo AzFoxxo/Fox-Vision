@@ -269,10 +269,11 @@ namespace FoxVision
                         {
                             0x8000 => regX,
                             0x8001 => regY,
+                            0x8002 => regStatus,
                             _ => 0
                         };
 
-                        if (srcRegister != 0x8000 && srcRegister != 0x8001)
+                        if (srcRegister != 0x8000 && srcRegister != 0x8001 && srcRegister != 0x8002)
                         {
                             Console.ForegroundColor = ConsoleColor.Red;
                             Console.WriteLine($"Illegal STR source register {srcRegister:X4}");
@@ -349,6 +350,73 @@ namespace FoxVision
                     if (IsGreaterThan || IsEqual)
                         regPC = first_operand;
                     return 2;
+
+                // V1.6 multi-operand ALU instructions.
+                case 0x23:
+                    LogInstructionExecuting("ADD", first_operand);
+                    if (!TryExecuteBinaryMoInstruction(first_operand, second_operand, (src, dst) => (ushort)(dst + src)))
+                        goto NOP;
+                    return 3;
+
+                case 0x24:
+                    LogInstructionExecuting("SUB", first_operand);
+                    if (!TryExecuteBinaryMoInstruction(first_operand, second_operand, (src, dst) => (ushort)(dst - src)))
+                        goto NOP;
+                    return 3;
+
+                case 0x25:
+                    LogInstructionExecuting("MUL", first_operand);
+                    if (!TryExecuteBinaryMoInstruction(first_operand, second_operand, (src, dst) => (ushort)(dst * src)))
+                        goto NOP;
+                    return 3;
+
+                case 0x26:
+                    LogInstructionExecuting("DIV", first_operand);
+                    if (!TryExecuteBinaryMoInstruction(first_operand, second_operand, (src, dst) =>
+                    {
+                        if (src == 0)
+                        {
+                            SetIllegalDivision(true);
+                            return 0;
+                        }
+
+                        SetIllegalDivision(false);
+                        return (ushort)(dst / src);
+                    }))
+                    {
+                        goto NOP;
+                    }
+                    return 3;
+
+                case 0x27:
+                    LogInstructionExecuting("AND", first_operand);
+                    if (!TryExecuteBinaryMoInstruction(first_operand, second_operand, (src, dst) => (ushort)(dst & src)))
+                        goto NOP;
+                    return 3;
+
+                case 0x28:
+                    LogInstructionExecuting("OR", first_operand);
+                    if (!TryExecuteBinaryMoInstruction(first_operand, second_operand, (src, dst) => (ushort)(dst | src)))
+                        goto NOP;
+                    return 3;
+
+                case 0x29:
+                    LogInstructionExecuting("XOR", first_operand);
+                    if (!TryExecuteBinaryMoInstruction(first_operand, second_operand, (src, dst) => (ushort)(dst ^ src)))
+                        goto NOP;
+                    return 3;
+
+                case 0x2A:
+                    LogInstructionExecuting("SHL", first_operand);
+                    if (!TryExecuteBinaryMoInstruction(first_operand, second_operand, (src, dst) => (ushort)(dst << src)))
+                        goto NOP;
+                    return 3;
+
+                case 0x2B:
+                    LogInstructionExecuting("SHR", first_operand);
+                    if (!TryExecuteBinaryMoInstruction(first_operand, second_operand, (src, dst) => (ushort)(dst >> src)))
+                        goto NOP;
+                    return 3;
 
                 case 0xC000:
                     LogInstructionExecuting("DBG_LGC", first_operand);
@@ -448,6 +516,7 @@ namespace FoxVision
             {
                 0x8000 => regX,
                 0x8001 => regY,
+                0x8002 => regStatus,
                 _ => src
             };
         }
@@ -467,6 +536,29 @@ namespace FoxVision
             }
 
             return false;
+        }
+
+        private bool TryExecuteBinaryMoInstruction(ushort srcOperand, ushort dstOperand, Func<ushort, ushort, ushort> operation)
+        {
+            ushort srcValue = ResolveMovSourceValue(srcOperand);
+
+            ushort dstValue = dstOperand switch
+            {
+                0x8000 => regX,
+                0x8001 => regY,
+                _ => 0
+            };
+
+            if (dstOperand != 0x8000 && dstOperand != 0x8001)
+            {
+                Console.ForegroundColor = ConsoleColor.Red;
+                Console.WriteLine($"Illegal ALU destination register {dstOperand:X4}");
+                Console.ResetColor();
+                return false;
+            }
+
+            ushort result = operation(srcValue, dstValue);
+            return TryWriteMovDestination(dstOperand, result);
         }
     }
 }

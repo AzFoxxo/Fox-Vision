@@ -101,11 +101,15 @@ Programs should clear handled inputs by writing to `0x1000` using standard memor
 
 Multi-operand Instructions (MOIs) use multiple operands to simplify writing assembly and reduce the need to set active registers.
 
+MOI register operands support `X`, `Y`, and `STATUS` (source-only for status reads).
+
 - `0000 0000` `0001 1001` - `MOV` `SRC` `DST`
 - `0000 0000` `0001 1010` - `STR` `SRC` `DST`
 - `0000 0000` `0001 1011` - `LOD` `SRC` `DST`
 
 ### Extended comparison and jump instructions (V1.5)
+
+Extended comparison and jump instructions (ECJI) are instructions which modernise comparison and jump logic to reduce assembly instructions and make better use of redundant space in the status register.
 
 - `0000 0000` `0001 1100` - `CMP` - Compare `X` and `Y`, update Status comparison bits
 - `0000 0000` `0001 1101` - `JEQ` - Jump if equal (Status bit 0)
@@ -114,6 +118,36 @@ Multi-operand Instructions (MOIs) use multiple operands to simplify writing asse
 - `0000 0000` `0010 0000` - `JGT` - Jump if greater-than (Status bit 2)
 - `0000 0000` `0010 0001` - `JLE` - Jump if less-than or equal
 - `0000 0000` `0010 0010` - `JGE` - Jump if greater-than or equal
+
+### Multi-operand ALU instructions (V1.6)
+
+V1.6 adds arithmetic and bitwise MOIs using the form `OP SRC DST`.
+
+- `SRC` can be an immediate 16-bit value or a register operand (`X`/`Y`)
+- `SRC` can be an immediate 16-bit value or a register operand (`X`/`Y`/`STATUS`)
+- `DST` must be a register operand (`X`/`Y`)
+- Result is written to `DST`
+- Arithmetic wraps to 16 bits
+
+Instruction list:
+
+- `0000 0000` `0010 0011` - `ADD` `SRC` `DST` - `DST = DST + SRC`
+- `0000 0000` `0010 0100` - `SUB` `SRC` `DST` - `DST = DST - SRC`
+- `0000 0000` `0010 0101` - `MUL` `SRC` `DST` - `DST = DST * SRC`
+- `0000 0000` `0010 0110` - `DIV` `SRC` `DST` - `DST = DST / SRC` (divide by zero sets illegal division flag and writes `0`)
+- `0000 0000` `0010 0111` - `AND` `SRC` `DST` - `DST = DST & SRC`
+- `0000 0000` `0010 1000` - `OR` `SRC` `DST` - `DST = DST | SRC`
+- `0000 0000` `0010 1001` - `XOR` `SRC` `DST` - `DST = DST ^ SRC`
+- `0000 0000` `0010 1010` - `SHL` `SRC` `DST` - `DST = DST << SRC`
+- `0000 0000` `0010 1011` - `SHR` `SRC` `DST` - `DST = DST >> SRC`
+
+Legacy one-word ALU instructions remain available:
+
+- `AXY`/`SXY`/`MXY`/`DXY`
+- `AND`/`ORA`/`XOR` (active/inactive register form)
+- `BSL`/`BSR`
+
+When these legacy mnemonics are written with two operands (for example `AND X Y`), the assembler emits the V1.6 MOI opcode.
 
 ### Extension debug opcodes (EDO)
 

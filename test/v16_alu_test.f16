@@ -1,0 +1,25 @@
+; V1.6 multi-operand ALU smoke test (assembly-only)
+MOV %10 X
+MOV %3 Y
+ADD Y X
+SUB %1 X
+MUL %2 X
+DIV Y X
+AND %15 X
+OR %16 X
+XOR Y X
+SHL %1 X
+SHR %2 X
+
+; Overloaded legacy mnemonics should map to V1.6 when operands are provided
+AXY
+SXY
+MXY
+DXY
+AND
+ORA
+XOR
+BSL
+BSR
+
+HLT

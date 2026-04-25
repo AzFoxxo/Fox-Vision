@@ -99,6 +99,10 @@ namespace Fox16ASM
                     {
                         tokens.Add(new Token((ushort)0x8001, TokenType.Hexadecimal));
                     }
+                    else if (symbol == "STATUS")
+                    {
+                        tokens.Add(new Token((ushort)0x8002, TokenType.Hexadecimal));
+                    }
                     else
                     {
                         // Remaining alpha tokens are label/symbol operands.
@@ -114,10 +118,41 @@ namespace Fox16ASM
                 }
             }
 
+            RewriteOverloadedOpcode(tokens);
+
             // Add line terminator
             tokens.Add(new Token("", TokenType.Terminator));
 
             return [.. tokens];
+        }
+
+        private static void RewriteOverloadedOpcode(List<Token> tokens)
+        {
+            if (tokens.Count == 0 || tokens[0].type != TokenType.Opcode)
+                return;
+
+            // Overloaded ALU instructions use V1.6 opcodes only when two operands are present.
+            if (tokens.Count != 3)
+                return;
+
+            var opcode = (string)tokens[0].value;
+            var rewritten = opcode switch
+            {
+                "AXY" => "ADD",
+                "SXY" => "SUB",
+                "MXY" => "MUL",
+                "DXY" => "DIV",
+                "AND" => "AND2",
+                "ORA" => "OR",
+                "OR" => "OR",
+                "XOR" => "XOR2",
+                "BSL" => "SHL",
+                "BSR" => "SHR",
+                _ => opcode
+            };
+
+            if (rewritten != opcode)
+                tokens[0] = new Token(rewritten, TokenType.Opcode);
         }
     }
 }

@@ -404,6 +404,15 @@ namespace FoxVision
                     case 0x19:
                     case 0x1A:
                     case 0x1B:
+                    case 0x23:
+                    case 0x24:
+                    case 0x25:
+                    case 0x26:
+                    case 0x27:
+                    case 0x28:
+                    case 0x29:
+                    case 0x2A:
+                    case 0x2B:
                         if (i + 2 < ROM.Length)
                         {
                             Console.Write($"{ROM[i + 1]:X4} {ROM[i + 2]:X4}");
@@ -440,6 +449,15 @@ namespace FoxVision
                 Opcodes.DEBUG_EXTENSION_OFFSET => "DBG_LGC",
                 Opcodes.DEBUG_EXTENSION_OFFSET + 1 => "DBG_MEM",
                 Opcodes.DEBUG_EXTENSION_OFFSET + 2 => "DBG_INP",
+                0x23 => "MOI_ADD",
+                0x24 => "MOI_SUB",
+                0x25 => "MOI_MUL",
+                0x26 => "MOI_DIV",
+                0x27 => "MOI_AND",
+                0x28 => "MOI_OR",
+                0x29 => "MOI_XOR",
+                0x2A => "MOI_SHL",
+                0x2B => "MOI_SHR",
                 _ => opcodes[0]
             };
         }
