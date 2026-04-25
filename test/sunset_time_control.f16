@@ -1,0 +1,172 @@
+; Interactive sunset scene with hue shift controls.
+; Up   (bit 0) -> shift hue warmer/cooler forward
+; Down (bit 1) -> shift hue backward
+; Controller state is latched at $1000, so we clear it each frame.
+;
+; VRAM is addressed from $FFFF (top-left) down to $EC78 (bottom-right).
+
+; RAM variables
+; $2100 = hue_shift (0..15)
+; $2101 = input snapshot
+; $2102 = row (0..99)
+; $2103 = colPair (0..49)
+; $2104 = computed VRAM address
+
+:main
+MOV %0 X
+STR X $2100
+
+:frame_loop
+; Read controller input once per frame.
+LOD X $1000
+STR X $2101
+
+; Up pressed? (bit 0)
+LOD X $2101
+AND %1 X
+MOV %0 Y
+CMP
+JEQ check_down
+
+LOD X $2100
+ADD %1 X
+AND %15 X
+STR X $2100
+
+:check_down
+; Down pressed? (bit 1)
+LOD X $2101
+AND %2 X
+MOV %0 Y
+CMP
+JEQ clear_input
+
+LOD X $2100
+SUB %1 X
+AND %15 X
+STR X $2100
+
+:clear_input
+; Clear latched controller bits.
+MOV %0 X
+STR X $1000
+
+; Start drawing frame.
+MOV %0 X
+STR X $2102
+
+:row_loop
+LOD X $2102
+MOV %100 Y
+CMP
+JGE frame_done
+
+MOV %0 X
+STR X $2103
+
+:col_loop
+LOD X $2103
+MOV %50 Y
+CMP
+JGE next_row
+
+; index = row*50 + colPair
+LOD X $2102
+MUL %50 X
+LOD Y $2103
+ADD Y X
+
+; addr = $FFFF - index
+MOV $FFFF Y
+SUB X Y
+STR Y $2104
+
+; Base sunset scene color in X (0..15) before hue shift:
+; - Sky gradient for rows 0..54
+; - Warm horizon rows 55..65
+; - Dark ground rows 66..99
+LOD X $2102
+MOV %55 Y
+CMP
+JLT sky_base
+
+LOD X $2102
+MOV %66 Y
+CMP
+JLT horizon_base
+
+; Ground silhouette base.
+MOV %1 X
+JMP scene_base_done
+
+:horizon_base
+MOV %13 X
+JMP scene_base_done
+
+:sky_base
+; sky_band = row >> 3
+LOD X $2102
+SHR %3 X
+
+; Add subtle horizontal variation: + (colPair >> 4)
+LOD Y $2103
+SHR %4 Y
+ADD Y X
+
+; Base sky palette starts cool and warms near horizon.
+ADD %2 X
+AND %15 X
+
+:scene_base_done
+; Add a simple sun disk near the horizon.
+; Row window: 38..57, ColPair window: 18..31
+LOD Y $2102
+MOV %38 X
+CMP
+JLT apply_hue
+
+LOD Y $2102
+MOV %58 X
+CMP
+JGE apply_hue
+
+LOD Y $2103
+MOV %18 X
+CMP
+JLT apply_hue
+
+LOD Y $2103
+MOV %32 X
+CMP
+JGE apply_hue
+
+; In sun region, force bright warm base color.
+MOV %14 X
+
+:apply_hue
+; hue_shift rotates the whole palette warm/cool.
+LOD Y $2100
+ADD Y X
+AND %15 X
+
+; Expand nibble to 16-bit word pattern: n * 0x1111
+MUL %4369 X
+
+; Write one VRAM word at computed address.
+LOD Y $2104
+STR X Y
+
+; colPair++
+LOD X $2103
+ADD %1 X
+STR X $2103
+JMP col_loop
+
+:next_row
+LOD X $2102
+ADD %1 X
+STR X $2102
+JMP row_loop
+
+:frame_done
+JMP frame_loop

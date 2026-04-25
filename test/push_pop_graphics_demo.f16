@@ -1,0 +1,27 @@
+:main
+; Simple graphics demo using explicit PUSH/POP register operands.
+; Draws a 256-word descending color ramp at the top of VRAM.
+;
+; Register plan:
+; X = current VRAM address
+; Y = color value + loop counter
+
+MOV $FFFF X
+MOV %255 Y
+
+:draw_loop
+; Write Y to memory pointed by X.
+STR Y X
+
+; Move to next word (descending VRAM layout) and next color.
+SUB %1 X
+SUB %1 Y
+
+; Use stack to preserve X while CMP checks Y against zero.
+PUSH X
+MOV %0 X
+CMP
+POP X
+
+JNE draw_loop
+HLT

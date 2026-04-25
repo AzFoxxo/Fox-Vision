@@ -455,6 +455,22 @@ namespace FoxVision
                         }
                         break;
 
+                    case 0x2C:
+                    case 0x2D:
+                        if (i + 1 < ROM.Length)
+                        {
+                            Console.Write($"[{BuildOperandControlSummary(opcodeWord)}] ");
+
+                            string firstOperand = BuildTypedOperandDisplay(opcodeWord, ROM[i + 1], operandIndex: 0);
+                            Console.Write($"OP1={firstOperand}");
+                            i += 1;
+                        }
+                        else
+                        {
+                            Console.Write("<missing operand>");
+                        }
+                        break;
+
                     case 0x19:
                     case 0x1A:
                     case 0x1B:
@@ -542,6 +558,7 @@ namespace FoxVision
                 0x0000 => "X",
                 0x0001 => "Y",
                 0x0003 => "STATUS",
+                0x0004 => "SP",
                 _ => $"${value:X4}"
             };
 

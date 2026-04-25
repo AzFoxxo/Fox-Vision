@@ -1,0 +1,37 @@
+:main
+; Continuous raster-style graphics demo.
+; Writes one VRAM word each step from top-left to bottom-right,
+; then wraps back to top-left and continues forever.
+;
+; VRAM word range (inclusive): $EC78 .. $FFFF
+; Top-left is $FFFF and memory descends right/down.
+;
+; Register plan:
+; X = current VRAM address
+; Y = color word value (changes every step)
+
+MOV $FFFF X
+MOV %0 Y
+
+:draw_step
+; Paint current VRAM word.
+STR Y X
+
+; Change color for next pixel/word.
+ADD %1 Y
+
+; Advance raster position to the next VRAM word.
+SUB %1 X
+
+; If X fell below VRAM start, wrap to top-left.
+PUSH Y
+MOV $EC78 Y
+CMP
+POP Y
+JLT wrap_to_top
+
+JMP draw_step
+
+:wrap_to_top
+MOV $FFFF X
+JMP draw_step

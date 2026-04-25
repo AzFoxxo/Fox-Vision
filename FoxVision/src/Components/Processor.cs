@@ -7,7 +7,7 @@ namespace FoxVision
 {
     internal class Processor
     {
-        private ushort regX, regY, regPC;
+        private ushort regX, regY, regSP, regPC;
         private byte regStatus;
 
         private const byte StatusPredicateMask = 1 << 0;
@@ -26,6 +26,9 @@ namespace FoxVision
         private const ushort RegisterIdX = 0x0000;
         private const ushort RegisterIdY = 0x0001;
         private const ushort RegisterIdStatus = 0x0003;
+        private const ushort RegisterIdSP = 0x0004;
+        private const ushort VramSizeInWords = 5000;
+        private const ushort StackStartAddress = (ushort)(ushort.MaxValue - VramSizeInWords);
 
         private readonly Stopwatch timer;
         private readonly ContiguousMemory RAM;
@@ -39,6 +42,7 @@ namespace FoxVision
 
             regX = 0;
             regY = 0;
+            regSP = StackStartAddress;
             regPC = 0;
             regStatus = 0;
 
@@ -439,6 +443,42 @@ namespace FoxVision
                         goto NOP;
                     return 3;
 
+                // V1.7 stack instructions using an explicit register operand.
+                case 0x2C:
+                    LogInstructionExecuting("PUSH", first_operand);
+                    if (!TryReadRegisterOperand(first_operand, firstOperandType, out ushort pushValue, allowStatus: true))
+                    {
+                        Console.ForegroundColor = ConsoleColor.Red;
+                        Console.WriteLine($"Illegal PUSH source register {first_operand:X4}");
+                        Console.ResetColor();
+                        goto NOP;
+                    }
+
+                    RAM.WriteUnchecked(regSP, pushValue);
+                    unchecked { regSP--; }
+                    return 2;
+
+                case 0x2D:
+                    LogInstructionExecuting("POP", first_operand);
+                    if (!IsRegisterOperand(firstOperandType, first_operand))
+                    {
+                        Console.ForegroundColor = ConsoleColor.Red;
+                        Console.WriteLine($"Illegal POP destination register {first_operand:X4}");
+                        Console.ResetColor();
+                        goto NOP;
+                    }
+
+                    unchecked { regSP++; }
+                    if (!TryWriteRegisterOperand(first_operand, firstOperandType, RAM.ReadUnchecked(regSP), allowStatus: true))
+                    {
+                        Console.ForegroundColor = ConsoleColor.Red;
+                        Console.WriteLine($"Illegal POP destination register {first_operand:X4}");
+                        Console.ResetColor();
+                        goto NOP;
+                    }
+
+                    return 2;
+
                 case 0xC000:
                     LogInstructionExecuting("DBG_LGC", first_operand);
                     Console.Write(DebugCharacters.GetCharacter(first_operand));
@@ -482,6 +522,7 @@ namespace FoxVision
         private ushort GetValueOfTheInactiveRegister()
             => IsActiveRegisterY ? regX : regY;
 
+        [Obsolete]
         private void SetValueOfTheActiveRegister(ushort value)
         {
             if (IsActiveRegisterY)
@@ -575,11 +616,12 @@ namespace FoxVision
                 RegisterIdX => SetOutValue(regX, out value),
                 RegisterIdY => SetOutValue(regY, out value),
                 RegisterIdStatus when allowStatus => SetOutValue(regStatus, out value),
+                RegisterIdSP => SetOutValue(regSP, out value),
                 _ => false
             };
         }
 
-        private bool TryWriteRegisterOperand(ushort operand, byte operandType, ushort value)
+        private bool TryWriteRegisterOperand(ushort operand, byte operandType, ushort value, bool allowStatus = false)
         {
             if (!IsRegisterOperand(operandType, operand))
                 return false;
@@ -593,6 +635,18 @@ namespace FoxVision
             if (operand == RegisterIdY)
             {
                 regY = value;
+                return true;
+            }
+
+            if (operand == RegisterIdStatus && allowStatus)
+            {
+                regStatus = (byte)value;
+                return true;
+            }
+
+            if (operand == RegisterIdSP)
+            {
+                regSP = value;
                 return true;
             }
 
@@ -655,7 +709,7 @@ namespace FoxVision
             if (operandType != OperandTypeRegister && operandType != OperandTypeIndirectMemory)
                 return false;
 
-            return operand == RegisterIdX || operand == RegisterIdY || operand == RegisterIdStatus;
+            return operand == RegisterIdX || operand == RegisterIdY || operand == RegisterIdStatus || operand == RegisterIdSP;
         }
 
         private static bool SetOutValue(ushort source, out ushort destination)

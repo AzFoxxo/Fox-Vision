@@ -1,0 +1,635 @@
+; Snake for Fox Vision
+; Controls:
+; - Up/Down/Left/Right: move snake
+; - Start: restart after game over
+;
+; Uses a 20x20 playfield rendered in the top-left of VRAM.
+; Colors: 0=empty, 6=snake, 3=food
+
+@const BOARD_W %20
+@const BOARD_H %20
+@const BOARD_SIZE %400
+@const LAST_ROW_START %380
+
+@const GRID_BASE $5000
+@const SNAKE_BASE $5200
+
+; RAM variables
+@const DIR $2100
+@const INPUT $2101
+@const HEAD_SLOT $2102
+@const TAIL_SLOT $2103
+@const LENGTH $2104
+@const NEXT_CELL $2105
+@const HEAD_CELL $2106
+@const TAIL_CELL $2107
+@const TMP $2108
+@const IDX $2109
+@const ROW $210A
+@const COLPAIR $210B
+@const COLOR_HI $210C
+@const COLOR_LO $210D
+@const VRAM_INDEX $210E
+@const ADDR $210F
+@const RNG $2110
+@const FOOD_CELL $2111
+@const GROW $2112
+@const LOOP $2113
+@const SCORE $2114
+@const RETID $2115
+@const ROW_BASE $2116
+@const STATE $2117
+@const DELAY $2118
+@const SPAWN_CAND $2119
+@const DELAY_INNER $211A
+
+:main
+; ------------------------------------------------------------
+; Reset game state
+; ------------------------------------------------------------
+MOV %0 X
+STR X <STATE>
+STR X <SCORE>
+MOV %317 X
+STR X <RNG>
+
+; Clear grid (400 cells)
+MOV %0 X
+STR X <LOOP>
+
+:clear_grid_loop
+LOD X <LOOP>
+MOV <BOARD_SIZE> Y
+CMP
+JGE init_snake
+
+MOV <GRID_BASE> X
+LOD Y <LOOP>
+ADD Y X
+MOV %0 Y
+STR Y X
+
+LOD X <LOOP>
+ADD %1 X
+STR X <LOOP>
+JMP clear_grid_loop
+
+:init_snake
+; Initial snake: [208, 209, 210], moving right
+MOV %3 X
+STR X <DIR>
+MOV %3 X
+STR X <LENGTH>
+
+MOV %0 X
+STR X <TAIL_SLOT>
+MOV %2 X
+STR X <HEAD_SLOT>
+
+; snake slots
+MOV <SNAKE_BASE> X
+MOV %208 Y
+STR Y X
+
+MOV <SNAKE_BASE> X
+ADD %1 X
+MOV %209 Y
+STR Y X
+
+MOV <SNAKE_BASE> X
+ADD %2 X
+MOV %210 Y
+STR Y X
+
+; mark snake cells in grid
+MOV %1 X
+STR X $50D0
+STR X $50D1
+STR X $50D2
+
+; Place first food
+MOV %1 X
+STR X <RETID>
+JMP spawn_food
+
+:frame_loop
+; ------------------------------------------------------------
+; Input snapshot and clear (controller is latched at $1000)
+; ------------------------------------------------------------
+LOD X $1000
+STR X <INPUT>
+MOV %0 X
+STR X $1000
+
+; If game over, wait for Start to restart.
+LOD X <STATE>
+MOV %0 Y
+CMP
+JEQ update_direction
+
+LOD X <INPUT>
+AND %64 X
+MOV %0 Y
+CMP
+JEQ draw_frame
+JMP main
+
+:update_direction
+; Up (bit 0) if not currently moving down
+LOD X <INPUT>
+AND %1 X
+MOV %0 Y
+CMP
+JEQ check_down
+
+LOD X <DIR>
+MOV %1 Y
+CMP
+JEQ check_down
+MOV %0 X
+STR X <DIR>
+
+:check_down
+; Down (bit 1) if not currently moving up
+LOD X <INPUT>
+AND %2 X
+MOV %0 Y
+CMP
+JEQ check_left
+
+LOD X <DIR>
+MOV %0 Y
+CMP
+JEQ check_left
+MOV %1 X
+STR X <DIR>
+
+:check_left
+; Left (bit 2) if not currently moving right
+LOD X <INPUT>
+AND %4 X
+MOV %0 Y
+CMP
+JEQ check_right
+
+LOD X <DIR>
+MOV %3 Y
+CMP
+JEQ check_right
+MOV %2 X
+STR X <DIR>
+
+:check_right
+; Right (bit 3) if not currently moving left
+LOD X <INPUT>
+AND %8 X
+MOV %0 Y
+CMP
+JEQ move_snake
+
+LOD X <DIR>
+MOV %2 Y
+CMP
+JEQ move_snake
+MOV %3 X
+STR X <DIR>
+
+:move_snake
+; Load current head cell from snake buffer
+MOV <SNAKE_BASE> X
+LOD Y <HEAD_SLOT>
+ADD Y X
+LOD Y X
+STR Y <HEAD_CELL>
+
+; Compute next cell according to direction
+LOD X <DIR>
+MOV %0 Y
+CMP
+JEQ move_up
+
+LOD X <DIR>
+MOV %1 Y
+CMP
+JEQ move_down
+
+LOD X <DIR>
+MOV %2 Y
+CMP
+JEQ move_left
+
+JMP move_right
+
+:move_up
+LOD X <HEAD_CELL>
+MOV <BOARD_W> Y
+CMP
+JLT move_up_wrap
+
+LOD X <HEAD_CELL>
+SUB <BOARD_W> X
+STR X <NEXT_CELL>
+JMP after_next_cell
+
+:move_up_wrap
+LOD X <HEAD_CELL>
+ADD <LAST_ROW_START> X
+STR X <NEXT_CELL>
+JMP after_next_cell
+
+:move_down
+LOD X <HEAD_CELL>
+MOV <LAST_ROW_START> Y
+CMP
+JGE move_down_wrap
+
+LOD X <HEAD_CELL>
+ADD <BOARD_W> X
+STR X <NEXT_CELL>
+JMP after_next_cell
+
+:move_down_wrap
+LOD X <HEAD_CELL>
+SUB <LAST_ROW_START> X
+STR X <NEXT_CELL>
+JMP after_next_cell
+
+:move_left
+; remainder = head - ((head / 20) * 20)
+LOD X <HEAD_CELL>
+DIV <BOARD_W> X
+MUL <BOARD_W> X
+STR X <ROW_BASE>
+
+LOD X <HEAD_CELL>
+LOD Y <ROW_BASE>
+SUB Y X
+MOV %0 Y
+CMP
+JEQ move_left_wrap
+
+LOD X <HEAD_CELL>
+SUB %1 X
+STR X <NEXT_CELL>
+JMP after_next_cell
+
+:move_left_wrap
+LOD X <HEAD_CELL>
+ADD %19 X
+STR X <NEXT_CELL>
+JMP after_next_cell
+
+:move_right
+LOD X <HEAD_CELL>
+DIV <BOARD_W> X
+MUL <BOARD_W> X
+STR X <ROW_BASE>
+
+LOD X <HEAD_CELL>
+LOD Y <ROW_BASE>
+SUB Y X
+MOV %19 Y
+CMP
+JEQ move_right_wrap
+
+LOD X <HEAD_CELL>
+ADD %1 X
+STR X <NEXT_CELL>
+JMP after_next_cell
+
+:move_right_wrap
+LOD X <HEAD_CELL>
+SUB %19 X
+STR X <NEXT_CELL>
+JMP after_next_cell
+
+:set_game_over
+MOV %1 X
+STR X <STATE>
+JMP draw_frame
+
+:after_next_cell
+; Determine if next cell contains food (2)
+MOV <GRID_BASE> X
+LOD Y <NEXT_CELL>
+ADD Y X
+LOD Y X
+STR Y <TMP>
+
+LOD X <TMP>
+MOV %2 Y
+CMP
+JEQ set_grow
+
+MOV %0 X
+STR X <GROW>
+JMP maybe_remove_tail
+
+:set_grow
+MOV %1 X
+STR X <GROW>
+
+:maybe_remove_tail
+; If not growing, clear tail from grid and advance tail slot.
+LOD X <GROW>
+MOV %1 Y
+CMP
+JEQ collision_check
+
+; tailCell = snake[tailSlot]
+MOV <SNAKE_BASE> X
+LOD Y <TAIL_SLOT>
+ADD Y X
+LOD Y X
+STR Y <TAIL_CELL>
+
+; grid[tailCell] = 0
+MOV <GRID_BASE> X
+LOD Y <TAIL_CELL>
+ADD Y X
+MOV %0 Y
+STR Y X
+
+; tailSlot++ mod BOARD_SIZE
+LOD X <TAIL_SLOT>
+ADD %1 X
+MOV <BOARD_SIZE> Y
+CMP
+JLT store_tail_slot
+SUB <BOARD_SIZE> X
+
+:store_tail_slot
+STR X <TAIL_SLOT>
+
+:collision_check
+; If next cell is still snake body (1), it's game over.
+MOV <GRID_BASE> X
+LOD Y <NEXT_CELL>
+ADD Y X
+LOD Y X
+MOV %1 X
+CMP
+JEQ set_game_over
+
+; headSlot++ mod BOARD_SIZE
+LOD X <HEAD_SLOT>
+ADD %1 X
+MOV <BOARD_SIZE> Y
+CMP
+JLT store_head_slot
+SUB <BOARD_SIZE> X
+
+:store_head_slot
+STR X <HEAD_SLOT>
+
+; snake[headSlot] = nextCell
+MOV <SNAKE_BASE> X
+LOD Y <HEAD_SLOT>
+ADD Y X
+LOD Y <NEXT_CELL>
+STR Y X
+
+; grid[nextCell] = 1
+MOV <GRID_BASE> X
+LOD Y <NEXT_CELL>
+ADD Y X
+MOV %1 Y
+STR Y X
+
+; Handle growth
+LOD X <GROW>
+MOV %1 Y
+CMP
+JNE draw_frame
+
+LOD X <LENGTH>
+ADD %1 X
+STR X <LENGTH>
+
+LOD X <SCORE>
+ADD %1 X
+STR X <SCORE>
+
+MOV %2 X
+STR X <RETID>
+JMP spawn_food
+
+:after_spawn_food
+JMP draw_frame
+
+:draw_frame
+; ------------------------------------------------------------
+; Render 20x20 board to top-left corner of VRAM.
+; Each VRAM address packs two horizontal pixels in low byte.
+; ------------------------------------------------------------
+MOV %0 X
+STR X <ROW>
+
+:draw_row_loop
+LOD X <ROW>
+MOV <BOARD_H> Y
+CMP
+JGE frame_delay
+
+MOV %0 X
+STR X <COLPAIR>
+
+:draw_col_loop
+LOD X <COLPAIR>
+MOV %10 Y
+CMP
+JGE draw_next_row
+
+; idx = row*20 + colPair*2
+LOD X <ROW>
+MUL <BOARD_W> X
+LOD Y <COLPAIR>
+MUL %2 Y
+ADD Y X
+STR X <IDX>
+
+; color_hi from grid[idx]
+MOV <GRID_BASE> X
+LOD Y <IDX>
+ADD Y X
+LOD Y X
+STR Y <TMP>
+
+LOD X <TMP>
+MOV %0 Y
+CMP
+JEQ color_hi_empty
+MOV %1 Y
+CMP
+JEQ color_hi_snake
+MOV %3 X
+JMP color_hi_done
+
+:color_hi_empty
+MOV %0 X
+JMP color_hi_done
+
+:color_hi_snake
+MOV %6 X
+
+:color_hi_done
+STR X <COLOR_HI>
+
+; color_lo from grid[idx + 1]
+LOD X <IDX>
+ADD %1 X
+STR X <IDX>
+
+MOV <GRID_BASE> X
+LOD Y <IDX>
+ADD Y X
+LOD Y X
+STR Y <TMP>
+
+LOD X <TMP>
+MOV %0 Y
+CMP
+JEQ color_lo_empty
+MOV %1 Y
+CMP
+JEQ color_lo_snake
+MOV %3 X
+JMP color_lo_done
+
+:color_lo_empty
+MOV %0 X
+JMP color_lo_done
+
+:color_lo_snake
+MOV %6 X
+
+:color_lo_done
+STR X <COLOR_LO>
+
+; packed = (color_hi << 4) | color_lo
+LOD X <COLOR_HI>
+SHL %4 X
+LOD Y <COLOR_LO>
+OR Y X
+
+; vram index = row*50 + colPair
+STR X <TMP>
+LOD X <ROW>
+MUL %50 X
+LOD Y <COLPAIR>
+ADD Y X
+STR X <VRAM_INDEX>
+
+; addr = $FFFF - vram index
+MOV $FFFF X
+LOD Y <VRAM_INDEX>
+SUB Y X
+STR X <ADDR>
+
+; write packed byte to VRAM word
+LOD X <TMP>
+LOD Y <ADDR>
+STR X Y
+
+; colPair++
+LOD X <COLPAIR>
+ADD %1 X
+STR X <COLPAIR>
+JMP draw_col_loop
+
+:draw_next_row
+LOD X <ROW>
+ADD %1 X
+STR X <ROW>
+JMP draw_row_loop
+
+:frame_delay
+; Nested delay loops to keep gameplay speed readable on 8MHz CPU.
+MOV %380 X
+STR X <DELAY>
+
+:delay_loop
+LOD X <DELAY>
+MOV %0 Y
+CMP
+JEQ frame_loop
+
+MOV %650 X
+STR X <DELAY_INNER>
+
+:delay_inner_loop
+LOD X <DELAY_INNER>
+MOV %0 Y
+CMP
+JEQ delay_outer_dec
+
+SUB %1 X
+STR X <DELAY_INNER>
+JMP delay_inner_loop
+
+:delay_outer_dec
+LOD X <DELAY>
+SUB %1 X
+STR X <DELAY>
+JMP delay_loop
+
+:spawn_food
+; ------------------------------------------------------------
+; Select an empty board cell and mark it as food (2).
+; Candidate sequence derives from a small LCG and linear probing.
+; ------------------------------------------------------------
+LOD X <RNG>
+MUL %109 X
+ADD %37 X
+AND %511 X
+STR X <RNG>
+
+LOD X <RNG>
+AND %511 X
+STR X <SPAWN_CAND>
+
+LOD X <SPAWN_CAND>
+MOV <BOARD_SIZE> Y
+CMP
+JLT spawn_probe
+SUB <BOARD_SIZE> X
+STR X <SPAWN_CAND>
+
+:spawn_probe
+MOV <GRID_BASE> X
+LOD Y <SPAWN_CAND>
+ADD Y X
+LOD Y X
+MOV %0 X
+CMP
+JEQ spawn_place
+
+LOD X <SPAWN_CAND>
+ADD %1 X
+MOV <BOARD_SIZE> Y
+CMP
+JLT spawn_store_cand
+MOV %0 X
+
+:spawn_store_cand
+STR X <SPAWN_CAND>
+JMP spawn_probe
+
+:spawn_place
+LOD X <SPAWN_CAND>
+STR X <FOOD_CELL>
+
+MOV <GRID_BASE> X
+LOD Y <FOOD_CELL>
+ADD Y X
+MOV %2 Y
+STR Y X
+
+LOD X <RETID>
+MOV %1 Y
+CMP
+JEQ spawn_return_init
+JMP after_spawn_food
+
+:spawn_return_init
+JMP frame_loop

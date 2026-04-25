@@ -59,6 +59,9 @@ namespace Fox16Shared
             {"XOR2", 41},
             {"SHL", 42},
             {"SHR", 43},
+            // V1.7
+            {"PUSH", 44},
+            {"POP", 45},
             // Debug extension opcodes
             {"DBG_LGC", DEBUG_EXTENSION_OFFSET},
             {"DBG_MEM", DEBUG_EXTENSION_OFFSET + 1},
