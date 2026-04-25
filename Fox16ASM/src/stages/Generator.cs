@@ -8,6 +8,11 @@ namespace Fox16ASM
 {
     class Generator
     {
+        private const byte OperandTypeRegister = 0b00;
+        private const byte OperandTypeImmediate = 0b01;
+        private const byte OperandTypeDirectMemory = 0b10;
+        private const byte OperandTypeIndirectMemory = 0b11;
+
         private static DebugFlags _debugFlags = new();
         /// <summary>
         /// Generate the ROM file using the tokens
@@ -82,8 +87,10 @@ namespace Fox16ASM
             // Write the tokens to the file
             using var stream = File.Open(outputFile, FileMode.Append);
             using var writer = new EndianBinaryWriter(EndianBitConverter.Big, stream);
-            foreach (var token in tokens)
+            for (var i = 0; i < tokens.Length; i++)
             {
+                var token = tokens[i];
+
                 // Skip all terminating tokens
                 if (token.type == TokenType.Terminator) continue;
                 else if (token.type == TokenType.Decimal)
@@ -103,10 +110,12 @@ namespace Fox16ASM
                     // Get the value of the opcode from Opcodes.instructions
                     if (token.value is string opcode && Opcodes.instructions.TryGetValue(opcode, out ushort value))
                     {
+                        var encodedOpcode = EncodeOpcode(opcode, value, tokens, i);
+
                         // Debug: Print the instruction opcode value being written
                         if (_debugFlags.ShowTokens)
-                            Console.WriteLine($"OPCODE: {value}");
-                        writer.Write(Convert.ToUInt16(value));
+                            Console.WriteLine($"OPCODE: {encodedOpcode:X4} ({encodedOpcode})");
+                        writer.Write(encodedOpcode);
                     }
                     else
                     {
@@ -152,6 +161,67 @@ namespace Fox16ASM
             {
                 throw new InvalidOperationException($"Code generation failed with {errorCount} error(s).");
             }
+        }
+
+        private static ushort EncodeOpcode(string opcode, ushort opcodeValue, Token[] tokens, int opcodeTokenIndex)
+        {
+            // Extension opcodes already define their full encoded value (for example 0xC000-based debug opcodes).
+            if (opcodeValue > 0x00FF)
+                return opcodeValue;
+
+            byte operandCount = 0;
+            byte operandOneType = 0;
+            byte operandTwoType = 0;
+
+            for (var i = opcodeTokenIndex + 1; i < tokens.Length; i++)
+            {
+                if (tokens[i].type == TokenType.Terminator)
+                    break;
+
+                if (operandCount == 0)
+                    operandOneType = ClassifyOperandType(opcode, tokens[i], 0);
+                else if (operandCount == 1)
+                    operandTwoType = ClassifyOperandType(opcode, tokens[i], 1);
+
+                operandCount++;
+            }
+
+            var controlLowByte = (byte)((operandCount & 0b11) | ((operandOneType & 0b11) << 2) | ((operandTwoType & 0b11) << 4));
+            return (ushort)((opcodeValue << 8) | controlLowByte);
+        }
+
+        private static byte ClassifyOperandType(string opcode, Token operandToken, int operandIndex)
+        {
+            var isMemoryAddressOperand = IsMemoryAddressOperand(opcode, operandIndex);
+
+            if (operandToken.type == TokenType.Decimal || operandToken.type == TokenType.Label)
+                return isMemoryAddressOperand ? OperandTypeDirectMemory : OperandTypeImmediate;
+
+            if (operandToken.type != TokenType.Hexadecimal)
+                return OperandTypeImmediate;
+
+            var value = Convert.ToUInt16(operandToken.value);
+            if (IsRegisterOperandValue(value))
+            {
+                return IsMemoryAddressOperand(opcode, operandIndex)
+                    ? OperandTypeIndirectMemory
+                    : OperandTypeRegister;
+            }
+
+            return isMemoryAddressOperand ? OperandTypeDirectMemory : OperandTypeImmediate;
+        }
+
+        private static bool IsRegisterOperandValue(ushort value)
+            => RegisterOperands.IsSupportedRegisterId(value);
+
+        private static bool IsMemoryAddressOperand(string opcode, int operandIndex)
+        {
+            return opcode switch
+            {
+                "LFM" or "WTM" => operandIndex == 0,
+                "STR" or "LOD" => operandIndex == 1,
+                _ => false
+            };
         }
 
         private static void LabelResolveAddress(Token[] tokens, Label[] labels)

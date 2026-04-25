@@ -69,34 +69,15 @@ The low byte defines how the two operand words are interpreted:
 
 ## CPU opcodes (V1.0)
 - `0000 0000` `0000 0000` - `NOP` - Waste clock cycle
-- `0000 0000` `0000 0001` - `LFM` - Load 2 byte value from memory in active register
-- `0000 0000` `0000 0010` - `WTM` - Write to memory the value of the active register
-- `0000 0000` `0000 0011` - `SRA` - Set register active (X - 0, Y - 1)
-- `0000 0000` `0000 0100` - `AXY` - Add X and Y and store result in active register
-- `0000 0000` `0000 0101` - `SXY` - Subtract X from Y and store result in active register
-- `0000 0000` `0000 0110` - `MXY` - Multiply X by Y and store result in active register
-- `0000 0000` `0000 0111` - `DXY` - Divide X by Y and store result in active register
-- `0000 0000` `0000 1000` - `EQU` - Check if X and Y registers are equal
-- `0000 0000` `0000 1001` - `LEQ` - Check if X register is less than Y register
-- `0000 0000` `0000 1010` - `JPZ` - Jump if zero to 2 byte wide address
-- `0000 0000` `0000 1011` - `JNZ` - Jump if not zero to 2 byte wide address
-- `0000 0000` `0000 1100` - `JMP` - Jump to 2 byte wide address
 - `0000 0000` `0000 1101` - `CLR` - Clear all Status register bits (set to zero)
-- `0000 0000` `0000 1110` - `HLT` - Halt program execution (quit/power-off)
-- `0000 0000` `0000 1111` - `BSL` - Bitshift left value in active register
-- `0000 0000` `0001 0000` - `BSR` - Bitshift right value in active register
-- `0000 0000` `0001 0001` - `AND` - AND bitwise value in active register by value in non-active register
-- `0000 0000` `0001 0010` - `ORA` - OR bitwise value in active register by value in non-active register
-- `0000 0000` `0001 0011` - `XOR` - XOR bitwise value in active register by value in non-active register
-- `0000 0000` `0001 0100` - `DWR` - Direct write sets the given 16 bit value to the active register
+- `0000 0000 0000 1110` - HLT - Halt program execution (quit/power-off)
+- `0000 0000 0000 1100` - JMP - Jump to 2 byte wide address
 
 ### CPU usability additions (V1.1)
-- `0000 0000` `0001 0101` - `ILM` - Indirect load from memory - load address stored in active register
-- `0000 0000` `0001 0110` - `IWR` - Indirect write register to memory - write value in active register to address stored in inactive register
+
 
 ### CPU shorthand additions (V1.2)
-- `0000 0000` `0001 0111` - `INC` - Increase the value in the active register by one
-- `0000 0000` `0001 1000` - `DEC` - Decrease the value in the active register by one
+
 
 ### Input Output Controls (V1.3)
 
@@ -199,56 +180,6 @@ When these legacy mnemonics are written with two operands (for example `AND X Y`
 - `0000 0000` `0010 1100` - `PUSH` - Push a value onto the stack
 - `0000 0000` `0010 1101` - `POP` - Pop a value from the stack
 
-NOTE: `RET` (defined )
-
-### Extension Debug Opcodes (EDO) - 2.0
-
-**Note:** These instructions are reserved exclusively for debugging and testing the virtual machine. They provide console I/O, memory inspection, and input facilities.
-
----
-
-## Opcode Class
-
-All EDO instructions belong to the debug opcode class:
-
-- HIGH byte = `1111 1111` (0xFF)
-
-If the opcode HIGH byte is `0xFF`:
-- The instruction is treated as an EDO instruction
-- Operand-type metadata is ignored
-- The LOW byte is interpreted as an EDO sub-opcode
-
----
-
-## EDO Instructions
-
-- `1111 1111 0000 0000` - `LOG` - Output a single ASCII character to the debug console
-- `1111 1111 0000 0001` - `MEMDUMP` - Output memory contents in hexadecimal format
-- `1111 1111 0000 0010` - `INPUT` - Read a line of input from the user and return it as an unsigned 16-bit value
-
----
-
-### Character Encoding
-
-All text I/O in EDO uses standard ASCII encoding.
-
-- When using `LOG`, the operand value is interpreted as an ASCII code.
-- When using `INPUT`, returned values are encoded as ASCII-derived data.
-
-### Examples
-
-- To output `"A"`:
-  - `LOG` with value `65`
-
-- If the user inputs `"A"`:
-  - VM returns `65`
-
----
-
-### Compatibility
-
-EDO 2.0 is not backward compatible in either binary or source form.
-
 ## Graphics
 
 Fox Vision supports a display size of 100x100 with four bits used to represent each colour (colours are predefined) and retrieves this data from RAM 60 times a second to display it.
@@ -260,6 +191,38 @@ The total memory size for an uncompressed frame is:
 VRAM starts at address `FFFF` and descends the next 5000 bytes.
 
 `FFFF` corresponds to top-left corner, moving right then down.
+
+### Extension debug opcodes (EDO) - Legacy
+
+**Note:** These are instructions which are only used for testing the virtual machine. They allow console I/O, printing memory, etc.
+
+**Note:** All extension debug instructions start with `11` so the first instruction is `1100 0000` `0000 0000`.
+
+- `1100 0000` `0000 0000` - `DBG_LGC` - Log a character to the console
+- `1100 0000` `0000 0001` - `DBG_MEM` - Log the memory in hex to the console
+- `1100 0000` `0000 0010` - `DBG_INP` - Prompt the user for input which is then converted to an unsigned uint16
+
+Compatibility aliases for older sources are also accepted by the assembler:
+
+- `DGB_MEM` maps to `DBG_MEM`
+- `DGB_INP` maps to `DBG_INP`
+
+## Extension debug character encoding
+
+**Note:** Unknown displays `?` when outputting and unknown reading in is converted to `40`
+
+- `#` = `0`
+- `A-Z` = `1-26`
+- `-` = `27`
+- `0-9` = `28-37`
+- Newline = `38`
+- Space = `39`
+
+### Instruction breakdown
+
+first 16 bits: opcode
+second 16 bits: addresses/values (if applicable)
+third 16 bits: addresses/values (if applicable)
 
 ## Memory
 

@@ -1,0 +1,82 @@
+; Instruction pass/fail smoke test
+; Prints PASS on success, FAIL on first failure.
+
+@const P %16
+@const A %1
+@const S %19
+@const F %6
+@const I %9
+@const L %12
+@const NL %38
+
+@const TMP0 $3100
+@const TMP1 $3101
+
+:main
+; -----------------------------------------------------------------------------
+; 1) MOV immediate/register + CMP/JNE
+; -----------------------------------------------------------------------------
+MOV $1234 X
+MOV X Y
+CMP
+JNE fail
+
+; -----------------------------------------------------------------------------
+; 2) STR/LOD direct memory addressing
+; -----------------------------------------------------------------------------
+MOV %42 X
+STR X <TMP0>
+MOV %0 X
+LOD X <TMP0>
+MOV %42 Y
+CMP
+JNE fail
+
+; -----------------------------------------------------------------------------
+; 3) STR/LOD indirect memory addressing via register
+; -----------------------------------------------------------------------------
+MOV <TMP1> X
+MOV %77 Y
+STR Y X
+MOV %0 Y
+LOD Y X
+MOV %77 X
+CMP
+JNE fail
+
+; -----------------------------------------------------------------------------
+; 4) MOI ALU ops with immediate + register operands
+; -----------------------------------------------------------------------------
+MOV %10 X
+ADD %5 X
+SUB %3 X
+MUL %2 X
+DIV %4 X
+MOV %6 Y
+CMP
+JNE fail
+
+; -----------------------------------------------------------------------------
+; 5) Comparison and conditional jump (JLT)
+; -----------------------------------------------------------------------------
+MOV %2 X
+MOV %3 Y
+CMP
+JLT pass
+JMP fail
+
+:pass
+DBG_LGC <P>
+DBG_LGC <A>
+DBG_LGC <S>
+DBG_LGC <S>
+DBG_LGC <NL>
+HLT
+
+:fail
+DBG_LGC <F>
+DBG_LGC <A>
+DBG_LGC <I>
+DBG_LGC <L>
+DBG_LGC <NL>
+HLT

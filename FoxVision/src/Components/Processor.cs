@@ -18,6 +18,15 @@ namespace FoxVision
         private const byte StatusIllegalDivisionMask = 1 << 5;
         private const byte StatusHaltMask = 1 << 6;
 
+        private const byte OperandTypeRegister = 0b00;
+        private const byte OperandTypeImmediate = 0b01;
+        private const byte OperandTypeDirectMemory = 0b10;
+        private const byte OperandTypeIndirectMemory = 0b11;
+
+        private const ushort RegisterIdX = 0x0000;
+        private const ushort RegisterIdY = 0x0001;
+        private const ushort RegisterIdStatus = 0x0003;
+
         private readonly Stopwatch timer;
         private readonly ContiguousMemory RAM;
         private long _ticksToWaitPerCycle;
@@ -95,7 +104,11 @@ namespace FoxVision
 
         private ushort DecodeExecuteInstruction(ushort opcode, ushort first_operand, ushort second_operand)
         {
-            switch (opcode)
+            ushort decodedOpcode = DecodeOpcodeId(opcode);
+            byte firstOperandType = DecodeOperandType(opcode, operandIndex: 0);
+            byte secondOperandType = DecodeOperandType(opcode, operandIndex: 1);
+
+            switch (decodedOpcode)
             {
                 case 0x0:
                 NOP:
@@ -245,11 +258,10 @@ namespace FoxVision
                 case 0x19:
                     LogInstructionExecuting("MOV", first_operand);
                     {
-                        ushort src = first_operand;
+                        ushort src = ResolveOperandValue(first_operand, firstOperandType);
                         ushort dst = second_operand;
-                        ushort value = ResolveMovSourceValue(src);
 
-                        if (!TryWriteMovDestination(dst, value))
+                        if (!TryWriteRegisterOperand(dst, secondOperandType, src))
                         {
                             Console.ForegroundColor = ConsoleColor.Red;
                             Console.WriteLine($"Illegal MOV destination {dst:X4}");
@@ -265,15 +277,7 @@ namespace FoxVision
                         ushort srcRegister = first_operand;
                         ushort dstAddressOperand = second_operand;
 
-                        ushort value = srcRegister switch
-                        {
-                            0x8000 => regX,
-                            0x8001 => regY,
-                            0x8002 => regStatus,
-                            _ => 0
-                        };
-
-                        if (srcRegister != 0x8000 && srcRegister != 0x8001 && srcRegister != 0x8002)
+                        if (!TryReadRegisterOperand(srcRegister, firstOperandType, out ushort value, allowStatus: true))
                         {
                             Console.ForegroundColor = ConsoleColor.Red;
                             Console.WriteLine($"Illegal STR source register {srcRegister:X4}");
@@ -281,7 +285,7 @@ namespace FoxVision
                             goto NOP;
                         }
 
-                        if (!TryResolveMemoryAddressOperand(dstAddressOperand, out ushort dstAddress))
+                        if (!TryResolveMemoryAddressOperand(dstAddressOperand, secondOperandType, out ushort dstAddress))
                         {
                             Console.ForegroundColor = ConsoleColor.Red;
                             Console.WriteLine($"Illegal STR destination address operand {dstAddressOperand:X4}");
@@ -300,7 +304,7 @@ namespace FoxVision
                         ushort dstRegister = first_operand;
                         ushort srcAddressOperand = second_operand;
 
-                        if (!TryResolveMemoryAddressOperand(srcAddressOperand, out ushort srcAddress))
+                        if (!TryResolveMemoryAddressOperand(srcAddressOperand, secondOperandType, out ushort srcAddress))
                         {
                             Console.ForegroundColor = ConsoleColor.Red;
                             Console.WriteLine($"Illegal LOD source address operand {srcAddressOperand:X4}");
@@ -310,7 +314,7 @@ namespace FoxVision
 
                         ushort value = RAM.ReadUnchecked(srcAddress);
 
-                        if (!TryWriteMovDestination(dstRegister, value))
+                        if (!TryWriteRegisterOperand(dstRegister, firstOperandType, value))
                         {
                             Console.ForegroundColor = ConsoleColor.Red;
                             Console.WriteLine($"Illegal LOD destination register {dstRegister:X4}");
@@ -371,25 +375,25 @@ namespace FoxVision
                 // V1.6 multi-operand ALU instructions.
                 case 0x23:
                     LogInstructionExecuting("ADD", first_operand);
-                    if (!TryExecuteBinaryMoInstruction(first_operand, second_operand, (src, dst) => (ushort)(dst + src)))
+                    if (!TryExecuteBinaryMoInstruction(first_operand, firstOperandType, second_operand, secondOperandType, (src, dst) => (ushort)(dst + src)))
                         goto NOP;
                     return 3;
 
                 case 0x24:
                     LogInstructionExecuting("SUB", first_operand);
-                    if (!TryExecuteBinaryMoInstruction(first_operand, second_operand, (src, dst) => (ushort)(dst - src)))
+                    if (!TryExecuteBinaryMoInstruction(first_operand, firstOperandType, second_operand, secondOperandType, (src, dst) => (ushort)(dst - src)))
                         goto NOP;
                     return 3;
 
                 case 0x25:
                     LogInstructionExecuting("MUL", first_operand);
-                    if (!TryExecuteBinaryMoInstruction(first_operand, second_operand, (src, dst) => (ushort)(dst * src)))
+                    if (!TryExecuteBinaryMoInstruction(first_operand, firstOperandType, second_operand, secondOperandType, (src, dst) => (ushort)(dst * src)))
                         goto NOP;
                     return 3;
 
                 case 0x26:
                     LogInstructionExecuting("DIV", first_operand);
-                    if (!TryExecuteBinaryMoInstruction(first_operand, second_operand, (src, dst) =>
+                    if (!TryExecuteBinaryMoInstruction(first_operand, firstOperandType, second_operand, secondOperandType, (src, dst) =>
                     {
                         if (src == 0)
                         {
@@ -407,31 +411,31 @@ namespace FoxVision
 
                 case 0x27:
                     LogInstructionExecuting("AND", first_operand);
-                    if (!TryExecuteBinaryMoInstruction(first_operand, second_operand, (src, dst) => (ushort)(dst & src)))
+                    if (!TryExecuteBinaryMoInstruction(first_operand, firstOperandType, second_operand, secondOperandType, (src, dst) => (ushort)(dst & src)))
                         goto NOP;
                     return 3;
 
                 case 0x28:
                     LogInstructionExecuting("OR", first_operand);
-                    if (!TryExecuteBinaryMoInstruction(first_operand, second_operand, (src, dst) => (ushort)(dst | src)))
+                    if (!TryExecuteBinaryMoInstruction(first_operand, firstOperandType, second_operand, secondOperandType, (src, dst) => (ushort)(dst | src)))
                         goto NOP;
                     return 3;
 
                 case 0x29:
                     LogInstructionExecuting("XOR", first_operand);
-                    if (!TryExecuteBinaryMoInstruction(first_operand, second_operand, (src, dst) => (ushort)(dst ^ src)))
+                    if (!TryExecuteBinaryMoInstruction(first_operand, firstOperandType, second_operand, secondOperandType, (src, dst) => (ushort)(dst ^ src)))
                         goto NOP;
                     return 3;
 
                 case 0x2A:
                     LogInstructionExecuting("SHL", first_operand);
-                    if (!TryExecuteBinaryMoInstruction(first_operand, second_operand, (src, dst) => (ushort)(dst << src)))
+                    if (!TryExecuteBinaryMoInstruction(first_operand, firstOperandType, second_operand, secondOperandType, (src, dst) => (ushort)(dst << src)))
                         goto NOP;
                     return 3;
 
                 case 0x2B:
                     LogInstructionExecuting("SHR", first_operand);
-                    if (!TryExecuteBinaryMoInstruction(first_operand, second_operand, (src, dst) => (ushort)(dst >> src)))
+                    if (!TryExecuteBinaryMoInstruction(first_operand, firstOperandType, second_operand, secondOperandType, (src, dst) => (ushort)(dst >> src)))
                         goto NOP;
                     return 3;
 
@@ -455,7 +459,7 @@ namespace FoxVision
 
                 default:
                     Console.ForegroundColor = ConsoleColor.Red;
-                    Console.WriteLine($"Illegal opcode {opcode:X4}");
+                    Console.WriteLine($"Illegal opcode {opcode:X4} (decoded {decodedOpcode:X4})");
                     Console.ResetColor();
                     goto NOP;
             }
@@ -532,26 +536,61 @@ namespace FoxVision
                 regStatus &= (byte)~mask;
         }
 
-        private ushort ResolveMovSourceValue(ushort src)
+        private ushort DecodeOpcodeId(ushort opcode)
         {
-            return src switch
+            // Debug extension opcodes keep their full encoded value.
+            if (opcode >= Opcodes.DEBUG_EXTENSION_OFFSET)
+                return opcode;
+
+            // Legacy/base opcode format still appears in older ROMs.
+            if (opcode <= 0x00FF)
+                return opcode;
+
+            // New format packs opcode id in the high byte.
+            return (ushort)(opcode >> 8);
+        }
+
+        private byte DecodeOperandType(ushort opcode, int operandIndex)
+        {
+            // Only new-format base opcodes encode operand type metadata.
+            if (opcode <= 0x00FF || opcode >= Opcodes.DEBUG_EXTENSION_OFFSET)
+                return OperandTypeRegister;
+
+            return operandIndex switch
             {
-                0x8000 => regX,
-                0x8001 => regY,
-                0x8002 => regStatus,
-                _ => src
+                0 => (byte)((opcode >> 2) & 0b11),
+                1 => (byte)((opcode >> 4) & 0b11),
+                _ => OperandTypeImmediate
             };
         }
 
-        private bool TryWriteMovDestination(ushort dst, ushort value)
+        private bool TryReadRegisterOperand(ushort operand, byte operandType, out ushort value, bool allowStatus = false)
         {
-            if (dst == 0x8000)
+            value = 0;
+            if (!IsRegisterOperand(operandType, operand))
+                return false;
+
+            return operand switch
+            {
+                RegisterIdX => SetOutValue(regX, out value),
+                RegisterIdY => SetOutValue(regY, out value),
+                RegisterIdStatus when allowStatus => SetOutValue(regStatus, out value),
+                _ => false
+            };
+        }
+
+        private bool TryWriteRegisterOperand(ushort operand, byte operandType, ushort value)
+        {
+            if (!IsRegisterOperand(operandType, operand))
+                return false;
+
+            if (operand == RegisterIdX)
             {
                 regX = value;
                 return true;
             }
 
-            if (dst == 0x8001)
+            if (operand == RegisterIdY)
             {
                 regY = value;
                 return true;
@@ -560,18 +599,29 @@ namespace FoxVision
             return false;
         }
 
-        private bool TryExecuteBinaryMoInstruction(ushort srcOperand, ushort dstOperand, Func<ushort, ushort, ushort> operation)
+        private ushort ResolveOperandValue(ushort operand, byte operandType)
         {
-            ushort srcValue = ResolveMovSourceValue(srcOperand);
+            if (IsRegisterOperand(operandType, operand))
+                return TryReadRegisterOperand(operand, operandType, out ushort registerValue, allowStatus: true) ? registerValue : (ushort)0;
 
-            ushort dstValue = dstOperand switch
+            if (operandType == OperandTypeIndirectMemory)
             {
-                0x8000 => regX,
-                0x8001 => regY,
-                _ => 0
-            };
+                if (!TryReadRegisterOperand(operand, operandType, out ushort indirectAddress, allowStatus: false))
+                    return 0;
+                return RAM.ReadUnchecked(indirectAddress);
+            }
 
-            if (dstOperand != 0x8000 && dstOperand != 0x8001)
+            if (operandType == OperandTypeDirectMemory)
+                return RAM.ReadUnchecked(operand);
+
+            return operand;
+        }
+
+        private bool TryExecuteBinaryMoInstruction(ushort srcOperand, byte srcOperandType, ushort dstOperand, byte dstOperandType, Func<ushort, ushort, ushort> operation)
+        {
+            ushort srcValue = ResolveOperandValue(srcOperand, srcOperandType);
+
+            if (!TryReadRegisterOperand(dstOperand, dstOperandType, out ushort dstValue, allowStatus: false))
             {
                 Console.ForegroundColor = ConsoleColor.Red;
                 Console.WriteLine($"Illegal ALU destination register {dstOperand:X4}");
@@ -580,26 +630,38 @@ namespace FoxVision
             }
 
             ushort result = operation(srcValue, dstValue);
-            return TryWriteMovDestination(dstOperand, result);
+            return TryWriteRegisterOperand(dstOperand, dstOperandType, result);
         }
 
-        private bool TryResolveMemoryAddressOperand(ushort operand, out ushort address)
+        private bool TryResolveMemoryAddressOperand(ushort operand, byte operandType, out ushort address)
         {
-            switch (operand)
+            if (operandType == OperandTypeIndirectMemory || (operandType == OperandTypeRegister && (operand == RegisterIdX || operand == RegisterIdY)))
             {
-                case 0x8000:
-                    address = regX;
-                    return true;
-                case 0x8001:
-                    address = regY;
-                    return true;
-                case 0x8002:
-                    address = 0;
-                    return false;
-                default:
-                    address = operand;
-                    return true;
+                return TryReadRegisterOperand(operand, OperandTypeRegister, out address, allowStatus: false);
             }
+
+            if (operandType == OperandTypeDirectMemory || operandType == OperandTypeImmediate)
+            {
+                address = operand;
+                return true;
+            }
+
+            address = 0;
+            return false;
+        }
+
+        private static bool IsRegisterOperand(byte operandType, ushort operand)
+        {
+            if (operandType != OperandTypeRegister && operandType != OperandTypeIndirectMemory)
+                return false;
+
+            return operand == RegisterIdX || operand == RegisterIdY || operand == RegisterIdStatus;
+        }
+
+        private static bool SetOutValue(ushort source, out ushort destination)
+        {
+            destination = source;
+            return true;
         }
 
         private void DumpMemoryHex()

@@ -12,9 +12,9 @@ namespace Fox16ASM
         /// <param name="filename">File to process</param>
         /// <param name="debugFlags">Debug output flags</param>
         /// <returns>Returns a tuple of the cleaned lines and labels</return>
-        public Tuple<string[], Label[]> Process(string filename, DebugFlags debugFlags = null)
+        public Tuple<string[], Label[]> Process(string filename, DebugFlags? debugFlags = null)
         {
-            debugFlags = debugFlags ?? new DebugFlags();
+            debugFlags ??= new();
             // Remove whitespace and comments from the file
             var lines = RemoveCommentsAndWhitespace(filename);
 

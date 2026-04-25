@@ -7,11 +7,18 @@ namespace FoxVision
     public class Program()
     {
         private const int RomHeaderLength = 10;
+        private const byte OperandTypeRegister = 0b00;
+        private const byte OperandTypeImmediate = 0b01;
+        private const byte OperandTypeDirectMemory = 0b10;
+        private const byte OperandTypeIndirectMemory = 0b11;
         private static VirtualMachine? vm;
 
         public static void Main(string[] args)
         {
             var options = new EmulatorOptions();
+            if (!TryApplyCommandLineArguments(args, options))
+                return;
+
             ushort[] ROM;
 
             if (!string.IsNullOrWhiteSpace(options.RomPath))
@@ -79,6 +86,9 @@ namespace FoxVision
                 {
                     startInfo.ArgumentList.Add(entryAssemblyPath);
                 }
+
+                startInfo.ArgumentList.Add("--rom");
+                startInfo.ArgumentList.Add(romPath);
 
                 startInfo.EnvironmentVariables["FOXVISION_ROM_PATH"] = romPath;
                 startInfo.EnvironmentVariables["FOXVISION_WINDOW_SCALE"] = options.WindowScale.ToString();
@@ -253,6 +263,49 @@ namespace FoxVision
             return null;
         }
 
+        private static bool TryApplyCommandLineArguments(string[] args, EmulatorOptions options)
+        {
+            for (int i = 0; i < args.Length; i++)
+            {
+                switch (args[i])
+                {
+                    case "-r":
+                    case "--rom":
+                        if (i + 1 >= args.Length)
+                        {
+                            Console.ForegroundColor = ConsoleColor.Red;
+                            Console.WriteLine("Missing value for --rom option.");
+                            Console.ForegroundColor = ConsoleColor.White;
+                            return false;
+                        }
+
+                        options.RomPath = args[++i];
+                        break;
+
+                    case "-h":
+                    case "--help":
+                        PrintUsage();
+                        return false;
+
+                    default:
+                        Console.ForegroundColor = ConsoleColor.Red;
+                        Console.WriteLine($"Unknown argument: {args[i]}");
+                        Console.ForegroundColor = ConsoleColor.White;
+                        PrintUsage();
+                        return false;
+                }
+            }
+
+            return true;
+        }
+
+        private static void PrintUsage()
+        {
+            Console.WriteLine("FoxVision options:");
+            Console.WriteLine("  -r, --rom <path>    Load ROM binary at startup");
+            Console.WriteLine("  -h, --help          Show this help message");
+        }
+
         private static bool TryDecodeRom(byte[] rawRom, out ushort[] rom)
         {
             rom = [];
@@ -345,13 +398,14 @@ namespace FoxVision
             Console.WriteLine("ROM contents: ");
             for (var i = 0; i < ROM.Length; i++)
             {
-                ushort opcodeValue = ROM[i];
+                ushort opcodeWord = ROM[i];
+                ushort opcodeValue = DecodeDisplayOpcodeValue(opcodeWord);
                 string opcode = GetDisplayOpcode(opcodeValue);
 
                 Console.ForegroundColor = ConsoleColor.Red;
                 Console.Write($"${i:X4}");
                 Console.ForegroundColor = ConsoleColor.Blue;
-                Console.Write($" {ROM[i]:X4}");
+                Console.Write($" {opcodeWord:X4}");
                 Console.ForegroundColor = ConsoleColor.White;
                 Console.Write($"→");
                 Console.ForegroundColor = ConsoleColor.Yellow;
@@ -415,7 +469,11 @@ namespace FoxVision
                     case 0x2B:
                         if (i + 2 < ROM.Length)
                         {
-                            Console.Write($"{ROM[i + 1]:X4} {ROM[i + 2]:X4}");
+                            Console.Write($"[{BuildOperandControlSummary(opcodeWord)}] ");
+
+                            string firstOperand = BuildTypedOperandDisplay(opcodeWord, ROM[i + 1], operandIndex: 0);
+                            string secondOperand = BuildTypedOperandDisplay(opcodeWord, ROM[i + 2], operandIndex: 1);
+                            Console.Write($"OP1={firstOperand} OP2={secondOperand}");
                             i += 2;
                         }
                         else
@@ -433,6 +491,71 @@ namespace FoxVision
                 Console.WriteLine();
                 Console.ForegroundColor = ConsoleColor.White;
             }
+        }
+
+        private static ushort DecodeDisplayOpcodeValue(ushort opcodeWord)
+        {
+            if (opcodeWord >= Opcodes.DEBUG_EXTENSION_OFFSET)
+                return opcodeWord;
+
+            if (opcodeWord <= 0x00FF)
+                return opcodeWord;
+
+            return (ushort)(opcodeWord >> 8);
+        }
+
+        private static string BuildOperandControlSummary(ushort opcodeWord)
+        {
+            var controlByte = (byte)(opcodeWord & 0x00FF);
+            int operandCount = controlByte & 0b11;
+            string operandOneType = GetOperandTypeLabel(DecodeOperandType(opcodeWord, operandIndex: 0));
+            string operandTwoType = GetOperandTypeLabel(DecodeOperandType(opcodeWord, operandIndex: 1));
+            return $"CNT={operandCount} OP1={operandOneType} OP2={operandTwoType}";
+        }
+
+        private static string BuildTypedOperandDisplay(ushort opcodeWord, ushort operandValue, int operandIndex)
+        {
+            byte operandType = DecodeOperandType(opcodeWord, operandIndex);
+            return operandType switch
+            {
+                OperandTypeRegister => $"REG:{FormatRegisterOrRaw(operandValue)}",
+                OperandTypeImmediate => $"IMM:{operandValue:X4}({operandValue})",
+                OperandTypeDirectMemory => $"MEM[{operandValue:X4}]",
+                OperandTypeIndirectMemory => $"MEM[{FormatRegisterOrRaw(operandValue)}]",
+                _ => $"RAW:{operandValue:X4}"
+            };
+        }
+
+        private static string GetOperandTypeLabel(byte operandType)
+            => operandType switch
+            {
+                OperandTypeRegister => "REG",
+                OperandTypeImmediate => "IMM",
+                OperandTypeDirectMemory => "MEM",
+                OperandTypeIndirectMemory => "IND",
+                _ => "UNK"
+            };
+
+        private static string FormatRegisterOrRaw(ushort value)
+            => value switch
+            {
+                0x0000 => "X",
+                0x0001 => "Y",
+                0x0003 => "STATUS",
+                _ => $"${value:X4}"
+            };
+
+        private static byte DecodeOperandType(ushort opcodeWord, int operandIndex)
+        {
+            if (opcodeWord <= 0x00FF || opcodeWord >= Opcodes.DEBUG_EXTENSION_OFFSET)
+                return OperandTypeRegister;
+
+            return operandIndex switch
+            {
+                0 => (byte)((opcodeWord >> 2) & 0b11),
+                1 => (byte)((opcodeWord >> 4) & 0b11),
+                _ => OperandTypeImmediate
+            };
         }
 
         private static string GetDisplayOpcode(ushort opcodeValue)

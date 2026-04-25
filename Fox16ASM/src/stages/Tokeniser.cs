@@ -91,17 +91,9 @@ namespace Fox16ASM
                         lineHasOpcode = true;
                     }
                     // Register operands for multi-operand instructions.
-                    else if (symbol == "X")
+                    else if (RegisterOperands.TryParseSymbol(symbol, out var register))
                     {
-                        tokens.Add(new Token((ushort)0x8000, TokenType.Hexadecimal));
-                    }
-                    else if (symbol == "Y")
-                    {
-                        tokens.Add(new Token((ushort)0x8001, TokenType.Hexadecimal));
-                    }
-                    else if (symbol == "STATUS")
-                    {
-                        tokens.Add(new Token((ushort)0x8002, TokenType.Hexadecimal));
+                        tokens.Add(new Token((ushort)register, TokenType.Hexadecimal));
                     }
                     else
                     {
