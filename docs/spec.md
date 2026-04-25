@@ -4,13 +4,13 @@
 The CPU is a single threaded 8MHz RISC chip. It uses the FoxVision16 architecture.
 
 ### Registers
-| ID  | Register | Size   | Read/Write | Description                                                                                             |
-| --- | -------- | ------ | ---------- | ------------------------------------------------------------------------------------------------------- |
-| 0x0 | X        | 16-bit | Yes        | General-purpose register #1                                                                             |
-| 0x1 | Y        | 16-bit | Yes        | General-purpose register #2                                                                             |
-| 0x2 | PC       | 16-bit | No         | Program counter (only modified internally by CPU control-flow logic; not directly accessible)           |
-| 0x3 | STATUS   | 8-bit  | Limited    | CPU flags register (read-only via instructions; written only by CPU operations like CMP, DIV, HLT, CLR) |
-
+| ID  | Register | Size   | Read/Write | Description                                                                                                                                        |
+| --- | -------- | ------ | ---------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 0x0 | X        | 16-bit | Yes        | General-purpose register #1                                                                                                                        |
+| 0x1 | Y        | 16-bit | Yes        | General-purpose register #2                                                                                                                        |
+| 0x2 | PC       | 16-bit | No         | Program counter (only modified internally by CPU control-flow logic; not directly accessible)                                                      |
+| 0x3 | STATUS   | 8-bit  | Limited    | CPU flags register (read-only via instructions; written only by CPU operations like CMP, DIV, HLT, CLR)                                            |
+| 0x4 | SP       | 16-bit | Yes        | Stack Pointer. Points to the top of the stack in memory. Modified by PUSH/POP instructions and may be read/written directly for low-level control. |
 
 | Bit | Name                   | Meaning                                              |
 | --- | ---------------------- | ---------------------------------------------------- |
@@ -27,6 +27,45 @@ The CPU is a single threaded 8MHz RISC chip. It uses the FoxVision16 architectur
 `JPZ` and `JNZ` evaluate bit 0. `EQU` writes bit 0 using equality. `LEQ` preserves legacy flow by writing bit 0 using the less-than result while also updating less-than/greater-than/not-equal bits.
 
 `CMP` (V1.5) writes all comparison bits using `X` vs `Y` and writes bit 0 using equality.
+
+## Instruction Encoding
+
+All instructions are fixed-width 48-bit values composed of three 16-bit words:
+
+- Word 0: Opcode
+- Word 1: Operand 1
+- Word 2: Operand 2
+
+Some instructions may ignore one or more operand words (e.g. `HLT`), but all three words are still fetched.
+
+---
+
+## Opcode Format (Word 0)
+
+The opcode word is split into two 8-bit fields:
+
+- High byte (bits 15–8): Opcode ID
+- Low byte (bits 7–0): Operand interpretation control
+
+---
+
+## Operand Interpretation Control (Low byte)
+
+The low byte defines how the two operand words are interpreted:
+
+- Bits 0–1: Operand count
+- Bits 2–3: Operand 1 type
+- Bits 4–5: Operand 2 type
+- Bits 6–7: Reserved
+
+---
+
+## Operand Types (2-bit encoding)
+
+- `00` = Register
+- `01` = Immediate
+- `10` = Direct Memory Address
+- `11` = Indirect Memory Address
 
 ## CPU opcodes (V1.0)
 - `0000 0000` `0000 0000` - `NOP` - Waste clock cycle
@@ -155,39 +194,62 @@ Legacy one-word ALU instructions remain available:
 
 When these legacy mnemonics are written with two operands (for example `AND X Y`), the assembler emits the V1.6 MOI opcode.
 
-### Extension debug opcodes (EDO)
+### Stack Instructions (V1.7)
 
-**Note:** These are instructions which are only used for testing the virtual machine. They allow console I/O, printing memory, etc.
+- `0000 0000` `0010 1100` - `PUSH` - Push a value onto the stack
+- `0000 0000` `0010 1101` - `POP` - Pop a value from the stack
 
-**Note:** All extension debug instructions start with `11` so the first instruction is `1100 0000` `0000 0000`.
+NOTE: `RET` (defined )
 
-- `1100 0000` `0000 0000` - `DBG_LGC` - Log a character to the console
-- `1100 0000` `0000 0001` - `DBG_MEM` - Log the memory in hex to the console
-- `1100 0000` `0000 0010` - `DBG_INP` - Prompt the user for input which is then converted to an unsigned uint16
+### Extension Debug Opcodes (EDO) - 2.0
 
-Compatibility aliases for older sources are also accepted by the assembler:
+**Note:** These instructions are reserved exclusively for debugging and testing the virtual machine. They provide console I/O, memory inspection, and input facilities.
 
-- `DGB_MEM` maps to `DBG_MEM`
-- `DGB_INP` maps to `DBG_INP`
+---
 
-## Extension debug character encoding
+## Opcode Class
 
-**Note:** Unknown displays `?` when outputting and unknown reading in is converted to `40`
+All EDO instructions belong to the debug opcode class:
 
-- `#` = `0`
-- `A-Z` = `1-26`
-- `-` = `27`
-- `0-9` = `28-37`
-- Newline = `38`
-- Space = `39`
+- HIGH byte = `1111 1111` (0xFF)
 
-### Instruction breakdown
+If the opcode HIGH byte is `0xFF`:
+- The instruction is treated as an EDO instruction
+- Operand-type metadata is ignored
+- The LOW byte is interpreted as an EDO sub-opcode
 
-first 16 bits: opcode
-second 16 bits: addresses/values (if applicable)
-third 16 bits: addresses/values (if applicable)
+---
 
-# Graphics
+## EDO Instructions
+
+- `1111 1111 0000 0000` - `LOG` - Output a single ASCII character to the debug console
+- `1111 1111 0000 0001` - `MEMDUMP` - Output memory contents in hexadecimal format
+- `1111 1111 0000 0010` - `INPUT` - Read a line of input from the user and return it as an unsigned 16-bit value
+
+---
+
+### Character Encoding
+
+All text I/O in EDO uses standard ASCII encoding.
+
+- When using `LOG`, the operand value is interpreted as an ASCII code.
+- When using `INPUT`, returned values are encoded as ASCII-derived data.
+
+### Examples
+
+- To output `"A"`:
+  - `LOG` with value `65`
+
+- If the user inputs `"A"`:
+  - VM returns `65`
+
+---
+
+### Compatibility
+
+EDO 2.0 is not backward compatible in either binary or source form.
+
+## Graphics
 
 Fox Vision supports a display size of 100x100 with four bits used to represent each colour (colours are predefined) and retrieves this data from RAM 60 times a second to display it.
 
@@ -199,7 +261,7 @@ VRAM starts at address `FFFF` and descends the next 5000 bytes.
 
 `FFFF` corresponds to top-left corner, moving right then down.
 
-# Memory
+## Memory
 
 The device has a total of 65,536 bytes (64kb) of addressable space.
 
