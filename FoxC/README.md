@@ -8,7 +8,7 @@ FoxC is a compiler written in Go for a practical C-like subset that targets Fox1
 - Variables: global and local declarations with optional initialization
 - Functions: user-defined functions, parameters, `return`
 - Control flow: `if`/`else`, `while`
-- Expressions: `+`, `-`, `*`, `/`, `&`, comparisons (`==`, `!=`, `<`, `>`, `<=`, `>=`)
+- Expressions: `+`, `-`, `*`, `/`, `&`, logical short-circuit (`&&`, `||`), comparisons (`==`, `!=`, `<`, `>`, `<=`, `>=`)
 - Built-ins:
   - `poke(addr, value)` write a word to memory
   - `peak(addr)` read a word from memory
@@ -50,6 +50,8 @@ void main() {
 ```
 
 Note: FoxC currently accepts decimal integer literals in source. Address constants can be represented as decimal values.
+
+Type note: implicit widening (`u8 -> u16`) is allowed; implicit narrowing (`u16 -> u8`) is rejected to avoid unintended truncation.
 
 ## Codegen notes
 

@@ -2,7 +2,14 @@ package foxc
 
 import (
 	"fmt"
+	"os"
+	"strconv"
 	"strings"
+)
+
+const (
+	globalBaseAddr  = 0x2000
+	runtimeStackTop = 28672
 )
 
 type storageKind int
@@ -24,6 +31,11 @@ type returnTarget struct {
 	label string
 }
 
+type inlineFn struct {
+	fn  *FuncDecl
+	ret *ReturnStmt
+}
+
 type funcFrame struct {
 	decl            *FuncDecl
 	entryLabel      string
@@ -34,6 +46,8 @@ type funcFrame struct {
 	retSlot         *storage
 	localStart      int
 	localSlotCount  int
+	inlineTempStart int
+	inlineTempCount int
 	frameSize       int
 	localNextOffset int
 	returnTargets   []returnTarget
@@ -44,7 +58,7 @@ type gen struct {
 	prog *Program
 
 	consts []string
-	text   strings.Builder
+	ir     []irInst
 
 	nextAddr uint16
 	nextID   int
@@ -52,6 +66,7 @@ type gen struct {
 	globals map[string]storage
 	funcs   map[string]*FuncDecl
 	frames  map[string]*funcFrame
+	inline  map[string]inlineFn
 
 	scopes []map[string]storage
 
@@ -59,16 +74,25 @@ type gen struct {
 	frameBaseSlot storage
 
 	currentFrame *funcFrame
+	inlineDepth  map[string]int
+
+	enableStackChecks bool
+	stackLimit        uint16
 }
 
 func generate(prog *Program) (string, error) {
 	g := &gen{
-		prog:     prog,
-		nextAddr: 0x2000,
-		globals:  map[string]storage{},
-		funcs:    map[string]*FuncDecl{},
-		frames:   map[string]*funcFrame{},
+		prog:        prog,
+		nextAddr:    globalBaseAddr,
+		globals:     map[string]storage{},
+		funcs:       map[string]*FuncDecl{},
+		frames:      map[string]*funcFrame{},
+		inline:      map[string]inlineFn{},
+		inlineDepth: map[string]int{},
+		stackLimit:  0xFFFF,
 	}
+	g.configureStackChecks()
+
 	for _, fn := range prog.Funcs {
 		g.funcs[fn.Name] = fn
 	}
@@ -77,11 +101,29 @@ func generate(prog *Program) (string, error) {
 		return "", fmt.Errorf("missing main function")
 	}
 
-	for _, gl := range prog.Globals {
-		g.globals[gl.Name] = g.allocGlobal(gl.Type)
+	for _, fn := range prog.Funcs {
+		if in, ok := shortInlineCandidate(fn); ok {
+			g.inline[fn.Name] = in
+		}
 	}
-	g.stackTopSlot = g.allocGlobal(TypeU16)
-	g.frameBaseSlot = g.allocGlobal(TypeU16)
+
+	for _, gl := range prog.Globals {
+		slot, err := g.allocGlobal(gl.Type)
+		if err != nil {
+			return "", err
+		}
+		g.globals[gl.Name] = slot
+	}
+
+	var err error
+	g.stackTopSlot, err = g.allocGlobal(TypeU16)
+	if err != nil {
+		return "", err
+	}
+	g.frameBaseSlot, err = g.allocGlobal(TypeU16)
+	if err != nil {
+		return "", err
+	}
 
 	if err := g.prepareFrames(); err != nil {
 		return "", err
@@ -134,9 +176,24 @@ func generate(prog *Program) (string, error) {
 	if len(g.consts) > 0 {
 		out.WriteByte('\n')
 	}
-	out.WriteString(g.text.String())
+	out.WriteString(renderIR(optimizeIR(g.ir)))
 
 	return out.String(), nil
+}
+
+func (g *gen) configureStackChecks() {
+	g.enableStackChecks = os.Getenv("FOXC_STACK_CHECK") == "1"
+	if !g.enableStackChecks {
+		return
+	}
+	if raw := strings.TrimSpace(os.Getenv("FOXC_STACK_LIMIT")); raw != "" {
+		if v, err := strconv.ParseUint(raw, 10, 16); err == nil {
+			g.stackLimit = uint16(v)
+		}
+	}
+	if g.stackLimit < runtimeStackTop {
+		g.stackLimit = runtimeStackTop
+	}
 }
 
 func (g *gen) prepareFrames() error {
@@ -146,6 +203,7 @@ func (g *gen) prepareFrames() error {
 		}
 
 		localCount := countLocalsInStmtList(fn.Body)
+		inlineTemps := maxInlineArgsInStmtList(fn.Body, g.inline)
 		next := 0
 		fr := &funcFrame{
 			decl:          fn,
@@ -172,11 +230,83 @@ func (g *gen) prepareFrames() error {
 
 		fr.localStart = next
 		fr.localSlotCount = localCount
-		fr.frameSize = fr.localStart + localCount
+		fr.inlineTempStart = fr.localStart + localCount
+		fr.inlineTempCount = inlineTemps
+		fr.frameSize = fr.inlineTempStart + fr.inlineTempCount
 		fr.localNextOffset = fr.localStart
 		g.frames[fn.Name] = fr
 	}
 	return nil
+}
+
+func maxInlineArgsInStmtList(stmts []Stmt, inline map[string]inlineFn) int {
+	maxArgs := 0
+	for _, st := range stmts {
+		if n := maxInlineArgsInStmt(st, inline); n > maxArgs {
+			maxArgs = n
+		}
+	}
+	return maxArgs
+}
+
+func maxInlineArgsInStmt(st Stmt, inline map[string]inlineFn) int {
+	switch n := st.(type) {
+	case *VarDeclStmt:
+		if n.Decl.Init != nil {
+			return maxInlineArgsInExpr(n.Decl.Init, inline)
+		}
+	case *AssignStmt:
+		return maxInlineArgsInExpr(n.Value, inline)
+	case *ExprStmt:
+		return maxInlineArgsInExpr(n.Value, inline)
+	case *ReturnStmt:
+		if n.Value != nil {
+			return maxInlineArgsInExpr(n.Value, inline)
+		}
+	case *IfStmt:
+		maxArgs := maxInlineArgsInExpr(n.Cond, inline)
+		if t := maxInlineArgsInStmtList(n.Then, inline); t > maxArgs {
+			maxArgs = t
+		}
+		if e := maxInlineArgsInStmtList(n.Else, inline); e > maxArgs {
+			maxArgs = e
+		}
+		return maxArgs
+	case *WhileStmt:
+		maxArgs := maxInlineArgsInExpr(n.Cond, inline)
+		if b := maxInlineArgsInStmtList(n.Body, inline); b > maxArgs {
+			maxArgs = b
+		}
+		return maxArgs
+	}
+	return 0
+}
+
+func maxInlineArgsInExpr(e Expr, inline map[string]inlineFn) int {
+	switch n := e.(type) {
+	case *UnaryExpr:
+		return maxInlineArgsInExpr(n.X, inline)
+	case *BinaryExpr:
+		left := maxInlineArgsInExpr(n.Left, inline)
+		right := maxInlineArgsInExpr(n.Right, inline)
+		if right > left {
+			return right
+		}
+		return left
+	case *CallExpr:
+		maxArgs := 0
+		if _, ok := inline[n.Callee]; ok {
+			maxArgs = len(n.Args)
+		}
+		for _, a := range n.Args {
+			if m := maxInlineArgsInExpr(a, inline); m > maxArgs {
+				maxArgs = m
+			}
+		}
+		return maxArgs
+	default:
+		return 0
+	}
 }
 
 func (g *gen) emitFunction(fr *funcFrame) error {
@@ -225,7 +355,10 @@ func (g *gen) emitStmtList(stmts []Stmt) error {
 func (g *gen) emitStmt(st Stmt) error {
 	switch n := st.(type) {
 	case *VarDeclStmt:
-		slot := g.allocLocal(n.Decl.Type)
+		slot, err := g.allocLocal(n.Decl.Type)
+		if err != nil {
+			return err
+		}
 		if err := g.declare(n.Decl.Name, slot); err != nil {
 			return err
 		}
@@ -334,6 +467,12 @@ func (g *gen) emitExpr(e Expr) error {
 		g.emit("SUB X Y")
 		g.emit("MOV Y X")
 	case *BinaryExpr:
+		switch n.Op {
+		case "&&":
+			return g.emitLogicalAnd(n.Left, n.Right)
+		case "||":
+			return g.emitLogicalOr(n.Left, n.Right)
+		}
 		if err := g.emitExpr(n.Left); err != nil {
 			return err
 		}
@@ -375,6 +514,58 @@ func (g *gen) emitExpr(e Expr) error {
 	return nil
 }
 
+func (g *gen) emitLogicalAnd(left, right Expr) error {
+	falseLabel := g.label("land_false")
+	endLabel := g.label("land_end")
+
+	if err := g.emitExpr(left); err != nil {
+		return err
+	}
+	g.emit("MOV %0 Y")
+	g.emit("CMP")
+	g.emit("JEQ " + falseLabel)
+
+	if err := g.emitExpr(right); err != nil {
+		return err
+	}
+	g.emit("MOV %0 Y")
+	g.emit("CMP")
+	g.emit("JEQ " + falseLabel)
+
+	g.emit("MOV %1 X")
+	g.emit("JMP " + endLabel)
+	g.emit(":" + falseLabel)
+	g.emit("MOV %0 X")
+	g.emit(":" + endLabel)
+	return nil
+}
+
+func (g *gen) emitLogicalOr(left, right Expr) error {
+	trueLabel := g.label("lor_true")
+	endLabel := g.label("lor_end")
+
+	if err := g.emitExpr(left); err != nil {
+		return err
+	}
+	g.emit("MOV %0 Y")
+	g.emit("CMP")
+	g.emit("JNE " + trueLabel)
+
+	if err := g.emitExpr(right); err != nil {
+		return err
+	}
+	g.emit("MOV %0 Y")
+	g.emit("CMP")
+	g.emit("JNE " + trueLabel)
+
+	g.emit("MOV %0 X")
+	g.emit("JMP " + endLabel)
+	g.emit(":" + trueLabel)
+	g.emit("MOV %1 X")
+	g.emit(":" + endLabel)
+	return nil
+}
+
 func (g *gen) emitBuiltinPoke(call *CallExpr) error {
 	if len(call.Args) != 2 {
 		return fmt.Errorf("poke expects 2 arguments")
@@ -412,6 +603,14 @@ func (g *gen) emitFunctionCall(call *CallExpr) error {
 	if fn.Name == "main" {
 		return fmt.Errorf("main cannot be called")
 	}
+
+	if in, ok := g.inline[fn.Name]; ok && g.inlineDepth[fn.Name] == 0 && g.currentFrame != nil {
+		g.inlineDepth[fn.Name]++
+		err := g.emitInlineFunctionCall(in, call)
+		g.inlineDepth[fn.Name]--
+		return err
+	}
+
 	fr, ok := g.frames[fn.Name]
 	if !ok {
 		return fmt.Errorf("missing frame for function %q", fn.Name)
@@ -420,6 +619,7 @@ func (g *gen) emitFunctionCall(call *CallExpr) error {
 		return fmt.Errorf("%s expects %d args", fn.Name, len(fr.paramSlots))
 	}
 
+	// Save caller frame base on the hardware stack.
 	g.loadFromGlobal(g.frameBaseSlot)
 	g.emit("PUSH X")
 
@@ -430,11 +630,13 @@ func (g *gen) emitFunctionCall(call *CallExpr) error {
 		g.emit("PUSH X")
 	}
 
+	// Enter callee frame: frameBase := old stackTop, stackTop += frameSize.
 	g.loadFromGlobal(g.stackTopSlot)
 	g.storeToGlobal(g.frameBaseSlot)
 	if fr.frameSize > 0 {
-		g.emit(fmt.Sprintf("ADD %%%d X", fr.frameSize))
-		g.storeToGlobal(g.stackTopSlot)
+		if err := g.emitStackTopAdvance(fr.frameSize); err != nil {
+			return err
+		}
 	}
 
 	for i := len(fr.paramSlots) - 1; i >= 0; i-- {
@@ -442,6 +644,9 @@ func (g *gen) emitFunctionCall(call *CallExpr) error {
 		g.storeToStorage(fr.paramSlots[i])
 	}
 
+	if fr.nextReturnID >= 0xFFFF {
+		return fmt.Errorf("too many call sites for function %q", fn.Name)
+	}
 	fr.nextReturnID++
 	rt := returnTarget{
 		id:    fr.nextReturnID,
@@ -459,6 +664,7 @@ func (g *gen) emitFunctionCall(call *CallExpr) error {
 		g.emit("MOV X Y")
 	}
 
+	// Leave callee frame and restore caller base.
 	g.loadFromGlobal(g.frameBaseSlot)
 	g.storeToGlobal(g.stackTopSlot)
 	g.emit("POP X")
@@ -470,6 +676,130 @@ func (g *gen) emitFunctionCall(call *CallExpr) error {
 		g.emit("MOV %0 X")
 	}
 	return nil
+}
+
+func (g *gen) emitStackTopAdvance(frameSize int) error {
+	if frameSize < 0 {
+		return fmt.Errorf("invalid frame size %d", frameSize)
+	}
+	g.emit("MOV X Y")
+	g.emit(fmt.Sprintf("ADD %%%d X", frameSize))
+	if g.enableStackChecks {
+		overflowLabel := g.label("stack_overflow")
+		okLabel := g.label("stack_ok")
+
+		// Detect 16-bit wraparound: new stack top must not become less than old top.
+		g.emit("CMP")
+		g.emit("JLT " + overflowLabel)
+
+		g.emit(fmt.Sprintf("MOV %%%d Y", g.stackLimit))
+		g.emit("CMP")
+		g.emit("JGT " + overflowLabel)
+		g.emit("JMP " + okLabel)
+		g.emit(":" + overflowLabel)
+		g.emit("HLT")
+		g.emit(":" + okLabel)
+	}
+	g.storeToGlobal(g.stackTopSlot)
+	return nil
+}
+
+func (g *gen) emitInlineFunctionCall(in inlineFn, call *CallExpr) error {
+	if len(call.Args) != len(in.fn.Params) {
+		return fmt.Errorf("%s expects %d args", in.fn.Name, len(in.fn.Params))
+	}
+	if g.currentFrame == nil {
+		return fmt.Errorf("cannot inline %q at global scope", in.fn.Name)
+	}
+	if len(call.Args) > g.currentFrame.inlineTempCount {
+		return fmt.Errorf("insufficient inline temporary storage in %q", g.currentFrame.decl.Name)
+	}
+
+	tempSlots := make([]storage, len(call.Args))
+	for i, a := range call.Args {
+		if err := g.emitExpr(a); err != nil {
+			return err
+		}
+		tempSlots[i] = storage{kind: storageFrame, offset: g.currentFrame.inlineTempStart + i, typ: in.fn.Params[i].Type}
+		g.storeToStorage(tempSlots[i])
+	}
+
+	g.pushScope()
+	defer g.popScope()
+	for i, p := range in.fn.Params {
+		if err := g.declare(p.Name, tempSlots[i]); err != nil {
+			return err
+		}
+	}
+
+	if in.ret.Value == nil {
+		g.emit("MOV %0 X")
+		return nil
+	}
+	return g.emitExpr(in.ret.Value)
+}
+
+func shortInlineCandidate(fn *FuncDecl) (inlineFn, bool) {
+	if fn.Name == "main" {
+		return inlineFn{}, false
+	}
+	if len(fn.Body) != 1 {
+		return inlineFn{}, false
+	}
+	r, ok := fn.Body[0].(*ReturnStmt)
+	if !ok {
+		return inlineFn{}, false
+	}
+	if r.Value == nil {
+		return inlineFn{}, true
+	}
+	if exprCost(r.Value) > 8 {
+		return inlineFn{}, false
+	}
+	if exprCallsName(r.Value, fn.Name) {
+		return inlineFn{}, false
+	}
+	return inlineFn{fn: fn, ret: r}, true
+}
+
+func exprCost(e Expr) int {
+	switch n := e.(type) {
+	case *IntLit, *IdentExpr:
+		return 1
+	case *UnaryExpr:
+		return 1 + exprCost(n.X)
+	case *BinaryExpr:
+		return 1 + exprCost(n.Left) + exprCost(n.Right)
+	case *CallExpr:
+		total := 1
+		for _, a := range n.Args {
+			total += exprCost(a)
+		}
+		return total
+	default:
+		return 99
+	}
+}
+
+func exprCallsName(e Expr, name string) bool {
+	switch n := e.(type) {
+	case *UnaryExpr:
+		return exprCallsName(n.X, name)
+	case *BinaryExpr:
+		return exprCallsName(n.Left, name) || exprCallsName(n.Right, name)
+	case *CallExpr:
+		if n.Callee == name {
+			return true
+		}
+		for _, a := range n.Args {
+			if exprCallsName(a, name) {
+				return true
+			}
+		}
+		return false
+	default:
+		return false
+	}
 }
 
 func (g *gen) emitCompareResult(op string) error {
@@ -500,23 +830,28 @@ func (g *gen) emitCompareResult(op string) error {
 	return nil
 }
 
-func (g *gen) allocGlobal(t TypeKind) storage {
+func (g *gen) allocGlobal(t TypeKind) (storage, error) {
+	if g.nextAddr >= runtimeStackTop {
+		return storage{}, fmt.Errorf("global storage overflow: reached stack region at $%04X", g.nextAddr)
+	}
 	name := "V_" + alphaName(int(g.nextAddr))
 	g.consts = append(g.consts, fmt.Sprintf("@const %s $%04X", name, g.nextAddr))
 	g.nextAddr++
-	return storage{kind: storageGlobal, operand: "<" + name + ">", typ: t}
+	return storage{kind: storageGlobal, operand: "<" + name + ">", typ: t}, nil
 }
 
-func (g *gen) allocLocal(t TypeKind) storage {
+func (g *gen) allocLocal(t TypeKind) (storage, error) {
 	if g.currentFrame == nil {
+		// main has no software frame, so its locals use compiler-managed global slots.
 		return g.allocGlobal(t)
 	}
-	if g.currentFrame.localNextOffset >= g.currentFrame.frameSize {
-		return storage{kind: storageFrame, offset: g.currentFrame.frameSize - 1, typ: t}
+	maxLocal := g.currentFrame.localStart + g.currentFrame.localSlotCount
+	if g.currentFrame.localNextOffset >= maxLocal {
+		return storage{}, fmt.Errorf("local slot overflow in function %q", g.currentFrame.decl.Name)
 	}
 	s := storage{kind: storageFrame, offset: g.currentFrame.localNextOffset, typ: t}
 	g.currentFrame.localNextOffset++
-	return s
+	return s, nil
 }
 
 func alphaName(n int) string {
@@ -580,8 +915,7 @@ func (g *gen) storeToGlobal(slot storage) {
 }
 
 func (g *gen) emit(line string) {
-	g.text.WriteString(line)
-	g.text.WriteByte('\n')
+	g.ir = append(g.ir, parseIRLine(line))
 }
 
 func (g *gen) label(prefix string) string {

@@ -9,6 +9,7 @@ func Compile(src string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	foldConstantsProgram(ast)
 	if err := check(ast); err != nil {
 		return "", err
 	}

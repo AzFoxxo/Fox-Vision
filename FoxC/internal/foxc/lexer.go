@@ -86,7 +86,15 @@ func (l *lexer) nextToken() (token, error) {
 	case '/':
 		return token{kind: tokSlash, text: "/", line: line, col: col}, nil
 	case '&':
+		if l.match('&') {
+			return token{kind: tokAndAnd, text: "&&", line: line, col: col}, nil
+		}
 		return token{kind: tokAmp, text: "&", line: line, col: col}, nil
+	case '|':
+		if l.match('|') {
+			return token{kind: tokOrOr, text: "||", line: line, col: col}, nil
+		}
+		return token{}, fmt.Errorf("unexpected '|' at %d:%d", line, col)
 	case '=':
 		if l.match('=') {
 			return token{kind: tokEq, text: "==", line: line, col: col}, nil

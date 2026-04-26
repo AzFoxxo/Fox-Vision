@@ -18,6 +18,8 @@ const (
 	tokStar
 	tokSlash
 	tokAmp
+	tokAndAnd
+	tokOrOr
 	tokEq
 	tokNe
 	tokLt

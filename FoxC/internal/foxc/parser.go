@@ -209,7 +209,39 @@ func (p *parser) parseVarDeclTail(typ TypeKind, name string) (*VarDecl, error) {
 }
 
 func (p *parser) parseExpr() (Expr, error) {
-	return p.parseEquality()
+	return p.parseLogicalOr()
+}
+
+func (p *parser) parseLogicalOr() (Expr, error) {
+	left, err := p.parseLogicalAnd()
+	if err != nil {
+		return nil, err
+	}
+	for p.at(tokOrOr) {
+		op := p.next().text
+		right, err := p.parseLogicalAnd()
+		if err != nil {
+			return nil, err
+		}
+		left = &BinaryExpr{Op: op, Left: left, Right: right}
+	}
+	return left, nil
+}
+
+func (p *parser) parseLogicalAnd() (Expr, error) {
+	left, err := p.parseEquality()
+	if err != nil {
+		return nil, err
+	}
+	for p.at(tokAndAnd) {
+		op := p.next().text
+		right, err := p.parseEquality()
+		if err != nil {
+			return nil, err
+		}
+		left = &BinaryExpr{Op: op, Left: left, Right: right}
+	}
+	return left, nil
 }
 
 func (p *parser) parseEquality() (Expr, error) {

@@ -81,6 +81,9 @@ func check(prog *Program) error {
 				return fmt.Errorf("function %s: %w", fn.Name, err)
 			}
 		}
+		if fn.Ret != TypeVoid && !stmtListAlwaysReturns(fn.Body) {
+			return fmt.Errorf("function %s: non-void function must return on all paths", fn.Name)
+		}
 		s.popScope()
 	}
 
@@ -211,6 +214,8 @@ func (s *semantic) exprType(e Expr) (TypeKind, error) {
 			return TypeInvalid, fmt.Errorf("binary operator on void")
 		}
 		switch n.Op {
+		case "&&", "||":
+			return TypeU8, nil
 		case "==", "!=", "<", ">", "<=", ">=":
 			return TypeU8, nil
 		case "+", "-", "*", "/", "&":
@@ -251,10 +256,30 @@ func assignable(dst, src TypeKind) bool {
 	if dst == TypeU16 && src == TypeU8 {
 		return true
 	}
-	if dst == TypeU8 && src == TypeU16 {
-		return true
+	return false
+}
+
+func stmtListAlwaysReturns(stmts []Stmt) bool {
+	for _, st := range stmts {
+		if stmtAlwaysReturns(st) {
+			return true
+		}
 	}
 	return false
+}
+
+func stmtAlwaysReturns(st Stmt) bool {
+	switch n := st.(type) {
+	case *ReturnStmt:
+		return true
+	case *IfStmt:
+		if len(n.Else) == 0 {
+			return false
+		}
+		return stmtListAlwaysReturns(n.Then) && stmtListAlwaysReturns(n.Else)
+	default:
+		return false
+	}
 }
 
 func (s *semantic) pushScope() {
