@@ -5,6 +5,7 @@ enum IROperandKind
     Immediate,
     Register,
     Label,
+    Constant,
 }
 
 readonly record struct IROperand(IROperandKind Kind, ushort Value, string? Symbol, int Line, int Column)
@@ -17,9 +18,15 @@ readonly record struct IROperand(IROperandKind Kind, ushort Value, string? Symbo
 
     public static IROperand Label(string symbol, int line, int column)
         => new(IROperandKind.Label, 0, symbol, line, column);
+
+    public static IROperand Constant(string symbol, int line, int column)
+        => new(IROperandKind.Constant, 0, symbol, line, column);
 }
 
 readonly record struct IRInstruction(string Opcode, IReadOnlyList<IROperand> Operands, int Line, int Column, string SourceLine);
 readonly record struct IRLabel(string Name, int Line, int Column, string SourceLine);
 
-readonly record struct AssemblerIR(IReadOnlyList<IRLabel> Labels, IReadOnlyList<IRInstruction> Instructions);
+readonly record struct AssemblerIR(
+    IReadOnlyList<IRLabel> Labels,
+    IReadOnlyList<IRInstruction> Instructions,
+    IReadOnlyDictionary<string, IROperand> Constants);

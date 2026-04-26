@@ -12,6 +12,7 @@ class Generator
     private const byte OperandTypeImmediate = 0b01;
     private const byte OperandTypeDirectMemory = 0b10;
     private const byte OperandTypeIndirectMemory = 0b11;
+    private readonly record struct ResolvedOperand(ushort Value, IROperandKind Kind);
 
     public static CompilationResult<byte[]> Generate(AssemblerIR ir, string outputFile, string sourceFile, DebugFlags debugFlags)
     {
@@ -38,19 +39,25 @@ class Generator
                 continue;
             }
 
-            var encodedOpcode = EncodeOpcode(instruction, opcodeValue);
+            var resolvedOperands = new List<ResolvedOperand>(instruction.Operands.Count);
+            foreach (var operand in instruction.Operands)
+            {
+                if (!TryResolveOperand(operand, labelTable, ir.Constants, sourceFile, instruction, diagnostics, out var resolvedOperand))
+                    continue;
+
+                resolvedOperands.Add(resolvedOperand);
+            }
+
+            var encodedOpcode = EncodeOpcode(instruction, opcodeValue, resolvedOperands);
             writer.Write(encodedOpcode);
             if (debugFlags.ShowTokens)
                 Console.WriteLine($"OPCODE: {instruction.Opcode} => {encodedOpcode:X4}");
 
-            foreach (var operand in instruction.Operands)
+            foreach (var operand in resolvedOperands)
             {
-                if (!TryResolveOperand(operand, labelTable, sourceFile, instruction, diagnostics, out var value))
-                    continue;
-
-                writer.Write(value);
+                writer.Write(operand.Value);
                 if (debugFlags.ShowTokens)
-                    Console.WriteLine($"OPERAND: {value:X4}");
+                    Console.WriteLine($"OPERAND: {operand.Value:X4}");
             }
         }
 
@@ -128,21 +135,25 @@ class Generator
     private static bool TryResolveOperand(
         IROperand operand,
         Dictionary<string, ushort> labelTable,
+        IReadOnlyDictionary<string, IROperand> constants,
         string sourceFile,
         IRInstruction instruction,
         List<Diagnostic> diagnostics,
-        out ushort value)
+        out ResolvedOperand resolved,
+        HashSet<string>? constantResolutionStack = null)
     {
         switch (operand.Kind)
         {
             case IROperandKind.Immediate:
+                resolved = new ResolvedOperand(operand.Value, IROperandKind.Immediate);
+                return true;
             case IROperandKind.Register:
-                value = operand.Value;
+                resolved = new ResolvedOperand(operand.Value, IROperandKind.Register);
                 return true;
             case IROperandKind.Label:
                 if (operand.Symbol is not null && labelTable.TryGetValue(operand.Symbol, out var labelAddress))
                 {
-                    value = labelAddress;
+                    resolved = new ResolvedOperand(labelAddress, IROperandKind.Label);
                     return true;
                 }
 
@@ -152,8 +163,58 @@ class Generator
                     operand.Line,
                     operand.Column,
                     instruction.SourceLine));
-                value = 0;
+                resolved = default;
                 return false;
+            case IROperandKind.Constant:
+                if (string.IsNullOrWhiteSpace(operand.Symbol))
+                {
+                    diagnostics.Add(Diagnostic.Error(
+                        "Invalid constant reference.",
+                        sourceFile,
+                        operand.Line,
+                        operand.Column,
+                        instruction.SourceLine));
+                    resolved = default;
+                    return false;
+                }
+
+                if (!constants.TryGetValue(operand.Symbol, out var constantValue))
+                {
+                    diagnostics.Add(Diagnostic.Error(
+                        $"Unresolved constant '{operand.Symbol}'.",
+                        sourceFile,
+                        operand.Line,
+                        operand.Column,
+                        instruction.SourceLine));
+                    resolved = default;
+                    return false;
+                }
+
+                constantResolutionStack ??= new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                if (!constantResolutionStack.Add(operand.Symbol))
+                {
+                    diagnostics.Add(Diagnostic.Error(
+                        $"Cyclic constant reference detected for '{operand.Symbol}'.",
+                        sourceFile,
+                        operand.Line,
+                        operand.Column,
+                        instruction.SourceLine));
+                    resolved = default;
+                    return false;
+                }
+
+                var resolvedConstant = TryResolveOperand(
+                    constantValue,
+                    labelTable,
+                    constants,
+                    sourceFile,
+                    instruction,
+                    diagnostics,
+                    out resolved,
+                    constantResolutionStack);
+
+                constantResolutionStack.Remove(operand.Symbol);
+                return resolvedConstant;
             default:
                 diagnostics.Add(Diagnostic.Error(
                     "Unsupported operand kind.",
@@ -161,40 +222,37 @@ class Generator
                     operand.Line,
                     operand.Column,
                     instruction.SourceLine));
-                value = 0;
+                resolved = default;
                 return false;
         }
     }
 
-    private static ushort EncodeOpcode(IRInstruction instruction, ushort opcodeValue)
+    private static ushort EncodeOpcode(IRInstruction instruction, ushort opcodeValue, IReadOnlyList<ResolvedOperand> resolvedOperands)
     {
         if (opcodeValue > 0x00FF)
             return opcodeValue;
 
-        byte operandCount = (byte)Math.Min(instruction.Operands.Count, 0b11);
+        byte operandCount = (byte)Math.Min(resolvedOperands.Count, 0b11);
         byte operandOneType = 0;
         byte operandTwoType = 0;
 
-        if (instruction.Operands.Count > 0)
-            operandOneType = ClassifyOperandType(instruction.Opcode, instruction.Operands[0], 0);
-        if (instruction.Operands.Count > 1)
-            operandTwoType = ClassifyOperandType(instruction.Opcode, instruction.Operands[1], 1);
+        if (resolvedOperands.Count > 0)
+            operandOneType = ClassifyOperandType(instruction.Opcode, resolvedOperands[0], 0);
+        if (resolvedOperands.Count > 1)
+            operandTwoType = ClassifyOperandType(instruction.Opcode, resolvedOperands[1], 1);
 
         var controlLowByte = (byte)((operandCount & 0b11) | ((operandOneType & 0b11) << 2) | ((operandTwoType & 0b11) << 4));
         return (ushort)((opcodeValue << 8) | controlLowByte);
     }
 
-    private static byte ClassifyOperandType(string opcode, IROperand operand, int operandIndex)
+    private static byte ClassifyOperandType(string opcode, ResolvedOperand operand, int operandIndex)
     {
         var isMemoryAddressOperand = IsMemoryAddressOperand(opcode, operandIndex);
 
         if (operand.Kind == IROperandKind.Register)
             return isMemoryAddressOperand ? OperandTypeIndirectMemory : OperandTypeRegister;
 
-        if (operand.Kind == IROperandKind.Label || operand.Kind == IROperandKind.Immediate)
-            return isMemoryAddressOperand ? OperandTypeDirectMemory : OperandTypeImmediate;
-
-        return OperandTypeImmediate;
+        return isMemoryAddressOperand ? OperandTypeDirectMemory : OperandTypeImmediate;
     }
 
     private static bool IsMemoryAddressOperand(string opcode, int operandIndex)
