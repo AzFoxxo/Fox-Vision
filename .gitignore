@@ -1,3 +1,5 @@
 bin/
 obj/
 *.bin
+FoxC/**/*f16
+.vscode/

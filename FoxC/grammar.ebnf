@@ -1,0 +1,44 @@
+(* FoxC formal grammar (EBNF) *)
+
+program        = { topDecl } ;
+
+topDecl        = varDecl | funcDecl ;
+
+varDecl        = type identifier [ "=" expression ] ";" ;
+
+funcDecl       = type identifier "(" [ paramList ] ")" block ;
+
+paramList      = param { "," param } ;
+param          = type identifier ;
+
+block          = "{" { statement } "}" ;
+
+statement      = varDecl
+               | identifier "=" expression ";"
+               | "if" "(" expression ")" block [ "else" block ]
+               | "while" "(" expression ")" block
+               | "return" [ expression ] ";"
+               | expression ";" ;
+
+expression     = equality ;
+
+equality       = comparison { ("==" | "!=") comparison } ;
+comparison     = additive { ("<" | ">" | "<=" | ">=") additive } ;
+additive       = multiplicative { ("+" | "-") multiplicative } ;
+multiplicative = unary { ("*" | "/" | "&") unary } ;
+unary          = [ "-" ] primary ;
+
+primary        = number
+               | identifier
+               | call
+               | "(" expression ")" ;
+
+call           = identifier "(" [ argumentList ] ")" ;
+argumentList   = expression { "," expression } ;
+
+type           = "u8" | "u16" | "void" ;
+identifier     = letter { letter | digit | "_" } ;
+number         = digit { digit } ;
+
+letter         = "A".."Z" | "a".."z" | "_" ;
+digit          = "0".."9" ;

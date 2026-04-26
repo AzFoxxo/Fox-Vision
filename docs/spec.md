@@ -9,8 +9,10 @@ The CPU is a single threaded 8MHz RISC chip. It uses the FoxVision16 architectur
 | 0x0 | X        | 16-bit | Yes        | General-purpose register #1                                                                                                                        |
 | 0x1 | Y        | 16-bit | Yes        | General-purpose register #2                                                                                                                        |
 | 0x2 | PC       | 16-bit | No         | Program counter (only modified internally by CPU control-flow logic; not directly accessible)                                                      |
-| 0x3 | STATUS   | 8-bit  | Limited    | CPU flags register (read-only via instructions; written only by CPU operations like CMP, DIV, HLT, CLR)                                            |
+| 0x3 | STATUS   | 8-bit  | Limited    | CPU flags register (written by CPU operations like CMP, DIV, HLT, CLR, and by `POP STATUS`)                                                        |
 | 0x4 | SP       | 16-bit | Yes        | Stack Pointer. Points to the top of the stack in memory. Modified by PUSH/POP instructions and may be read/written directly for low-level control. |
+
+On reset, `SP` starts at `0xEC77` (one address below VRAM). With VRAM defined as `0xEC78` through `0xFFFF` (5000 bytes descending from `0xFFFF`), this ensures stack operations do not overwrite display memory.
 
 | Bit | Name                   | Meaning                                              |
 | --- | ---------------------- | ---------------------------------------------------- |
@@ -69,14 +71,34 @@ The low byte defines how the two operand words are interpreted:
 
 ## CPU opcodes (V1.0)
 - `0000 0000` `0000 0000` - `NOP` - Waste clock cycle
+- `0000 0000` `0000 0001` - `LFM` - Load 2 byte value from memory in active register
+- `0000 0000` `0000 0010` - `WTM` - Write to memory the value of the active register
+- `0000 0000` `0000 0011` - `SRA` - Set register active (X - 0, Y - 1)
+- `0000 0000` `0000 0100` - `AXY` - Add X and Y and store result in active register
+- `0000 0000` `0000 0101` - `SXY` - Subtract X from Y and store result in active register
+- `0000 0000` `0000 0110` - `MXY` - Multiply X by Y and store result in active register
+- `0000 0000` `0000 0111` - `DXY` - Divide X by Y and store result in active register
+- `0000 0000` `0000 1000` - `EQU` - Check if X and Y registers are equal
+- `0000 0000` `0000 1001` - `LEQ` - Check if X register is less than Y register
+- `0000 0000` `0000 1010` - `JPZ` - Jump if zero to 2 byte wide address
+- `0000 0000` `0000 1011` - `JNZ` - Jump if not zero to 2 byte wide address
+- `0000 0000` `0000 1100` - `JMP` - Jump to 2 byte wide address
 - `0000 0000` `0000 1101` - `CLR` - Clear all Status register bits (set to zero)
-- `0000 0000 0000 1110` - HLT - Halt program execution (quit/power-off)
-- `0000 0000 0000 1100` - JMP - Jump to 2 byte wide address
+- `0000 0000` `0000 1110` - `HLT` - Halt program execution (quit/power-off)
+- `0000 0000` `0000 1111` - `BSL` - Bitshift left value in active register
+- `0000 0000` `0001 0000` - `BSR` - Bitshift right value in active register
+- `0000 0000` `0001 0001` - `AND` - AND bitwise value in active register by value in non-active register
+- `0000 0000` `0001 0010` - `ORA` - OR bitwise value in active register by value in non-active register
+- `0000 0000` `0001 0011` - `XOR` - XOR bitwise value in active register by value in non-active register
+- `0000 0000` `0001 0100` - `DWR` - Direct write sets the given 16 bit value to the active register
 
 ### CPU usability additions (V1.1)
-
+- `0000 0000` `0001 0101` - `ILM` - Indirect load from memory - load address stored in active register
+- `0000 0000` `0001 0110` - `IWR` - Indirect write register to memory - write value in active register to address stored in inactive register
 
 ### CPU shorthand additions (V1.2)
+- `0000 0000` `0001 0111` - `INC` - Increase the value in the active register by one
+- `0000 0000` `0001 1000` - `DEC` - Decrease the value in the active register by one
 
 
 ### Input Output Controls (V1.3)
@@ -177,8 +199,10 @@ When these legacy mnemonics are written with two operands (for example `AND X Y`
 
 ### Stack Instructions (V1.7)
 
-- `0000 0000` `0010 1100` - `PUSH` - Push a value onto the stack
-- `0000 0000` `0010 1101` - `POP` - Pop a value from the stack
+- `0000 0000` `0010 1100` - `PUSH SRC` - Push register `SRC` (`X`/`Y`/`SP`/`STATUS`) onto the stack
+- `0000 0000` `0010 1101` - `POP DST` - Pop the top of stack into register `DST` (`X`/`Y`/`SP`/`STATUS`)
+
+`PUSH`/`POP` consume one operand word (register id) and no longer depend on the active-register bit.
 
 ## Graphics
 

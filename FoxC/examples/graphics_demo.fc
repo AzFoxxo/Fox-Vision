@@ -1,0 +1,36 @@
+u16 VRAM_TOP = 65535;
+u16 PIXELS = 5000;
+u16 phase = 0;
+
+u16 colorFor(u16 idx, u16 p) {
+    u16 v = idx + p;
+    return v & 15;
+}
+
+void drawFrame(u16 p) {
+    u16 addr = VRAM_TOP;
+    u16 i = 0;
+
+    while (i < PIXELS) {
+        u16 c = colorFor(i, p);
+        poke(addr, c);
+        addr = addr - 1;
+        i = i + 1;
+    }
+}
+
+void waitSmall() {
+    u16 t = 0;
+    while (t < 3000) {
+        t = t + 1;
+    }
+}
+
+void main() {
+    while (1) {
+        drawFrame(phase);
+        phase = phase + 1;
+        phase = phase & 15;
+        waitSmall();
+    }
+}

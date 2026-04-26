@@ -1,0 +1,4 @@
+MOV %255 Y
+MOV $FFFF X
+STR Y X
+HLT

@@ -127,17 +127,18 @@ namespace FoxVision
             if (!File.Exists(sourcePath))
             {
                 Console.ForegroundColor = ConsoleColor.Red;
-                Console.WriteLine($"Assembly source file not found: {sourcePath}");
+                Console.WriteLine($"Source file not found: {sourcePath}");
                 Console.ForegroundColor = ConsoleColor.White;
                 return false;
             }
 
-            string extension = Path.GetExtension(sourcePath);
-            if (!string.Equals(extension, ".f16", StringComparison.OrdinalIgnoreCase))
+            string extension = Path.GetExtension(sourcePath).ToLowerInvariant();
+            if (!string.Equals(extension, ".f16", StringComparison.OrdinalIgnoreCase) &&
+                !string.Equals(extension, ".fc", StringComparison.OrdinalIgnoreCase))
             {
                 Console.ForegroundColor = ConsoleColor.Red;
                 Console.WriteLine($"Unsupported source extension: {extension}");
-                Console.WriteLine("Expected .f16 assembly file");
+                Console.WriteLine("Expected .f16 assembly or .fc FoxC source file");
                 Console.ForegroundColor = ConsoleColor.White;
                 return false;
             }
@@ -162,6 +163,86 @@ namespace FoxVision
 
             try
             {
+                var assemblySourcePath = sourcePath;
+                if (string.Equals(extension, ".fc", StringComparison.OrdinalIgnoreCase))
+                {
+                    var foxCRoot = FindFileUpwards("FoxC/go.mod", Environment.CurrentDirectory);
+                    if (string.IsNullOrWhiteSpace(foxCRoot))
+                    {
+                        Console.ForegroundColor = ConsoleColor.Red;
+                        Console.WriteLine("Could not locate FoxC/go.mod from current directory.");
+                        Console.ForegroundColor = ConsoleColor.White;
+                        return false;
+                    }
+
+                    foxCRoot = Path.GetDirectoryName(foxCRoot);
+                    if (string.IsNullOrWhiteSpace(foxCRoot))
+                    {
+                        Console.ForegroundColor = ConsoleColor.Red;
+                        Console.WriteLine("Could not determine FoxC project directory.");
+                        Console.ForegroundColor = ConsoleColor.White;
+                        return false;
+                    }
+
+                    assemblySourcePath = Path.Combine(
+                        sourceDirectory,
+                        Path.GetFileNameWithoutExtension(sourcePath) + ".f16");
+
+                    var foxcStartInfo = new ProcessStartInfo
+                    {
+                        FileName = "go",
+                        UseShellExecute = false,
+                        RedirectStandardOutput = true,
+                        RedirectStandardError = true,
+                        WorkingDirectory = foxCRoot
+                    };
+
+                    foxcStartInfo.ArgumentList.Add("run");
+                    foxcStartInfo.ArgumentList.Add("./cmd/foxc");
+                    foxcStartInfo.ArgumentList.Add("-i");
+                    foxcStartInfo.ArgumentList.Add(sourcePath);
+                    foxcStartInfo.ArgumentList.Add("-o");
+                    foxcStartInfo.ArgumentList.Add(assemblySourcePath);
+
+                    using var foxcProcess = Process.Start(foxcStartInfo);
+                    if (foxcProcess is null)
+                    {
+                        Console.ForegroundColor = ConsoleColor.Red;
+                        Console.WriteLine("Failed to start FoxC compiler process.");
+                        Console.ForegroundColor = ConsoleColor.White;
+                        return false;
+                    }
+
+                    string foxcStdOut = foxcProcess.StandardOutput.ReadToEnd();
+                    string foxcStdErr = foxcProcess.StandardError.ReadToEnd();
+                    foxcProcess.WaitForExit();
+
+                    if (!string.IsNullOrWhiteSpace(foxcStdOut))
+                    {
+                        Console.WriteLine(foxcStdOut);
+                    }
+
+                    if (foxcProcess.ExitCode != 0)
+                    {
+                        Console.ForegroundColor = ConsoleColor.Red;
+                        Console.WriteLine("FoxC compile failed.");
+                        if (!string.IsNullOrWhiteSpace(foxcStdErr))
+                        {
+                            Console.WriteLine(foxcStdErr);
+                        }
+                        Console.ForegroundColor = ConsoleColor.White;
+                        return false;
+                    }
+
+                    if (!File.Exists(assemblySourcePath))
+                    {
+                        Console.ForegroundColor = ConsoleColor.Red;
+                        Console.WriteLine($"FoxC completed but assembly was not found: {assemblySourcePath}");
+                        Console.ForegroundColor = ConsoleColor.White;
+                        return false;
+                    }
+                }
+
                 var startInfo = new ProcessStartInfo
                 {
                     FileName = "dotnet",
@@ -176,7 +257,7 @@ namespace FoxVision
                 startInfo.ArgumentList.Add(assemblerProjectPath);
                 startInfo.ArgumentList.Add("--");
                 startInfo.ArgumentList.Add("-i");
-                startInfo.ArgumentList.Add(sourcePath);
+                startInfo.ArgumentList.Add(assemblySourcePath);
 
                 using var process = Process.Start(startInfo);
                 if (process is null)

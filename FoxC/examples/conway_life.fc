@@ -1,0 +1,124 @@
+void main() {
+    u16 BOARD_W = 50;
+    u16 BOARD_H = 50;
+    u16 SCREEN_W = 100;
+    u16 VRAM_TOP = 65535;
+    u16 BOARD_A_BASE = 12288;
+    u16 BOARD_B_BASE = 14788;
+
+    u16 current = BOARD_A_BASE;
+    u16 next = BOARD_B_BASE;
+
+    u16 y0 = 0;
+    while (y0 < BOARD_H) {
+        u16 x0 = 0;
+        while (x0 < BOARD_W) {
+            u16 i0 = (y0 * BOARD_W) + x0;
+            poke(BOARD_A_BASE + i0, 0);
+            poke(BOARD_B_BASE + i0, 0);
+            x0 = x0 + 1;
+        }
+        y0 = y0 + 1;
+    }
+
+    poke(BOARD_A_BASE + ((10 * BOARD_W) + 11), 1);
+    poke(BOARD_A_BASE + ((11 * BOARD_W) + 12), 1);
+    poke(BOARD_A_BASE + ((12 * BOARD_W) + 10), 1);
+    poke(BOARD_A_BASE + ((12 * BOARD_W) + 11), 1);
+    poke(BOARD_A_BASE + ((12 * BOARD_W) + 12), 1);
+
+    poke(BOARD_A_BASE + ((30 * BOARD_W) + 24), 1);
+    poke(BOARD_A_BASE + ((30 * BOARD_W) + 25), 1);
+    poke(BOARD_A_BASE + ((30 * BOARD_W) + 26), 1);
+
+    while (1) {
+        u16 y = 0;
+        while (y < BOARD_H) {
+            u16 x = 0;
+            while (x < BOARD_W) {
+                u16 idx = (y * BOARD_W) + x;
+                u16 alive = peak(current + idx) & 1;
+
+                u16 n = 0;
+
+                if (y > 0) {
+                    u16 ym1 = y - 1;
+                    if (x > 0) {
+                        u16 xm1 = x - 1;
+                        n = n + (peak(current + ((ym1 * BOARD_W) + xm1)) & 1);
+                    }
+                    n = n + (peak(current + ((ym1 * BOARD_W) + x)) & 1);
+                    u16 xp1a = x + 1;
+                    if (xp1a < BOARD_W) {
+                        n = n + (peak(current + ((ym1 * BOARD_W) + xp1a)) & 1);
+                    }
+                }
+
+                if (x > 0) {
+                    u16 xm1b = x - 1;
+                    n = n + (peak(current + ((y * BOARD_W) + xm1b)) & 1);
+                }
+
+                u16 xp1b = x + 1;
+                if (xp1b < BOARD_W) {
+                    n = n + (peak(current + ((y * BOARD_W) + xp1b)) & 1);
+                }
+
+                u16 yp1 = y + 1;
+                if (yp1 < BOARD_H) {
+                    if (x > 0) {
+                        u16 xm1c = x - 1;
+                        n = n + (peak(current + ((yp1 * BOARD_W) + xm1c)) & 1);
+                    }
+                    n = n + (peak(current + ((yp1 * BOARD_W) + x)) & 1);
+                    u16 xp1c = x + 1;
+                    if (xp1c < BOARD_W) {
+                        n = n + (peak(current + ((yp1 * BOARD_W) + xp1c)) & 1);
+                    }
+                }
+
+                u16 out = 0;
+                if (alive == 1) {
+                    if (n == 2) {
+                        out = 1;
+                    } else {
+                        if (n == 3) {
+                            out = 1;
+                        }
+                    }
+                } else {
+                    if (n == 3) {
+                        out = 1;
+                    }
+                }
+
+                poke(next + idx, out);
+
+                u16 sx = x * 2;
+                u16 sy = y * 2;
+                u16 p0 = (sy * SCREEN_W) + sx;
+                u16 p1 = p0 + 1;
+                u16 p2 = p0 + SCREEN_W;
+                u16 p3 = p2 + 1;
+                u16 c = out * 15;
+
+                poke(VRAM_TOP - p0, c);
+                poke(VRAM_TOP - p1, c);
+                poke(VRAM_TOP - p2, c);
+                poke(VRAM_TOP - p3, c);
+
+                x = x + 1;
+            }
+            y = y + 1;
+        }
+
+        u16 tmp = current;
+        current = next;
+        next = tmp;
+
+        u16 t = 0;
+        while (t < 12000) {
+            t = t + 1;
+        }
+    }
+}

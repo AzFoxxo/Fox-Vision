@@ -1,0 +1,16 @@
+u16 value = 0;
+
+u16 inc(u16 x) {
+    return x + 1;
+}
+
+void main() {
+    u16 i = 0;
+    while (i < 4) {
+        value = inc(value);
+        i = i + 1;
+    }
+
+    poke(4096, value);
+    value = peak(4096);
+}

@@ -392,9 +392,10 @@ namespace FoxVision.Components
 
             var sourceFilter = new FileFilter
             {
-                Name = "Fox16 Assembly (*.f16)"
+                Name = "Fox sources (*.f16, *.fc)"
             };
             sourceFilter.AddPattern("*.f16");
+            sourceFilter.AddPattern("*.fc");
             dialog.AddFilter(sourceFilter);
 
             dialog.SetCurrentFolder(Environment.CurrentDirectory);
