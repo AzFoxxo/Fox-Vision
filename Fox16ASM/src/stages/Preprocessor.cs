@@ -1,126 +1,101 @@
 using System.IO;
 
-namespace Fox16ASM
+namespace Fox16ASM;
+
+class Preprocessor
 {
-    class Preprocessor
+    public CompilationResult<SourceLine[]> Process(string filename, DebugFlags? debugFlags = null)
     {
-        List<Label> labels = [];
+        debugFlags ??= new DebugFlags();
+        var diagnostics = new List<Diagnostic>();
 
-        /// <summary>
-        /// Run the preprocessor
-        /// </summary>
-        /// <param name="filename">File to process</param>
-        /// <param name="debugFlags">Debug output flags</param>
-        /// <returns>Returns a tuple of the cleaned lines and labels</return>
-        public Tuple<string[], Label[]> Process(string filename, DebugFlags? debugFlags = null)
+        var linesResult = RemoveCommentsAndWhitespace(filename);
+        diagnostics.AddRange(linesResult.Diagnostics);
+        if (!linesResult.Success || linesResult.Value is null)
+            return CompilationResult<SourceLine[]>.Failed(diagnostics);
+
+        var lines = linesResult.Value.ToList();
+        var constants = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var sourceLine in lines)
         {
-            debugFlags ??= new();
-            // Remove whitespace and comments from the file
-            var lines = RemoveCommentsAndWhitespace(filename);
+            if (!sourceLine.Text.StartsWith("@const", StringComparison.Ordinal))
+                continue;
 
-            // Apply EFox16 preprocessor (now standard for all .f16 files)
-            // Check if any line has @const directive
-            if (lines.Any(line => line.StartsWith("@const")))
+            var parts = sourceLine.Text.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+            if (parts.Length != 3)
             {
-                // Find all @const directives
-                var constLines = lines.Where(line => line.StartsWith("@const")).ToArray();
-
-                // Split at space and error handling
-                foreach (var line in constLines)
-                {
-                    var parts = line.Split(' ');
-                    if (parts.Length != 3)
-                    {
-                        Console.WriteLine("Invalid @const directive: " + line);
-                        continue;
-                    }
-
-                    // Get the name and value
-                    var name = parts[1];
-                    var value = parts[2];
-
-                    // Replace all instances of name with value
-                    lines = lines.Select(line => line.Replace($"<{name}>", value)).ToArray();
-                }
+                diagnostics.Add(Diagnostic.Error(
+                    "Invalid @const directive. Expected '@const <name> <value>'.",
+                    filename,
+                    sourceLine.LineNumber,
+                    1,
+                    sourceLine.Text));
+                continue;
             }
 
-            // Delete all preprocessor lines
-            lines = lines.Where(line => !line.StartsWith('@')).ToArray();
-
-            // Print all lines (if debug flag is enabled)
-            if (debugFlags.ShowTokens)
-            {
-                foreach (var line in lines)
-                {
-                    Console.ForegroundColor = ConsoleColor.Green;
-                    Console.WriteLine(line);
-                }
-            }
-
-            // Find all labels in the file
-            labels = FindLabels(lines, debugFlags);
-
-            return new Tuple<string[], Label[]>(lines, [.. labels]);
+            var name = parts[1];
+            var value = parts[2];
+            constants[name] = value;
         }
 
-        /// <summary>
-        /// Strip all comments and whitespace from file
-        /// </summary>
-        /// <param name="filename">File to process</param>
-        /// <returns>string representation of cleaned file</returns>
-        private static string[] RemoveCommentsAndWhitespace(string filename)
+        var processed = new List<SourceLine>(lines.Count);
+        foreach (var sourceLine in lines)
         {
-            // Read the file
+            if (sourceLine.Text.StartsWith('@'))
+                continue;
+
+            var text = sourceLine.Text;
+            foreach (var kvp in constants)
+            {
+                text = text.Replace($"<{kvp.Key}>", kvp.Value, StringComparison.Ordinal);
+            }
+
+            processed.Add(new SourceLine(sourceLine.LineNumber, text));
+        }
+
+        if (debugFlags.ShowTokens)
+        {
+            foreach (var line in processed)
+            {
+                Console.ForegroundColor = ConsoleColor.Green;
+                Console.WriteLine(line.Text);
+            }
+
+            Console.ForegroundColor = ConsoleColor.White;
+        }
+
+        return diagnostics.Any(d => d.Severity == DiagnosticSeverity.Error)
+            ? CompilationResult<SourceLine[]>.Failed(diagnostics)
+            : new CompilationResult<SourceLine[]>(processed.ToArray(), diagnostics);
+    }
+
+    private static CompilationResult<SourceLine[]> RemoveCommentsAndWhitespace(string filename)
+    {
+        try
+        {
+            var cleaned = new List<SourceLine>();
             var lines = File.ReadAllLines(filename);
 
-            // Discard any empty lines
-            lines = lines.Where(line => !string.IsNullOrEmpty(line)).ToArray();
-
-            // Discard any lines starting with ; even if space before
-            lines = lines.Where(line => !line.Trim().StartsWith(";")).ToArray();
-
-            // Clear post instruction comments
-            lines = lines.Select(line => line.Split(';')[0].Trim()).ToArray();
-
-            return lines;
-        }
-
-        /// <summary>
-        /// Return all label declarations in the lines provided
-        /// </summary>
-        /// <param name="lines">source code lines</param>
-        /// <param name="debugFlags">debug flags</param>
-        /// <returns>list of label declarations found</returns>
-        private static List<Label> FindLabels(string[] lines, DebugFlags debugFlags)
-        {
-            List<Label> labels = [];
-            for (int i = 0; i < lines.Length; i++)
+            for (var i = 0; i < lines.Length; i++)
             {
-                if (lines[i].Trim().StartsWith(':'))
-                {
-                    // Store the name and discard the character letter `:`
-                    var name = lines[i].Trim()[1..];
+                var line = lines[i];
+                var commentIndex = line.IndexOf(';');
+                if (commentIndex >= 0)
+                    line = line[..commentIndex];
 
-                    // Get the current line number (factoring in labels)
-                    ushort lineNumber = (ushort)(i - labels.Count);
+                line = line.Trim();
+                if (string.IsNullOrWhiteSpace(line))
+                    continue;
 
-                    // Print label in red (if debug flag is enabled)
-                    if (debugFlags.ShowLabels)
-                    {
-                        Console.ForegroundColor = ConsoleColor.Red;
-                        Console.Write(name);
-                        Console.ForegroundColor = ConsoleColor.Blue;
-                        Console.Write(" " + lineNumber);
-                        Console.WriteLine();
-                    }
-
-                    // Append the label to the list
-                    labels.Add(new Label(lineNumber, name));
-                }
+                cleaned.Add(new SourceLine(i + 1, line));
             }
-            ;
 
-            return labels;
+            return CompilationResult<SourceLine[]>.Ok(cleaned.ToArray());
+        }
+        catch (Exception ex)
+        {
+            return CompilationResult<SourceLine[]>.Failed(Diagnostic.Error($"Unable to read source file: {ex.Message}", filename));
         }
     }
 }

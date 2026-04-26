@@ -10,7 +10,7 @@ namespace Fox16ASM
 
     class Program
     {
-        static void Main(string[] args)
+        static int Main(string[] args)
         {
             string? inputFile = null;
             string outputFile = "vfox16.bin";
@@ -35,7 +35,7 @@ namespace Fox16ASM
                         else
                         {
                             Console.WriteLine("Error: -i/--input requires a file argument");
-                            return;
+                            return 1;
                         }
                         break;
                     case "-o":
@@ -47,7 +47,7 @@ namespace Fox16ASM
                         else
                         {
                             Console.WriteLine("Error: -o/--output requires a file argument");
-                            return;
+                            return 1;
                         }
                         break;
                     case "--tokens":
@@ -58,7 +58,7 @@ namespace Fox16ASM
                         break;
                     default:
                         Console.WriteLine($"Error: Unknown argument '{args[i]}'");
-                        return;
+                        return 1;
                 }
             }
 
@@ -73,7 +73,7 @@ namespace Fox16ASM
                 Console.WriteLine("  --tokens              Show token debug output");
                 Console.WriteLine("  --labels              Show label resolution debug output");
                 Console.WriteLine("  -h, --help            Show this help message");
-                return;
+                return 0;
             }
 
             // Check input file was provided
@@ -81,14 +81,14 @@ namespace Fox16ASM
             {
                 Console.WriteLine("Error: Input file required");
                 Console.WriteLine("Usage: fox16asm -i <file> [-o <rom>]");
-                return;
+                return 1;
             }
 
             // Check file exists
             if (!File.Exists(inputFile))
             {
                 Console.WriteLine("File not found: " + inputFile);
-                return;
+                return 1;
             }
 
             // Check file has valid extension
@@ -96,20 +96,33 @@ namespace Fox16ASM
             {
                 Console.WriteLine("Invalid file extension: " + inputFile);
                 Console.WriteLine("Expected .f16 extension");
-                return;
+                return 1;
             }
 
-            // Invoke the preprocessor
-            Preprocessor preprocessor = new();
-            (string[] lines, Label[] labels) = preprocessor.Process(inputFile, debugFlags);
+            var preprocessor = new Preprocessor();
+            var preprocessed = preprocessor.Process(inputFile, debugFlags);
+            if (!preprocessed.Success || preprocessed.Value is null)
+            {
+                DiagnosticPrinter.Print(preprocessed.Diagnostics);
+                return 1;
+            }
 
-            // Tokeniser the cleaned and processed lines
-            var tokens = Tokeniser.ConvertLinesToTokens(lines, debugFlags);
+            var irBuilder = new IRBuilder();
+            var irResult = irBuilder.Build(preprocessed.Value, inputFile, debugFlags);
+            if (!irResult.Success)
+            {
+                DiagnosticPrinter.Print(irResult.Diagnostics);
+                return 1;
+            }
 
-            // Lexical validation
+            var generationResult = Generator.Generate(irResult.Value, outputFile, inputFile, debugFlags);
+            if (!generationResult.Success)
+            {
+                DiagnosticPrinter.Print(generationResult.Diagnostics);
+                return 1;
+            }
 
-            // Generation
-            Generator.Generate(tokens, labels, outputFile, debugFlags);
+            return 0;
         }
     }
 }

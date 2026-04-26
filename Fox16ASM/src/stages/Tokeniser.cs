@@ -6,7 +6,7 @@ namespace Fox16ASM
         /// Convert lines to tokens
         /// </summary>
         /// <returns>Returns a list of tokens which can be fed to the next stage of compilation</returns>
-        public static Token[] ConvertLinesToTokens(string[] lines, DebugFlags debugFlags = null)
+        public static Token[] ConvertLinesToTokens(string[] lines, DebugFlags? debugFlags = null)
         {
             debugFlags ??= new DebugFlags();
             List<Token> tokens = [];

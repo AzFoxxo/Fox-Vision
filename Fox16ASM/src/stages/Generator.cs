@@ -4,254 +4,220 @@ using MiscUtil.IO;
 using MiscUtil.Conversion;
 using Fox16Shared;
 
-namespace Fox16ASM
+namespace Fox16ASM;
+
+class Generator
 {
-    class Generator
+    private const byte OperandTypeRegister = 0b00;
+    private const byte OperandTypeImmediate = 0b01;
+    private const byte OperandTypeDirectMemory = 0b10;
+    private const byte OperandTypeIndirectMemory = 0b11;
+
+    public static CompilationResult<byte[]> Generate(AssemblerIR ir, string outputFile, string sourceFile, DebugFlags debugFlags)
     {
-        private const byte OperandTypeRegister = 0b00;
-        private const byte OperandTypeImmediate = 0b01;
-        private const byte OperandTypeDirectMemory = 0b10;
-        private const byte OperandTypeIndirectMemory = 0b11;
+        var diagnostics = new List<Diagnostic>();
+        var labelTable = ResolveLabelAddresses(ir, sourceFile, debugFlags, diagnostics);
+        if (diagnostics.Any(d => d.Severity == DiagnosticSeverity.Error))
+            return CompilationResult<byte[]>.Failed(diagnostics);
 
-        private static DebugFlags _debugFlags = new();
-        /// <summary>
-        /// Generate the ROM file using the tokens
-        /// Directly generate machine code from tokens
-        /// </summary>
-        /// <param name="tokens">tokens</param>
-        /// <param name="labels">label declarations to resolve jumps</param>
-        /// <param name="outputFile">ROM filename</param>
-        /// <param name="debugFlags">debug output flags</param>
-        public static void Generate(Token[] tokens, Label[] labels, string outputFile, DebugFlags debugFlags)
+        using var memory = new MemoryStream();
+        using var writer = new EndianBinaryWriter(EndianBitConverter.Big, memory);
+
+        WriteHeader(memory);
+
+        foreach (var instruction in ir.Instructions)
         {
-            _debugFlags = debugFlags;
-            // Delete the file if it exists
-            if (File.Exists(outputFile)) File.Delete(outputFile);
-
-            // Write the header to the file
-            WriteHeader(outputFile);
-
-            // Write the ROM
-            WriteROM(tokens, labels, outputFile);
-
-            // Write the footer to the file
-            WriteFooter(outputFile);
-
-            Console.ForegroundColor = ConsoleColor.White;
-            Console.WriteLine("Code generation complete!");
-            Console.WriteLine($"ROM file written to {outputFile}");
-        }
-
-        /// <summary>
-        /// Write the footer to the file
-        /// </summary>
-        /// <param name="outputFile">ROM filename</param>
-        private static void WriteFooter(string outputFile)
-        {
-            // Pad the file with a NOP and a HLT instruction
-            using var stream = File.Open(outputFile, FileMode.Append);
-            using var writer = new EndianBinaryWriter(EndianBitConverter.Big, stream);
-
-            writer.Write(Convert.ToUInt16(Opcodes.instructions["NOP"]));
-            writer.Write(Convert.ToUInt16(Opcodes.instructions["HLT"]));
-        }
-
-        /// <summary>
-        /// Write the header to the file
-        /// </summary>
-        /// <param name="outputFile">ROM filename</param>
-        private static void WriteHeader(string outputFile)
-        {
-            using var stream = File.Open(outputFile, FileMode.OpenOrCreate, FileAccess.Write);
-            using var writer = new BinaryWriter(stream);
-            // Write magic number to the file ".VISOFOX16"
-            string magic = ".VISOFOX16";
-            byte[] magicBytes = System.Text.Encoding.ASCII.GetBytes(magic);
-            writer.Write(magicBytes, 0, magicBytes.Length);
-        }
-
-
-        /// <summary>
-        /// Write instructions to ROM
-        /// </summary>
-        /// <param name="tokens">tokens to write</param>
-        /// <param name="labels">label declarations to resolve jumps</param>
-        /// <param name="outputFile">ROM filename</param>
-        private static void WriteROM(Token[] tokens, Label[] labels, string outputFile)
-        {
-            // Find the address of each label
-            LabelResolveAddress(tokens, labels);
-
-            var errorCount = 0;
-
-            // Write the tokens to the file
-            using var stream = File.Open(outputFile, FileMode.Append);
-            using var writer = new EndianBinaryWriter(EndianBitConverter.Big, stream);
-            for (var i = 0; i < tokens.Length; i++)
+            if (!Opcodes.instructions.TryGetValue(instruction.Opcode, out var opcodeValue))
             {
-                var token = tokens[i];
-
-                // Skip all terminating tokens
-                if (token.type == TokenType.Terminator) continue;
-                else if (token.type == TokenType.Decimal)
-                {
-                    // Write the decimal value as a ushort
-                    writer.Write(Convert.ToUInt16(token.value));
-                }
-                else if (token.type == TokenType.Hexadecimal)
-                {
-                    // Write the hexadecimal value as a ushort
-                    if (_debugFlags.ShowTokens)
-                        Console.WriteLine($"HEX: {token.value}");
-                    writer.Write(Convert.ToUInt16(token.value));
-                }
-                else if (token.type == TokenType.Opcode)
-                {
-                    // Get the value of the opcode from Opcodes.instructions
-                    if (token.value is string opcode && Opcodes.instructions.TryGetValue(opcode, out ushort value))
-                    {
-                        var encodedOpcode = EncodeOpcode(opcode, value, tokens, i);
-
-                        // Debug: Print the instruction opcode value being written
-                        if (_debugFlags.ShowTokens)
-                            Console.WriteLine($"OPCODE: {encodedOpcode:X4} ({encodedOpcode})");
-                        writer.Write(encodedOpcode);
-                    }
-                    else
-                    {
-                        Console.ForegroundColor = ConsoleColor.Red;
-                        Console.WriteLine($"Unknown opcode: {token.value}");
-                        Console.ForegroundColor = ConsoleColor.White;
-                        errorCount++;
-                    }
-                }
-                else if (token.type == TokenType.Label)
-                {
-                    // Get the address of the label
-                    var value = 0;
-                    var resolved = false;
-                    foreach (var label in labels)
-                    {
-                        // Check if the name of the label matches the token value
-                        if (label.name == (string)token.value)
-                        {
-                            value = label.address;
-                            resolved = true;
-                            break;
-                        }
-                    }
-
-                    if (!resolved)
-                    {
-                        Console.ForegroundColor = ConsoleColor.Red;
-                        Console.WriteLine($"Unresolved label/symbol: {token.value}");
-                        Console.ForegroundColor = ConsoleColor.White;
-                        errorCount++;
-                        continue;
-                    }
-
-                    // Debug: Print the resolved label address (in hexadecimal)
-                    if (_debugFlags.ShowLabels)
-                        Console.WriteLine($"LABEL REFERENCE: {value:X4}");
-                    writer.Write(Convert.ToUInt16(value));
-                }
+                diagnostics.Add(Diagnostic.Error(
+                    $"Unknown opcode '{instruction.Opcode}'.",
+                    sourceFile,
+                    instruction.Line,
+                    instruction.Column,
+                    instruction.SourceLine));
+                continue;
             }
 
-            if (errorCount > 0)
+            var encodedOpcode = EncodeOpcode(instruction, opcodeValue);
+            writer.Write(encodedOpcode);
+            if (debugFlags.ShowTokens)
+                Console.WriteLine($"OPCODE: {instruction.Opcode} => {encodedOpcode:X4}");
+
+            foreach (var operand in instruction.Operands)
             {
-                throw new InvalidOperationException($"Code generation failed with {errorCount} error(s).");
+                if (!TryResolveOperand(operand, labelTable, sourceFile, instruction, diagnostics, out var value))
+                    continue;
+
+                writer.Write(value);
+                if (debugFlags.ShowTokens)
+                    Console.WriteLine($"OPERAND: {value:X4}");
             }
         }
 
-        private static ushort EncodeOpcode(string opcode, ushort opcodeValue, Token[] tokens, int opcodeTokenIndex)
+        WriteFooter(writer);
+
+        if (diagnostics.Any(d => d.Severity == DiagnosticSeverity.Error))
+            return CompilationResult<byte[]>.Failed(diagnostics);
+
+        var bytes = memory.ToArray();
+        File.WriteAllBytes(outputFile, bytes);
+
+        Console.ForegroundColor = ConsoleColor.White;
+        Console.WriteLine("Code generation complete!");
+        Console.WriteLine($"ROM file written to {outputFile}");
+
+        return new CompilationResult<byte[]>(bytes, diagnostics);
+    }
+
+    private static Dictionary<string, ushort> ResolveLabelAddresses(
+        AssemblerIR ir,
+        string sourceFile,
+        DebugFlags debugFlags,
+        List<Diagnostic> diagnostics)
+    {
+        var labelsByName = new Dictionary<string, ushort>(StringComparer.OrdinalIgnoreCase);
+        var instructionAddresses = new int[ir.Instructions.Count];
+        var eofAddress = 0;
+
+        for (var i = 0; i < ir.Instructions.Count; i++)
         {
-            // Extension opcodes already define their full encoded value (for example 0xC000-based debug opcodes).
-            if (opcodeValue > 0x00FF)
-                return opcodeValue;
-
-            byte operandCount = 0;
-            byte operandOneType = 0;
-            byte operandTwoType = 0;
-
-            for (var i = opcodeTokenIndex + 1; i < tokens.Length; i++)
+            instructionAddresses[i] = eofAddress;
+            eofAddress += 1 + ir.Instructions[i].Operands.Count;
+            if (eofAddress > ushort.MaxValue)
             {
-                if (tokens[i].type == TokenType.Terminator)
-                    break;
-
-                if (operandCount == 0)
-                    operandOneType = ClassifyOperandType(opcode, tokens[i], 0);
-                else if (operandCount == 1)
-                    operandTwoType = ClassifyOperandType(opcode, tokens[i], 1);
-
-                operandCount++;
+                diagnostics.Add(Diagnostic.Error(
+                    "Program exceeds addressable 16-bit ROM space.",
+                    sourceFile,
+                    ir.Instructions[i].Line,
+                    ir.Instructions[i].Column,
+                    ir.Instructions[i].SourceLine));
+                break;
             }
-
-            var controlLowByte = (byte)((operandCount & 0b11) | ((operandOneType & 0b11) << 2) | ((operandTwoType & 0b11) << 4));
-            return (ushort)((opcodeValue << 8) | controlLowByte);
         }
 
-        private static byte ClassifyOperandType(string opcode, Token operandToken, int operandIndex)
+        foreach (var label in ir.Labels.OrderBy(l => l.Line))
         {
-            var isMemoryAddressOperand = IsMemoryAddressOperand(opcode, operandIndex);
-
-            if (operandToken.type == TokenType.Decimal || operandToken.type == TokenType.Label)
-                return isMemoryAddressOperand ? OperandTypeDirectMemory : OperandTypeImmediate;
-
-            if (operandToken.type != TokenType.Hexadecimal)
-                return OperandTypeImmediate;
-
-            var value = Convert.ToUInt16(operandToken.value);
-            if (IsRegisterOperandValue(value))
+            var targetAddress = eofAddress;
+            for (var i = 0; i < ir.Instructions.Count; i++)
             {
-                return IsMemoryAddressOperand(opcode, operandIndex)
-                    ? OperandTypeIndirectMemory
-                    : OperandTypeRegister;
+                if (ir.Instructions[i].Line < label.Line)
+                    continue;
+
+                targetAddress = instructionAddresses[i];
+                break;
             }
 
+            if (!labelsByName.TryAdd(label.Name, (ushort)targetAddress))
+            {
+                diagnostics.Add(Diagnostic.Error(
+                    $"Duplicate label declaration '{label.Name}'.",
+                    sourceFile,
+                    label.Line,
+                    label.Column,
+                    label.SourceLine));
+                continue;
+            }
+
+            if (debugFlags.ShowLabels)
+                Console.WriteLine($"LABEL DECL: {label.Name} => {targetAddress:X4}");
+        }
+
+        return labelsByName;
+    }
+
+    private static bool TryResolveOperand(
+        IROperand operand,
+        Dictionary<string, ushort> labelTable,
+        string sourceFile,
+        IRInstruction instruction,
+        List<Diagnostic> diagnostics,
+        out ushort value)
+    {
+        switch (operand.Kind)
+        {
+            case IROperandKind.Immediate:
+            case IROperandKind.Register:
+                value = operand.Value;
+                return true;
+            case IROperandKind.Label:
+                if (operand.Symbol is not null && labelTable.TryGetValue(operand.Symbol, out var labelAddress))
+                {
+                    value = labelAddress;
+                    return true;
+                }
+
+                diagnostics.Add(Diagnostic.Error(
+                    $"Unresolved label '{operand.Symbol}'.",
+                    sourceFile,
+                    operand.Line,
+                    operand.Column,
+                    instruction.SourceLine));
+                value = 0;
+                return false;
+            default:
+                diagnostics.Add(Diagnostic.Error(
+                    "Unsupported operand kind.",
+                    sourceFile,
+                    operand.Line,
+                    operand.Column,
+                    instruction.SourceLine));
+                value = 0;
+                return false;
+        }
+    }
+
+    private static ushort EncodeOpcode(IRInstruction instruction, ushort opcodeValue)
+    {
+        if (opcodeValue > 0x00FF)
+            return opcodeValue;
+
+        byte operandCount = (byte)Math.Min(instruction.Operands.Count, 0b11);
+        byte operandOneType = 0;
+        byte operandTwoType = 0;
+
+        if (instruction.Operands.Count > 0)
+            operandOneType = ClassifyOperandType(instruction.Opcode, instruction.Operands[0], 0);
+        if (instruction.Operands.Count > 1)
+            operandTwoType = ClassifyOperandType(instruction.Opcode, instruction.Operands[1], 1);
+
+        var controlLowByte = (byte)((operandCount & 0b11) | ((operandOneType & 0b11) << 2) | ((operandTwoType & 0b11) << 4));
+        return (ushort)((opcodeValue << 8) | controlLowByte);
+    }
+
+    private static byte ClassifyOperandType(string opcode, IROperand operand, int operandIndex)
+    {
+        var isMemoryAddressOperand = IsMemoryAddressOperand(opcode, operandIndex);
+
+        if (operand.Kind == IROperandKind.Register)
+            return isMemoryAddressOperand ? OperandTypeIndirectMemory : OperandTypeRegister;
+
+        if (operand.Kind == IROperandKind.Label || operand.Kind == IROperandKind.Immediate)
             return isMemoryAddressOperand ? OperandTypeDirectMemory : OperandTypeImmediate;
-        }
 
-        private static bool IsRegisterOperandValue(ushort value)
-            => RegisterOperands.IsSupportedRegisterId(value);
+        return OperandTypeImmediate;
+    }
 
-        private static bool IsMemoryAddressOperand(string opcode, int operandIndex)
+    private static bool IsMemoryAddressOperand(string opcode, int operandIndex)
+    {
+        return opcode switch
         {
-            return opcode switch
-            {
-                "LFM" or "WTM" => operandIndex == 0,
-                "STR" or "LOD" => operandIndex == 1,
-                _ => false
-            };
-        }
+            "LFM" or "WTM" => operandIndex == 0,
+            "STR" or "LOD" => operandIndex == 1,
+            _ => false,
+        };
+    }
 
-        private static void LabelResolveAddress(Token[] tokens, Label[] labels)
-        {
-            var tokensToSkip = 0; // Number of tokens to skip when resolving labels (terminators and labels)
-            var labelCount = 0;
-            for (var i = 0; i < tokens.Length; i++)
-            {
-                if (tokens[i].type == TokenType.LabelDeclaration)
-                {
-                    // Resolve EOF label resolutions (skip)
-                    if (labelCount > labels.Length - 1)
-                    {
-                        Console.ForegroundColor = ConsoleColor.Red;
-                        Console.WriteLine("Attempted to resolve EOF label.");
-                        Console.WriteLine("Skipping label, will not be written to ROM");
-                        continue;
-                    }
-                    labels[labelCount].address = (ushort)(i - tokensToSkip);
-                    // Debug: Print the label declaration and its assigned address
-                    if (_debugFlags.ShowLabels)
-                        Console.WriteLine($"LABEL DECL: {labels[labelCount].address} = {labels[labelCount].name}");
-                    labelCount++;
-                    tokensToSkip++;
-                }
-                else if (tokens[i].type == TokenType.Terminator)
-                {
-                    tokensToSkip++;
-                }
-            }
-        }
+    private static void WriteHeader(Stream stream)
+    {
+        using var writer = new BinaryWriter(stream, System.Text.Encoding.ASCII, leaveOpen: true);
+        var magic = ".VISOFOX16";
+        var magicBytes = System.Text.Encoding.ASCII.GetBytes(magic);
+        writer.Write(magicBytes, 0, magicBytes.Length);
+    }
+
+    private static void WriteFooter(EndianBinaryWriter writer)
+    {
+        writer.Write(Convert.ToUInt16(Opcodes.instructions["NOP"]));
+        writer.Write(Convert.ToUInt16(Opcodes.instructions["HLT"]));
     }
 }
