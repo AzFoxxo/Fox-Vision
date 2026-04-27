@@ -29,6 +29,9 @@ fox16asm -i myprogram.f16 -o custom.bin
 
 # Compile with debug output
 fox16asm -i myprogram.f16 --tokens --labels
+
+# Compile forcing ROM size compliance (4kb word limit)
+fox16asm -i myprogram.f16 --strict-format
 ```
 
 ## Basic structure
