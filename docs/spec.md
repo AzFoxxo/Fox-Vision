@@ -4,13 +4,14 @@
 The CPU is a single threaded 8MHz RISC chip. It uses the FoxVision16 architecture.
 
 ### Registers
-| ID  | Register | Size   | Read/Write | Description                                                                                                                                        |
-| --- | -------- | ------ | ---------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 0x0 | X        | 16-bit | Yes        | General-purpose register #1                                                                                                                        |
-| 0x1 | Y        | 16-bit | Yes        | General-purpose register #2                                                                                                                        |
-| 0x2 | PC       | 16-bit | No         | Program counter (only modified internally by CPU control-flow logic; not directly accessible)                                                      |
-| 0x3 | STATUS   | 8-bit  | Limited    | CPU flags register (written by CPU operations like CMP, DIV, HLT, CLR, and by `POP STATUS`)                                                        |
-| 0x4 | SP       | 16-bit | Yes        | Stack Pointer. Points to the top of the stack in memory. Modified by PUSH/POP instructions and may be read/written directly for low-level control. |
+| ID  | Register | Size   | Read/Write | Description                                                                                                                                                                |
+| --- | -------- | ------ | ---------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 0x0 | X        | 16-bit | Yes        | General-purpose register #1                                                                                                                                                |
+| 0x1 | Y        | 16-bit | Yes        | General-purpose register #2                                                                                                                                                |
+| 0x2 | PC       | 16-bit | No         | Program counter (only modified internally by CPU control-flow logic; not directly accessible)                                                                              |
+| 0x3 | STATUS   | 8-bit  | Limited    | CPU flags register (written by CPU operations like CMP, DIV, HLT, CLR, and by `POP STATUS`)                                                                                |
+| 0x4 | SP       | 16-bit | Yes        | Stack Pointer. Points to the top of the stack in memory. Modified by PUSH/POP instructions and may be read/written directly for low-level control.                         |
+| 0x5 | CYC      | 16-bit | Read-only  | Global cycle counter. Increments by 1 every CPU cycle (wrapping at 0xFFFF → 0x0000). Represents elapsed CPU cycles since reset and is used for timing and synchronisation. |
 
 On reset, `SP` starts at `0xEC77` (one address below VRAM). With VRAM defined as `0xEC78` through `0xFFFF` (5000 bytes descending from `0xFFFF`), this ensures stack operations do not overwrite display memory.
 
@@ -204,17 +205,42 @@ When these legacy mnemonics are written with two operands (for example `AND X Y`
 
 `PUSH`/`POP` consume one operand word (register id) and no longer depend on the active-register bit.
 
-## Graphics
+### Timing and Cycle Control (V1.8)
 
-Fox Vision supports a display size of 100x100 with four bits used to represent each colour (colours are predefined) and retrieves this data from RAM 60 times a second to display it.
+V1.8 introduces a global cycle counter and a blocking timing instruction for deterministic execution delays.
 
-The total memory size for an uncompressed frame is:
+- A new read-only 16-bit register `CYC` is introduced
+- `CYC` increments by 1 every CPU cycle
+- `CYC` wraps from `0xFFFF → 0x0000`
+- Represents total elapsed CPU cycles since reset
+- Used for timing, scheduling, and frame control
 
-`4bits * (100 * 100) = 40000 bits (5000 bytes or 5kb approx)`
+---
 
-VRAM starts at address `FFFF` and descends the next 5000 bytes.
+### WAIT instruction
 
-`FFFF` corresponds to top-left corner, moving right then down.
+- `0000 0000` `0010 1100` - `WAIT` `SRC` - Stall execution until cycle delay has elapsed
+
+Where:
+- `SRC` is a 16-bit immediate or register value
+
+Behaviour:
+- CPU captures current `CYC` value at execution start
+- CPU enters WAIT state (execution stalls)
+- Program counter and registers remain frozen
+- No instructions are fetched or executed during WAIT state
+- `CYC` continues to increment normally
+- Execution resumes when:
+  - `(CYC - start) >= SRC`
+
+---
+
+### Execution model notes
+
+- WAIT is a blocking CPU state, not a no-op loop
+- It does not consume instruction flow while stalled
+- Designed for deterministic timing (animation, frame pacing, delays)
+- Can be used as a lightweight timing primitive in place of interrupts
 
 ### Extension debug opcodes (EDO) - Legacy
 
@@ -247,6 +273,18 @@ Compatibility aliases for older sources are also accepted by the assembler:
 first 16 bits: opcode
 second 16 bits: addresses/values (if applicable)
 third 16 bits: addresses/values (if applicable)
+
+## Graphics
+
+Fox Vision supports a display size of 100x100 with four bits used to represent each colour (colours are predefined) and retrieves this data from RAM 60 times a second to display it.
+
+The total memory size for an uncompressed frame is:
+
+`4bits * (100 * 100) = 40000 bits (5000 bytes or 5kb approx)`
+
+VRAM starts at address `FFFF` and descends the next 5000 bytes.
+
+`FFFF` corresponds to top-left corner, moving right then down.
 
 ## Memory
 
