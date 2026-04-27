@@ -23,6 +23,8 @@ func check(prog *Program) error {
 	s.funcs["poke"] = funcSig{ret: TypeVoid, params: []TypeKind{TypeU16, TypeU16}}
 	s.funcs["peak"] = funcSig{ret: TypeU16, params: []TypeKind{TypeU16}}
 	s.funcs["peek"] = funcSig{ret: TypeU16, params: []TypeKind{TypeU16}}
+	s.funcs["wait"] = funcSig{ret: TypeVoid, params: []TypeKind{TypeU16}}
+	s.funcs["cyc"] = funcSig{ret: TypeU16, params: []TypeKind{}}
 
 	for _, g := range prog.Globals {
 		if g.Type == TypeVoid {

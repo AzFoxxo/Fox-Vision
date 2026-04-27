@@ -62,6 +62,8 @@ namespace Fox16Shared
             // V1.7
             {"PUSH", 44},
             {"POP", 45},
+            // V1.8
+            {"WAIT", 46},
             // Debug extension opcodes
             {"DBG_LGC", DEBUG_EXTENSION_OFFSET},
             {"DBG_MEM", DEBUG_EXTENSION_OFFSET + 1},

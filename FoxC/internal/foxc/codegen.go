@@ -507,6 +507,12 @@ func (g *gen) emitExpr(e Expr) error {
 		if n.Callee == "peak" || n.Callee == "peek" {
 			return g.emitBuiltinPeak(n)
 		}
+		if n.Callee == "wait" {
+			return g.emitBuiltinWait(n)
+		}
+		if n.Callee == "cyc" {
+			return g.emitBuiltinCyc(n)
+		}
 		return g.emitFunctionCall(n)
 	default:
 		return fmt.Errorf("unsupported expression")
@@ -592,6 +598,26 @@ func (g *gen) emitBuiltinPeak(call *CallExpr) error {
 		return err
 	}
 	g.emit("LOD X X")
+	return nil
+}
+
+func (g *gen) emitBuiltinWait(call *CallExpr) error {
+	if len(call.Args) != 1 {
+		return fmt.Errorf("wait expects 1 argument")
+	}
+	if err := g.emitExpr(call.Args[0]); err != nil {
+		return err
+	}
+	g.emit("WAIT X")
+	g.emit("MOV %0 X")
+	return nil
+}
+
+func (g *gen) emitBuiltinCyc(call *CallExpr) error {
+	if len(call.Args) != 0 {
+		return fmt.Errorf("cyc expects 0 arguments")
+	}
+	g.emit("MOV CYC X")
 	return nil
 }
 

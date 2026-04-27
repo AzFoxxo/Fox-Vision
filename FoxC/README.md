@@ -10,9 +10,11 @@ FoxC is a compiler written in Go for a practical C-like subset that targets Fox1
 - Control flow: `if`/`else`, `while`
 - Expressions: `+`, `-`, `*`, `/`, `&`, logical short-circuit (`&&`, `||`), comparisons (`==`, `!=`, `<`, `>`, `<=`, `>=`)
 - Built-ins:
-  - `poke(addr, value)` write a word to memory
-  - `peak(addr)` read a word from memory
-  - `peek(addr)` alias for `peak`
+    - `poke(addr, value)` write a word to memory
+    - `peak(addr)` read a word from memory
+    - `peek(addr)` alias for `peak`
+    - `wait(cycles)` block execution for `cycles` using CPU `WAIT`
+    - `cyc()` read the CPU cycle counter (`CYC` register)
 
 ## Formal grammar
 

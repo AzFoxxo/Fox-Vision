@@ -219,7 +219,7 @@ V1.8 introduces a global cycle counter and a blocking timing instruction for det
 
 ### WAIT instruction
 
-- `0000 0000` `0010 1100` - `WAIT` `SRC` - Stall execution until cycle delay has elapsed
+- `0000 0000` `0010 1110` - `WAIT` `SRC` - Stall execution until cycle delay has elapsed
 
 Where:
 - `SRC` is a 16-bit immediate or register value

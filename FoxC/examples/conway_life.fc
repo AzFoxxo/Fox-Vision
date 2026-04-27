@@ -116,9 +116,6 @@ void main() {
         current = next;
         next = tmp;
 
-        u16 t = 0;
-        while (t < 12000) {
-            t = t + 1;
-        }
+        wait(12000);
     }
 }

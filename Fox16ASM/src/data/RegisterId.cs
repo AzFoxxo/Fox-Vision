@@ -6,6 +6,7 @@ namespace Fox16ASM
         Y = 0x0001,
         STATUS = 0x0003,
         SP = 0x0004,
+        CYC = 0x0005,
     }
 
     static class RegisterOperands
@@ -18,16 +19,18 @@ namespace Fox16ASM
                 "Y" => RegisterId.Y,
                 "STATUS" => RegisterId.STATUS,
                 "SP" => RegisterId.SP,
+                "CYC" => RegisterId.CYC,
                 _ => default
             };
 
-            return symbol is "X" or "Y" or "STATUS" or "SP";
+            return symbol is "X" or "Y" or "STATUS" or "SP" or "CYC";
         }
 
         internal static bool IsSupportedRegisterId(ushort value)
             => value == (ushort)RegisterId.X
                 || value == (ushort)RegisterId.Y
                 || value == (ushort)RegisterId.STATUS
-                || value == (ushort)RegisterId.SP;
+                || value == (ushort)RegisterId.SP
+                || value == (ushort)RegisterId.CYC;
     }
 }

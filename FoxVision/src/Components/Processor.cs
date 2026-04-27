@@ -7,8 +7,11 @@ namespace FoxVision
 {
     internal class Processor
     {
-        private ushort regX, regY, regSP, regPC;
+        private ushort regX, regY, regSP, regPC, regCYC;
         private byte regStatus;
+        private bool _waitActive;
+        private ushort _waitStartCycle;
+        private ushort _waitDuration;
 
         private const byte StatusPredicateMask = 1 << 0;
         private const byte StatusLessThanMask = 1 << 1;
@@ -27,6 +30,7 @@ namespace FoxVision
         private const ushort RegisterIdY = 0x0001;
         private const ushort RegisterIdStatus = 0x0003;
         private const ushort RegisterIdSP = 0x0004;
+        private const ushort RegisterIdCYC = 0x0005;
         private const ushort VramSizeInWords = 5000;
         private const ushort StackStartAddress = (ushort)(ushort.MaxValue - VramSizeInWords);
 
@@ -44,7 +48,11 @@ namespace FoxVision
             regY = 0;
             regSP = StackStartAddress;
             regPC = 0;
+            regCYC = 0;
             regStatus = 0;
+            _waitActive = false;
+            _waitStartCycle = 0;
+            _waitDuration = 0;
 
             timer = new Stopwatch();
             SetExecutionSpeedHz(executionSpeedHz);
@@ -64,26 +72,38 @@ namespace FoxVision
 
             timer.Start();
 
-            ushort[] data = [RAM.ReadUnchecked(regPC), 0, 0];
-            if (regPC != RAM.MaxAddress)
-                data[1] = RAM.ReadUnchecked((ushort)(regPC + 1));
-            if (regPC + 1 != RAM.MaxAddress)
-                data[2] = RAM.ReadUnchecked((ushort)(regPC + 2));
+            if (_waitActive)
+            {
+                ushort elapsed = unchecked((ushort)(regCYC - _waitStartCycle));
+                if (elapsed >= _waitDuration)
+                    _waitActive = false;
+            }
 
-            ushort oldPC = regPC;
-            ushort diffPC = DecodeExecuteInstruction(data[0], data[1], data[2]);
+            if (!_waitActive)
+            {
+                ushort[] data = [RAM.ReadUnchecked(regPC), 0, 0];
+                if (regPC != RAM.MaxAddress)
+                    data[1] = RAM.ReadUnchecked((ushort)(regPC + 1));
+                if (regPC + 1 != RAM.MaxAddress)
+                    data[2] = RAM.ReadUnchecked((ushort)(regPC + 2));
 
-            if (regPC == oldPC)
-                regPC += diffPC;
+                ushort oldPC = regPC;
+                ushort diffPC = DecodeExecuteInstruction(data[0], data[1], data[2]);
 
-            if (regPC > RAM.MaxAddress)
-                regPC = 0;
+                if (regPC == oldPC)
+                    regPC += diffPC;
+
+                if (regPC > RAM.MaxAddress)
+                    regPC = 0;
+            }
 
             long ticksToWait = Interlocked.Read(ref _ticksToWaitPerCycle);
             while (timer.ElapsedTicks < ticksToWait) { }
 
             timer.Reset();
             timer.Stop();
+
+            unchecked { regCYC++; }
 
             return IsHalted;
         }
@@ -479,6 +499,17 @@ namespace FoxVision
 
                     return 2;
 
+                // V1.8 timing instruction.
+                case 0x2E:
+                    LogInstructionExecuting("WAIT", first_operand);
+                    {
+                        ushort delay = ResolveOperandValue(first_operand, firstOperandType);
+                        _waitStartCycle = regCYC;
+                        _waitDuration = delay;
+                        _waitActive = true;
+                    }
+                    return 2;
+
                 case 0xC000:
                     LogInstructionExecuting("DBG_LGC", first_operand);
                     Console.Write(DebugCharacters.GetCharacter(first_operand));
@@ -617,6 +648,7 @@ namespace FoxVision
                 RegisterIdY => SetOutValue(regY, out value),
                 RegisterIdStatus when allowStatus => SetOutValue(regStatus, out value),
                 RegisterIdSP => SetOutValue(regSP, out value),
+                RegisterIdCYC => SetOutValue(regCYC, out value),
                 _ => false
             };
         }
@@ -709,7 +741,7 @@ namespace FoxVision
             if (operandType != OperandTypeRegister && operandType != OperandTypeIndirectMemory)
                 return false;
 
-            return operand == RegisterIdX || operand == RegisterIdY || operand == RegisterIdStatus || operand == RegisterIdSP;
+            return operand == RegisterIdX || operand == RegisterIdY || operand == RegisterIdStatus || operand == RegisterIdSP || operand == RegisterIdCYC;
         }
 
         private static bool SetOutValue(ushort source, out ushort destination)
