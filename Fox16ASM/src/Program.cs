@@ -15,6 +15,7 @@ namespace Fox16ASM
             string? inputFile = null;
             string outputFile = "vfox16.bin";
             bool showHelp = false;
+            bool strictFormat = false;
             var debugFlags = new DebugFlags();
 
             // Parse command-line arguments
@@ -56,6 +57,9 @@ namespace Fox16ASM
                     case "--labels":
                         debugFlags.ShowLabels = true;
                         break;
+                    case "--strict-format":
+                        strictFormat = true;
+                        break;
                     default:
                         Console.WriteLine($"Error: Unknown argument '{args[i]}'");
                         return 1;
@@ -72,6 +76,7 @@ namespace Fox16ASM
                 Console.WriteLine("  -o, --output <rom>    Output ROM file (default: vfox16.bin)");
                 Console.WriteLine("  --tokens              Show token debug output");
                 Console.WriteLine("  --labels              Show label resolution debug output");
+                Console.WriteLine("  --strict-format       Enforce ROM payload limit (2048 words / 4096 bytes, excluding header)");
                 Console.WriteLine("  -h, --help            Show this help message");
                 return 0;
             }
@@ -115,7 +120,7 @@ namespace Fox16ASM
                 return 1;
             }
 
-            var generationResult = Generator.Generate(irResult.Value, outputFile, inputFile, debugFlags);
+            var generationResult = Generator.Generate(irResult.Value, outputFile, inputFile, debugFlags, strictFormat);
             if (!generationResult.Success)
             {
                 DiagnosticPrinter.Print(generationResult.Diagnostics);

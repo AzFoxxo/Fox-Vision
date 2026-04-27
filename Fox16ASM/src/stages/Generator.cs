@@ -8,13 +8,15 @@ namespace Fox16ASM;
 
 class Generator
 {
+    private const int HeaderSizeBytes = 10;
+    private const int StrictFormatMaxPayloadWords = 2 * 1024;
     private const byte OperandTypeRegister = 0b00;
     private const byte OperandTypeImmediate = 0b01;
     private const byte OperandTypeDirectMemory = 0b10;
     private const byte OperandTypeIndirectMemory = 0b11;
     private readonly record struct ResolvedOperand(ushort Value, IROperandKind Kind);
 
-    public static CompilationResult<byte[]> Generate(AssemblerIR ir, string outputFile, string sourceFile, DebugFlags debugFlags)
+    public static CompilationResult<byte[]> Generate(AssemblerIR ir, string outputFile, string sourceFile, DebugFlags debugFlags, bool strictFormat = false)
     {
         var diagnostics = new List<Diagnostic>();
         var labelTable = ResolveLabelAddresses(ir, sourceFile, debugFlags, diagnostics);
@@ -67,6 +69,20 @@ class Generator
             return CompilationResult<byte[]>.Failed(diagnostics);
 
         var bytes = memory.ToArray();
+
+        if (strictFormat)
+        {
+            var payloadSizeBytes = Math.Max(0, bytes.Length - HeaderSizeBytes);
+            var payloadSizeWords = payloadSizeBytes / sizeof(ushort);
+            if (payloadSizeWords > StrictFormatMaxPayloadWords)
+            {
+                diagnostics.Add(Diagnostic.Error(
+                    $"ROM payload size is {payloadSizeWords} words ({payloadSizeBytes} bytes), which exceeds strict format limit of {StrictFormatMaxPayloadWords} words (4096 bytes, header excluded).",
+                    sourceFile));
+                return CompilationResult<byte[]>.Failed(diagnostics);
+            }
+        }
+
         File.WriteAllBytes(outputFile, bytes);
 
         Console.ForegroundColor = ConsoleColor.White;
