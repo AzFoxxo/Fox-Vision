@@ -1,0 +1,168 @@
+u16 VRAM_TOP = 65535;
+u16 ROW_WORDS = 50;
+u16 SCREEN_ROWS = 100;
+
+u16 skyPhase = 0;
+u16 mountainPhase = 0;
+u16 treePhase = 0;
+u16 groundPhase = 0;
+
+u16 wrap50(u16 value) {
+    if (value >= 50) {
+        value = value - 50;
+    }
+    return value;
+}
+
+u16 triangleHeight(u16 x) {
+    if (x < 25) {
+        return x / 2;
+    }
+
+    return (49 - x) / 2;
+}
+
+u16 colorForPixel(u16 row, u16 col) {
+    u16 color = 10;
+
+    if (row < 12) {
+        color = 12;
+    } else {
+        if (row < 24) {
+            color = 11;
+        } else {
+            if (row < 36) {
+                color = 10;
+            } else {
+                color = 9;
+            }
+        }
+    }
+
+    if (row < 22) {
+        u16 cloudX = wrap50(col + skyPhase);
+        if (cloudX >= 3 && cloudX <= 6) {
+            color = 15;
+        }
+        if (cloudX >= 16 && cloudX <= 21) {
+            color = 15;
+        }
+        if (cloudX >= 31 && cloudX <= 37) {
+            color = 15;
+        }
+    }
+
+    if (row >= 24) {
+        u16 mountainX = wrap50(col + mountainPhase);
+        u16 mountainHeight = triangleHeight(mountainX);
+        if (row >= (58 - mountainHeight) && row < 58) {
+            color = 8;
+        }
+
+        u16 mountainX2 = wrap50(mountainX + 17);
+        u16 mountainHeight2 = triangleHeight(mountainX2);
+        if (row >= (63 - mountainHeight2) && row < 63) {
+            color = 7;
+        }
+    }
+
+    if (row >= 62) {
+        u16 groundX = wrap50(col + groundPhase);
+        color = 3;
+        if (groundX < 8) {
+            color = 2;
+        } else {
+            if (groundX < 16) {
+                color = 6;
+            } else {
+                if (groundX < 28) {
+                    color = 3;
+                } else {
+                    if (groundX < 38) {
+                        color = 6;
+                    } else {
+                        color = 2;
+                    }
+                }
+            }
+        }
+
+        if (row >= 82) {
+            color = 2;
+        }
+    }
+
+    u16 treeX = 34 + treePhase;
+    if (row >= 40 && row < 48) {
+        if (col >= treeX - 2 && col <= treeX + 2) {
+            color = 15;
+        }
+    }
+    if (row >= 46 && row < 56) {
+        if (col >= treeX - 4 && col <= treeX + 4) {
+            color = 5;
+        }
+    }
+    if (row >= 52 && row < 76) {
+        if (col == treeX || col == treeX + 1) {
+            color = 4;
+        }
+    }
+
+    return color;
+}
+
+void drawFrame() {
+    u16 row = 0;
+    while (row < SCREEN_ROWS) {
+        u16 col = 0;
+        while (col < SCREEN_ROWS) { // 100 pixels per row
+            u16 color1 = colorForPixel(row, col);
+            u16 color2 = 0;
+
+            if (col + 1 < SCREEN_ROWS) {
+                color2 = colorForPixel(row, col + 1);
+            }
+
+            // Pack two 4-bit pixels into a single byte using arithmetic only.
+            u16 packed = (color1 * 16) + color2;
+
+            // Compute VRAM address (descending)
+            u16 byteIndex = (row * ROW_WORDS) + (col / 2);
+            poke(VRAM_TOP - byteIndex, packed);
+
+            col = col + 2; // move two pixels at a time
+        }
+        row = row + 1;
+    }
+}
+
+void advancePhases() {
+    skyPhase = skyPhase + 1;
+    if (skyPhase >= 8) {
+        skyPhase = 0;
+    }
+
+    mountainPhase = mountainPhase + 1;
+    if (mountainPhase >= 18) {
+        mountainPhase = 0;
+    }
+
+    treePhase = treePhase + 1;
+    if (treePhase >= 10) {
+        treePhase = 0;
+    }
+
+    groundPhase = groundPhase + 2;
+    if (groundPhase >= 20) {
+        groundPhase = 0;
+    }
+}
+
+void main() {
+    while (1) {
+        drawFrame();
+        advancePhases();
+        vblank();
+    }
+}

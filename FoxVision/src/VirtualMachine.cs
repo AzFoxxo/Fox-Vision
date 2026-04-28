@@ -89,6 +89,10 @@ namespace FoxVision
                 },
                 () =>
                 {
+                    _processor.SignalVBlank();
+                },
+                () =>
+                {
                     Program.DebugLogROMAsData(ROM);
                     return true;
                 }))

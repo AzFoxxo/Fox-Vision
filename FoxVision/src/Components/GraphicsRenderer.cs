@@ -56,6 +56,7 @@ namespace FoxVision.Components
         private readonly Func<int, bool> _setExecutionSpeedRequested;
         private readonly Func<bool, bool> _setInstructionLoggingRequested;
         private readonly Func<bool, bool> _setPauseRequested;
+        private readonly System.Action _signalVBlankRequested;
         private readonly Func<bool> _showDecompRequested;
         private readonly EmulatorOptions _currentOptions;
         private int _windowScale;
@@ -101,6 +102,7 @@ namespace FoxVision.Components
             Func<int, bool> setExecutionSpeedRequested,
             Func<bool, bool> setInstructionLoggingRequested,
             Func<bool, bool> setPauseRequested,
+            System.Action signalVBlankRequested,
             Func<bool> showDecompRequested)
         {
             int windowScale = options.WindowScale;
@@ -117,6 +119,7 @@ namespace FoxVision.Components
             _setExecutionSpeedRequested = setExecutionSpeedRequested;
             _setInstructionLoggingRequested = setInstructionLoggingRequested;
             _setPauseRequested = setPauseRequested;
+            _signalVBlankRequested = signalVBlankRequested;
             _showDecompRequested = showDecompRequested;
             _currentOptions = CloneOptions(options);
             _windowScale = windowScale;
@@ -299,6 +302,7 @@ namespace FoxVision.Components
                 return false;
             }
 
+            _signalVBlankRequested();
             _drawingArea.QueueDraw();
             return true;
         }

@@ -55,6 +55,8 @@ Instructions (opcodes) are always spelt in capitals. Basic instructions use thre
 
 For debug extension instructions, the canonical names are `DBG_LGC`, `DBG_MEM`, and `DBG_INP`. The assembler also accepts legacy aliases `DGB_MEM` and `DGB_INP` for backward compatibility.
 
+Frame pacing instructions include `WAIT` for cycle-based delays and `VBLANK` for waiting until the next rendered frame refresh. The assembler also accepts the shorter alias `VBL`.
+
 To denote the type of data, the following prefixes are used:
 - `Aa-Zz + _` - Label reference (resolved to the label's address within ROM) e.g. `main`
 - `%` - Decimal value e.g. `%1`

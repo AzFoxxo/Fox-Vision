@@ -242,6 +242,26 @@ Behaviour:
 - Designed for deterministic timing (animation, frame pacing, delays)
 - Can be used as a lightweight timing primitive in place of interrupts
 
+### VBlank synchronisation (V1.9)
+
+Fox Vision exposes a VBlank-style synchronisation point once per rendered frame.
+
+- `0000 0000` `0010 1111` - `VBLANK` - Stall until the next frame VBlank signal
+
+Behaviour:
+
+- The emulator raises a VBlank signal once per display refresh tick
+- `VBLANK` blocks execution until the next signal is observed
+- Program counter and registers remain frozen while stalled
+- `CYC` continues to advance normally while the CPU is blocked
+- This is intended for frame pacing, VRAM updates, and animation loops
+
+Typical usage:
+
+- Render or update game state
+- Call `VBLANK`
+- Repeat on the next frame
+
 ### Extension debug opcodes (EDO) - Legacy
 
 **Note:** These are instructions which are only used for testing the virtual machine. They allow console I/O, printing memory, etc.

@@ -15,6 +15,7 @@ FoxC is a compiler written in Go for a practical C-like subset that targets Fox1
     - `peek(addr)` alias for `peak`
     - `wait(cycles)` block execution for `cycles` using CPU `WAIT`
     - `cyc()` read the CPU cycle counter (`CYC` register)
+    - `vblank()` block until the next frame VBlank
 
 ## Formal grammar
 

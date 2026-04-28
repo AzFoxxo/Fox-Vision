@@ -513,6 +513,9 @@ func (g *gen) emitExpr(e Expr) error {
 		if n.Callee == "cyc" {
 			return g.emitBuiltinCyc(n)
 		}
+		if n.Callee == "vblank" {
+			return g.emitBuiltinVBlank(n)
+		}
 		return g.emitFunctionCall(n)
 	default:
 		return fmt.Errorf("unsupported expression")
@@ -618,6 +621,14 @@ func (g *gen) emitBuiltinCyc(call *CallExpr) error {
 		return fmt.Errorf("cyc expects 0 arguments")
 	}
 	g.emit("MOV CYC X")
+	return nil
+}
+
+func (g *gen) emitBuiltinVBlank(call *CallExpr) error {
+	if len(call.Args) != 0 {
+		return fmt.Errorf("vblank expects 0 arguments")
+	}
+	g.emit("VBLANK")
 	return nil
 }
 

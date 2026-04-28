@@ -12,6 +12,9 @@ namespace FoxVision
         private bool _waitActive;
         private ushort _waitStartCycle;
         private ushort _waitDuration;
+        private bool _vblankWaitActive;
+        private int _vblankSequence;
+        private int _vblankWaitSequence;
 
         private const byte StatusPredicateMask = 1 << 0;
         private const byte StatusLessThanMask = 1 << 1;
@@ -53,6 +56,9 @@ namespace FoxVision
             _waitActive = false;
             _waitStartCycle = 0;
             _waitDuration = 0;
+            _vblankWaitActive = false;
+            _vblankSequence = 0;
+            _vblankWaitSequence = 0;
 
             timer = new Stopwatch();
             SetExecutionSpeedHz(executionSpeedHz);
@@ -79,7 +85,14 @@ namespace FoxVision
                     _waitActive = false;
             }
 
-            if (!_waitActive)
+            if (_vblankWaitActive)
+            {
+                int currentSequence = Interlocked.CompareExchange(ref _vblankSequence, 0, 0);
+                if (currentSequence != _vblankWaitSequence)
+                    _vblankWaitActive = false;
+            }
+
+            if (!_waitActive && !_vblankWaitActive)
             {
                 ushort[] data = [RAM.ReadUnchecked(regPC), 0, 0];
                 if (regPC != RAM.MaxAddress)
@@ -125,6 +138,9 @@ namespace FoxVision
 
         internal void SetInstructionLogging(bool enabled)
             => Interlocked.Exchange(ref _logInstructionEnabled, enabled ? 1 : 0);
+
+        internal void SignalVBlank()
+            => Interlocked.Increment(ref _vblankSequence);
 
         private ushort DecodeExecuteInstruction(ushort opcode, ushort first_operand, ushort second_operand)
         {
@@ -509,6 +525,12 @@ namespace FoxVision
                         _waitActive = true;
                     }
                     return 2;
+
+                case 0x2F:
+                    LogInstructionExecuting("VBLANK", first_operand);
+                    _vblankWaitSequence = Interlocked.CompareExchange(ref _vblankSequence, 0, 0);
+                    _vblankWaitActive = true;
+                    return 1;
 
                 case 0xC000:
                     LogInstructionExecuting("DBG_LGC", first_operand);

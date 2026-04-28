@@ -64,6 +64,9 @@ namespace Fox16Shared
             {"POP", 45},
             // V1.8
             {"WAIT", 46},
+            // V1.9
+            {"VBLANK", 47},
+            {"VBL", 47},
             // Debug extension opcodes
             {"DBG_LGC", DEBUG_EXTENSION_OFFSET},
             {"DBG_MEM", DEBUG_EXTENSION_OFFSET + 1},
