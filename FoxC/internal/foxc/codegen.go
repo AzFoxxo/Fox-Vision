@@ -457,15 +457,19 @@ func (g *gen) emitExpr(e Expr) error {
 		}
 		g.loadFromStorage(slot)
 	case *UnaryExpr:
-		if n.Op != "-" {
+		if n.Op != "-" && n.Op != "~" {
 			return fmt.Errorf("unsupported unary operator %q", n.Op)
 		}
 		if err := g.emitExpr(n.X); err != nil {
 			return err
 		}
-		g.emit("MOV %0 Y")
-		g.emit("SUB X Y")
-		g.emit("MOV Y X")
+		if n.Op == "-" {
+			g.emit("MOV %0 Y")
+			g.emit("SUB X Y")
+			g.emit("MOV Y X")
+		} else {
+			g.emit("XOR %65535 X")
+		}
 	case *BinaryExpr:
 		switch n.Op {
 		case "&&":
@@ -493,6 +497,14 @@ func (g *gen) emitExpr(e Expr) error {
 			g.emit("DIV Y X")
 		case "&":
 			g.emit("AND Y X")
+		case "|":
+			g.emit("OR Y X")
+		case "^":
+			g.emit("XOR Y X")
+		case "<<":
+			g.emit("SHL Y X")
+		case ">>":
+			g.emit("SHR Y X")
 		case "==", "!=", "<", ">", "<=", ">=":
 			if err := g.emitCompareResult(n.Op); err != nil {
 				return err
@@ -504,8 +516,8 @@ func (g *gen) emitExpr(e Expr) error {
 		if n.Callee == "poke" {
 			return g.emitBuiltinPoke(n)
 		}
-		if n.Callee == "peak" || n.Callee == "peek" {
-			return g.emitBuiltinPeak(n)
+		if n.Callee == "peek" {
+			return g.emitBuiltinPeek(n)
 		}
 		if n.Callee == "wait" {
 			return g.emitBuiltinWait(n)
@@ -593,9 +605,9 @@ func (g *gen) emitBuiltinPoke(call *CallExpr) error {
 	return nil
 }
 
-func (g *gen) emitBuiltinPeak(call *CallExpr) error {
+func (g *gen) emitBuiltinPeek(call *CallExpr) error {
 	if len(call.Args) != 1 {
-		return fmt.Errorf("peak expects 1 argument")
+		return fmt.Errorf("peek expects 1 argument")
 	}
 	if err := g.emitExpr(call.Args[0]); err != nil {
 		return err

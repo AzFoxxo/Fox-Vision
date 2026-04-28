@@ -1,0 +1,160 @@
+// Fractal zoom & pan example for Fox Vision
+// Controls:
+//  - Arrow keys or WASD: move view
+//  - A button: zoom in
+//  - B button: zoom out
+
+u16 pixelAddr(u16 row, u16 col) {
+    u16 byteIndex = row * 50;
+    byteIndex = byteIndex + (col >> 1);
+    return 65535 - byteIndex;
+}
+
+void setPixelPacked(u16 row, u16 col, u16 color) {
+    u16 addr = pixelAddr(row, col);
+    u16 existing = peek(addr);
+    u16 high = col & 1;
+    if (high == 1) {
+        existing = (existing & 15) | (color << 4);
+    } else {
+        existing = (existing & 240) | (color & 15);
+    }
+    poke(addr, existing);
+}
+
+// Simple integer Mandelbrot-like fractal using 16-bit arithmetic.
+// Not mathematically perfect due to 16-bit overflow, but visually interesting.
+
+u16 mapCoordX(u16 col, u16 centerX, u16 scale) {
+    // cx = (col - 50) * scale + centerX
+    u16 v = col;
+    u16 off = 50;
+    u16 t = 0;
+    if (v >= off) {
+        t = v - off;
+    } else {
+        t = off - v;
+        t = 0 - t; // allow wrap-around for negative offset
+    }
+    // multiply t * scale
+    u16 prod = t * scale;
+    if (v >= off) {
+        return centerX + prod;
+    }
+    return centerX - prod;
+}
+
+u16 mapCoordY(u16 row, u16 centerY, u16 scale) {
+    // same as X mapping
+    u16 v = row;
+    u16 off = 50;
+    u16 t = 0;
+    if (v >= off) {
+        t = v - off;
+    } else {
+        t = off - v;
+        t = 0 - t;
+    }
+    u16 prod = t * scale;
+    if (v >= off) {
+        return centerY + prod;
+    }
+    return centerY - prod;
+}
+
+void render(u16 centerX, u16 centerY, u16 scale) {
+    u16 r = 0;
+    while (r < 100) {
+        u16 c = 0;
+        while (c < 100) {
+            u16 cx = mapCoordX(c, centerX, scale);
+            u16 cy = mapCoordY(r, centerY, scale);
+
+            // iterate z = z^2 + c
+            u16 zx = 0;
+            u16 zy = 0;
+            u16 iter = 0;
+            u16 maxIter = 12;
+            u16 escaped = 0;
+            while (iter < maxIter && escaped == 0) {
+                // zx2 = zx * zx
+                u16 tmp = zx;
+                u16 zx2 = (tmp * zx);
+                // zy2 = zy * zy
+                tmp = zy;
+                u16 zy2 = (tmp * zy);
+
+                // magnitude test zx2 + zy2 > 40000
+                u16 mag = zx2 + zy2;
+                if (mag > 40000) {
+                    escaped = 1;
+                } else {
+                    // temp = zx2 - zy2 + cx
+                    u16 temp = zx2;
+                    if (temp < zy2) {
+                        temp = temp - zy2;
+                    } else {
+                        temp = temp - zy2;
+                    }
+                    temp = temp + cx;
+
+                    // zy = 2*zx*zy + cy
+                    u16 prod = zx * zy;
+                    prod = prod + prod; // *2
+                    zy = prod + cy;
+
+                    zx = temp;
+
+                    iter = iter + 1;
+                }
+            }
+
+            u16 color = 0;
+            if (escaped == 1) {
+                color = (iter * 3) & 15;
+            } else {
+                color = 0;
+            }
+            setPixelPacked(r, c, color);
+            c = c + 1;
+        }
+        r = r + 1;
+    }
+}
+
+void main() {
+    // center coords and scale in small integer units
+    u16 centerX = 0;
+    u16 centerY = 0;
+    u16 scale = 1;
+
+    while (1) {
+        render(centerX, centerY, scale);
+        vblank();
+
+        // read controller
+        u16 ctrl = peek(4096);
+        // bits: 0=Up,1=Down,2=Left,3=Right,4=A,5=B
+        if ((ctrl & 1) != 0) { // Up
+            centerY = centerY - scale;
+        }
+        if ((ctrl & 2) != 0) { // Down
+            centerY = centerY + scale;
+        }
+        if ((ctrl & 4) != 0) { // Left
+            centerX = centerX - scale;
+        }
+        if ((ctrl & 8) != 0) { // Right
+            centerX = centerX + scale;
+        }
+        if ((ctrl & 16) != 0) { // A = zoom in
+            if (scale > 0) {
+                scale = scale - 1;
+                if (scale == 0) { scale = 1; }
+            }
+        }
+        if ((ctrl & 32) != 0) { // B = zoom out
+            scale = scale + 1;
+        }
+    }
+}

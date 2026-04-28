@@ -8,11 +8,10 @@ FoxC is a compiler written in Go for a practical C-like subset that targets Fox1
 - Variables: global and local declarations with optional initialization
 - Functions: user-defined functions, parameters, `return`
 - Control flow: `if`/`else`, `while`
-- Expressions: `+`, `-`, `*`, `/`, `&`, logical short-circuit (`&&`, `||`), comparisons (`==`, `!=`, `<`, `>`, `<=`, `>=`)
+- Expressions: `+`, `-`, `*`, `/`, `&`, `|`, `^`, `<<`, `>>`, unary `~`, logical short-circuit (`&&`, `||`), comparisons (`==`, `!=`, `<`, `>`, `<=`, `>=`)
 - Built-ins:
     - `poke(addr, value)` write a word to memory
-    - `peak(addr)` read a word from memory
-    - `peek(addr)` alias for `peak`
+    - `peek(addr)` read a word from memory
     - `wait(cycles)` block execution for `cycles` using CPU `WAIT`
     - `cyc()` read the CPU cycle counter (`CYC` register)
     - `vblank()` block until the next frame VBlank
@@ -60,5 +59,7 @@ Type note: implicit widening (`u8 -> u16`) is allowed; implicit narrowing (`u16 
 
 - FoxC emits Fox16ASM MOI instructions (`MOV`, `LOD`, `STR`, `ADD`, `CMP`, etc.).
 - Codegen avoids active-register (`SRA`) dependent instruction forms.
+ - Generated assembly uses typed register operands (`X`, `Y`, `STATUS`, `SP`, `CYC`) and multi-operand MOI forms.
+ - Legacy active-register instructions (`SRA`, `AXY`, `BSL`, etc.) are not emitted by the compiler.
 - User functions are emitted as callable labels and return using a return-id dispatch sequence.
 - Function locals/params/return metadata are frame-addressed in a software call stack, allowing recursive calls.

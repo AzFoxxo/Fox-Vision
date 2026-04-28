@@ -12,5 +12,5 @@ void main() {
     }
 
     poke(4096, value);
-    value = peak(4096);
+    value = peek(4096);
 }

@@ -94,7 +94,11 @@ func (l *lexer) nextToken() (token, error) {
 		if l.match('|') {
 			return token{kind: tokOrOr, text: "||", line: line, col: col}, nil
 		}
-		return token{}, fmt.Errorf("unexpected '|' at %d:%d", line, col)
+		return token{kind: tokPipe, text: "|", line: line, col: col}, nil
+	case '^':
+		return token{kind: tokCaret, text: "^", line: line, col: col}, nil
+	case '~':
+		return token{kind: tokTilde, text: "~", line: line, col: col}, nil
 	case '=':
 		if l.match('=') {
 			return token{kind: tokEq, text: "==", line: line, col: col}, nil
@@ -106,11 +110,17 @@ func (l *lexer) nextToken() (token, error) {
 		}
 		return token{}, fmt.Errorf("unexpected '!' at %d:%d", line, col)
 	case '<':
+		if l.match('<') {
+			return token{kind: tokShl, text: "<<", line: line, col: col}, nil
+		}
 		if l.match('=') {
 			return token{kind: tokLe, text: "<=", line: line, col: col}, nil
 		}
 		return token{kind: tokLt, text: "<", line: line, col: col}, nil
 	case '>':
+		if l.match('>') {
+			return token{kind: tokShr, text: ">>", line: line, col: col}, nil
+		}
 		if l.match('=') {
 			return token{kind: tokGe, text: ">=", line: line, col: col}, nil
 		}

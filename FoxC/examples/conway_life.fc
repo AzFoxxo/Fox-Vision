@@ -37,7 +37,7 @@ void main() {
             u16 x = 0;
             while (x < BOARD_W) {
                 u16 idx = (y * BOARD_W) + x;
-                u16 alive = peak(current + idx) & 1;
+                u16 alive = peek(current + idx) & 1;
 
                 u16 n = 0;
 
@@ -45,35 +45,35 @@ void main() {
                     u16 ym1 = y - 1;
                     if (x > 0) {
                         u16 xm1 = x - 1;
-                        n = n + (peak(current + ((ym1 * BOARD_W) + xm1)) & 1);
+                        n = n + (peek(current + ((ym1 * BOARD_W) + xm1)) & 1);
                     }
-                    n = n + (peak(current + ((ym1 * BOARD_W) + x)) & 1);
+                    n = n + (peek(current + ((ym1 * BOARD_W) + x)) & 1);
                     u16 xp1a = x + 1;
                     if (xp1a < BOARD_W) {
-                        n = n + (peak(current + ((ym1 * BOARD_W) + xp1a)) & 1);
+                        n = n + (peek(current + ((ym1 * BOARD_W) + xp1a)) & 1);
                     }
                 }
 
                 if (x > 0) {
                     u16 xm1b = x - 1;
-                    n = n + (peak(current + ((y * BOARD_W) + xm1b)) & 1);
+                    n = n + (peek(current + ((y * BOARD_W) + xm1b)) & 1);
                 }
 
                 u16 xp1b = x + 1;
                 if (xp1b < BOARD_W) {
-                    n = n + (peak(current + ((y * BOARD_W) + xp1b)) & 1);
+                    n = n + (peek(current + ((y * BOARD_W) + xp1b)) & 1);
                 }
 
                 u16 yp1 = y + 1;
                 if (yp1 < BOARD_H) {
                     if (x > 0) {
                         u16 xm1c = x - 1;
-                        n = n + (peak(current + ((yp1 * BOARD_W) + xm1c)) & 1);
+                        n = n + (peek(current + ((yp1 * BOARD_W) + xm1c)) & 1);
                     }
-                    n = n + (peak(current + ((yp1 * BOARD_W) + x)) & 1);
+                    n = n + (peek(current + ((yp1 * BOARD_W) + x)) & 1);
                     u16 xp1c = x + 1;
                     if (xp1c < BOARD_W) {
-                        n = n + (peak(current + ((yp1 * BOARD_W) + xp1c)) & 1);
+                        n = n + (peek(current + ((yp1 * BOARD_W) + xp1c)) & 1);
                     }
                 }
 

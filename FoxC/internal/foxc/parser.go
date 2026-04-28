@@ -229,11 +229,59 @@ func (p *parser) parseLogicalOr() (Expr, error) {
 }
 
 func (p *parser) parseLogicalAnd() (Expr, error) {
-	left, err := p.parseEquality()
+	left, err := p.parseBitwiseOr()
 	if err != nil {
 		return nil, err
 	}
 	for p.at(tokAndAnd) {
+		op := p.next().text
+		right, err := p.parseBitwiseOr()
+		if err != nil {
+			return nil, err
+		}
+		left = &BinaryExpr{Op: op, Left: left, Right: right}
+	}
+	return left, nil
+}
+
+func (p *parser) parseBitwiseOr() (Expr, error) {
+	left, err := p.parseBitwiseXor()
+	if err != nil {
+		return nil, err
+	}
+	for p.at(tokPipe) {
+		op := p.next().text
+		right, err := p.parseBitwiseXor()
+		if err != nil {
+			return nil, err
+		}
+		left = &BinaryExpr{Op: op, Left: left, Right: right}
+	}
+	return left, nil
+}
+
+func (p *parser) parseBitwiseXor() (Expr, error) {
+	left, err := p.parseBitwiseAnd()
+	if err != nil {
+		return nil, err
+	}
+	for p.at(tokCaret) {
+		op := p.next().text
+		right, err := p.parseBitwiseAnd()
+		if err != nil {
+			return nil, err
+		}
+		left = &BinaryExpr{Op: op, Left: left, Right: right}
+	}
+	return left, nil
+}
+
+func (p *parser) parseBitwiseAnd() (Expr, error) {
+	left, err := p.parseEquality()
+	if err != nil {
+		return nil, err
+	}
+	for p.at(tokAmp) {
 		op := p.next().text
 		right, err := p.parseEquality()
 		if err != nil {
@@ -261,11 +309,27 @@ func (p *parser) parseEquality() (Expr, error) {
 }
 
 func (p *parser) parseCompare() (Expr, error) {
-	left, err := p.parseAdd()
+	left, err := p.parseShift()
 	if err != nil {
 		return nil, err
 	}
 	for p.at(tokLt) || p.at(tokGt) || p.at(tokLe) || p.at(tokGe) {
+		op := p.next().text
+		right, err := p.parseShift()
+		if err != nil {
+			return nil, err
+		}
+		left = &BinaryExpr{Op: op, Left: left, Right: right}
+	}
+	return left, nil
+}
+
+func (p *parser) parseShift() (Expr, error) {
+	left, err := p.parseAdd()
+	if err != nil {
+		return nil, err
+	}
+	for p.at(tokShl) || p.at(tokShr) {
 		op := p.next().text
 		right, err := p.parseAdd()
 		if err != nil {
@@ -297,7 +361,7 @@ func (p *parser) parseMul() (Expr, error) {
 	if err != nil {
 		return nil, err
 	}
-	for p.at(tokStar) || p.at(tokSlash) || p.at(tokAmp) {
+	for p.at(tokStar) || p.at(tokSlash) {
 		op := p.next().text
 		right, err := p.parseUnary()
 		if err != nil {
@@ -316,6 +380,14 @@ func (p *parser) parseUnary() (Expr, error) {
 			return nil, err
 		}
 		return &UnaryExpr{Op: "-", X: x}, nil
+	}
+	if p.at(tokTilde) {
+		p.next()
+		x, err := p.parseUnary()
+		if err != nil {
+			return nil, err
+		}
+		return &UnaryExpr{Op: "~", X: x}, nil
 	}
 	return p.parsePrimary()
 }

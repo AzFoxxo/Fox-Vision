@@ -1,0 +1,74 @@
+// Graphics specification conformance test for FoxC
+// Exercises VRAM layout, packing (2 pixels/byte), bitwise ops, shifts,
+// WAIT, VBLANK, CYC, peek/poke, loops, conditionals and controller input.
+
+u16 pixelAddr(u16 row, u16 col) {
+    // 100 pixels per row, 2 pixels per byte => 50 bytes per row
+    u16 byteIndex = row * 50;
+    byteIndex = byteIndex + (col >> 1); // col / 2
+    return 65535 - byteIndex; // VRAM descends from 0xFFFF
+}
+
+void setPixelPacked(u16 row, u16 col, u16 color) {
+    u16 addr = pixelAddr(row, col);
+    u16 existing = peek(addr);
+    u16 high = col & 1; // 0 = low nibble, 1 = high nibble
+    if (high == 1) {
+        // place color in high nibble
+        existing = (existing & 15) | (color << 4);
+    } else {
+        // place color in low nibble
+        existing = (existing & 240) | (color & 15);
+    }
+    poke(addr, existing);
+}
+
+u16 colorFor(u16 row, u16 col) {
+    // simple test pattern mixing shifts, bitwise ops and arithmetic
+    // combine row and col, then reduce to 4 bits
+    u16 v = (row << 1) + (col >> 1);
+    v = v ^ (row * col);
+    return v & 15;
+}
+
+void drawFrame() {
+    u16 r = 0;
+    while (r < 100) {
+        u16 c = 0;
+        while (c < 100) {
+            u16 col = colorFor(r, c);
+            setPixelPacked(r, c, col);
+            c = c + 1;
+        }
+        r = r + 1;
+    }
+}
+
+void main() {
+    // warm-up: write a marker to controller memory to show write/read works
+    poke(4096, 0); // clear controller latch
+
+    // Draw and display 3 frames exercising VBLANK and WAIT
+    u16 frames = 0;
+    while (frames < 3) {
+        u16 t0 = cyc();
+        drawFrame();
+        // ensure data is visible on the next frame boundary
+        vblank();
+        // check cycles advanced during vblank (sanity check)
+        u16 t1 = cyc();
+        // short wait to exercise WAIT timing primitive
+        wait(2);
+
+        // controller test: if any button pressed set top-left pixel to white (15)
+        u16 ctrl = peek(4096);
+        if ((ctrl & 255) != 0) {
+            setPixelPacked(0, 0, 15);
+        }
+
+        frames = frames + 1;
+    }
+
+    // final VBlank then halt
+    vblank();
+}

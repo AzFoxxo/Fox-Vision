@@ -23,13 +23,18 @@ statement      = varDecl
 expression     = logicalOr ;
 
 logicalOr      = logicalAnd { "||" logicalAnd } ;
-logicalAnd     = equality { "&&" equality } ;
+logicalAnd     = bitwiseOr { "&&" bitwiseOr } ;
+
+bitwiseOr      = bitwiseXor { "|" bitwiseXor } ;
+bitwiseXor     = bitwiseAnd { "^" bitwiseAnd } ;
+bitwiseAnd     = equality { "&" equality } ;
 
 equality       = comparison { ("==" | "!=") comparison } ;
-comparison     = additive { ("<" | ">" | "<=" | ">=") additive } ;
+comparison     = shift { ("<" | ">" | "<=" | ">=") shift } ;
+shift          = additive { ("<<" | ">>") additive } ;
 additive       = multiplicative { ("+" | "-") multiplicative } ;
 multiplicative = unary { ("*" | "/" | "&") unary } ;
-unary          = [ "-" ] primary ;
+unary          = [ "-" | "~" ] primary ;
 
 primary        = number
                | identifier

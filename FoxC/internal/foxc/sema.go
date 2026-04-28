@@ -21,7 +21,6 @@ func check(prog *Program) error {
 	}
 
 	s.funcs["poke"] = funcSig{ret: TypeVoid, params: []TypeKind{TypeU16, TypeU16}}
-	s.funcs["peak"] = funcSig{ret: TypeU16, params: []TypeKind{TypeU16}}
 	s.funcs["peek"] = funcSig{ret: TypeU16, params: []TypeKind{TypeU16}}
 	s.funcs["wait"] = funcSig{ret: TypeVoid, params: []TypeKind{TypeU16}}
 	s.funcs["cyc"] = funcSig{ret: TypeU16, params: []TypeKind{}}
@@ -203,6 +202,9 @@ func (s *semantic) exprType(e Expr) (TypeKind, error) {
 		if t == TypeVoid {
 			return TypeInvalid, fmt.Errorf("unary operator on void")
 		}
+		if n.Op == "~" {
+			return t, nil
+		}
 		return TypeU16, nil
 	case *BinaryExpr:
 		lt, err := s.exprType(n.Left)
@@ -221,7 +223,7 @@ func (s *semantic) exprType(e Expr) (TypeKind, error) {
 			return TypeU8, nil
 		case "==", "!=", "<", ">", "<=", ">=":
 			return TypeU8, nil
-		case "+", "-", "*", "/", "&":
+		case "+", "-", "*", "/", "&", "|", "^", "<<", ">>":
 			if lt == TypeU16 || rt == TypeU16 {
 				return TypeU16, nil
 			}
