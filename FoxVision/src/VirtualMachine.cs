@@ -5,6 +5,7 @@ namespace FoxVision
 {
     internal class VirtualMachine
     {
+        private const int MachineRomLimitWords = 0x1000;
         private readonly ContiguousMemory _unprotectedMemory;
         private Processor _processor;
         private readonly EmulatorOptions _options;
@@ -20,11 +21,14 @@ namespace FoxVision
 
             // Create a new block of contiguous memory for the RAM
             _unprotectedMemory = new(ushort.MaxValue);
-            LoadRomIntoMemory(ROM);
+            bool loadedRom = LoadRomIntoMemory(ROM);
 
             // Create the CPU
             _processor = new(_unprotectedMemory, _options.ExecutionSpeedHz, _options.LogInstruction);
-            StartCpuThread();
+            if (loadedRom)
+            {
+                StartCpuThread();
+            }
 
             using (var renderer = new GraphicsRenderer(
                 _unprotectedMemory,
@@ -81,7 +85,11 @@ namespace FoxVision
             lock (_reloadLock)
             {
                 StopCpuThread();
-                LoadRomIntoMemory(romWords);
+                if (!LoadRomIntoMemory(romWords))
+                {
+                    return false;
+                }
+
                 _processor = new Processor(_unprotectedMemory, updated.ExecutionSpeedHz, updated.LogInstruction);
                 StartCpuThread();
                 _currentRom = romWords;
@@ -104,18 +112,20 @@ namespace FoxVision
             return TryLoadRomInPlace(updated);
         }
 
-        private void LoadRomIntoMemory(ushort[] rom)
+        private bool LoadRomIntoMemory(ushort[] rom)
         {
-            _unprotectedMemory.ClearUnchecked();
-
-            var size = Math.Min(rom.Length, _unprotectedMemory.MaxAddress + 1);
-            if (rom.Length > size)
+            if (rom.Length > MachineRomLimitWords)
             {
-                Console.ForegroundColor = ConsoleColor.Yellow;
-                Console.WriteLine($"ROM is larger than addressable RAM and will be truncated: {rom.Length} words -> {size} words");
+                Console.ForegroundColor = ConsoleColor.Red;
+                Console.WriteLine($"ROM is larger than the 4 KB machine limit (0x0000-0x0FFF). The machine will remain halted.");
                 Console.ForegroundColor = ConsoleColor.White;
+
+                return false;
             }
 
+            _unprotectedMemory.ClearUnchecked();
+
+            var size = rom.Length;
             Console.ForegroundColor = ConsoleColor.Yellow;
             int previewWords = Math.Min(size, _options.RomPreviewWords);
             for (int i = 0; i < size; i++)
@@ -133,6 +143,8 @@ namespace FoxVision
             Console.ForegroundColor = ConsoleColor.White;
             Console.WriteLine();
             Console.WriteLine("ROM copied to RAM");
+
+            return true;
         }
 
         private void StartCpuThread()

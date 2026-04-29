@@ -285,6 +285,7 @@ namespace FoxVision
                 startInfo.ArgumentList.Add("--project");
                 startInfo.ArgumentList.Add(assemblerProjectPath);
                 startInfo.ArgumentList.Add("--");
+                startInfo.ArgumentList.Add("--strict-format");
                 startInfo.ArgumentList.Add("-i");
                 startInfo.ArgumentList.Add(assemblySourcePath);
 
