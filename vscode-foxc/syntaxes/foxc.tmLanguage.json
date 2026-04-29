@@ -1,0 +1,112 @@
+{
+    "name": "FoxC",
+    "scopeName": "source.foxc",
+    "patterns": [
+        {
+            "include": "#comments"
+        },
+        {
+            "include": "#keywords"
+        },
+        {
+            "include": "#types"
+        },
+        {
+            "include": "#builtins"
+        },
+        {
+            "include": "#numbers"
+        },
+        {
+            "include": "#operators"
+        },
+        {
+            "include": "#punctuation"
+        },
+        {
+            "include": "#functionCalls"
+        }
+    ],
+    "repository": {
+        "comments": {
+            "patterns": [
+                {
+                    "name": "comment.line.double-slash.foxc",
+                    "match": "//.*$"
+                }
+            ]
+        },
+        "keywords": {
+            "patterns": [
+                {
+                    "name": "keyword.control.foxc",
+                    "match": "\\b(?:if|else|while|return)\\b"
+                }
+            ]
+        },
+        "types": {
+            "patterns": [
+                {
+                    "name": "storage.type.foxc",
+                    "match": "\\b(?:u8|u16|void)\\b"
+                }
+            ]
+        },
+        "builtins": {
+            "patterns": [
+                {
+                    "name": "support.function.builtin.foxc",
+                    "match": "\\b(?:poke|peek|wait|cyc|vblank)\\b"
+                }
+            ]
+        },
+        "numbers": {
+            "patterns": [
+                {
+                    "name": "constant.numeric.decimal.foxc",
+                    "match": "\\b\\d+\\b"
+                }
+            ]
+        },
+        "operators": {
+            "patterns": [
+                {
+                    "name": "keyword.operator.foxc",
+                    "match": "==|!=|<=|>=|<<|>>|&&|\\|\\|"
+                },
+                {
+                    "name": "keyword.operator.arithmetic.foxc",
+                    "match": "[+\\-*/&|^~=<>]"
+                }
+            ]
+        },
+        "punctuation": {
+            "patterns": [
+                {
+                    "name": "punctuation.section.block.foxc",
+                    "match": "[{}]"
+                },
+                {
+                    "name": "punctuation.section.group.foxc",
+                    "match": "[()]"
+                },
+                {
+                    "name": "punctuation.separator.comma.foxc",
+                    "match": ","
+                },
+                {
+                    "name": "punctuation.terminator.statement.foxc",
+                    "match": ";"
+                }
+            ]
+        },
+        "functionCalls": {
+            "patterns": [
+                {
+                    "name": "entity.name.function.foxc",
+                    "match": "\\b[A-Za-z_][A-Za-z0-9_]*\\b(?=\\s*\\()"
+                }
+            ]
+        }
+    }
+}

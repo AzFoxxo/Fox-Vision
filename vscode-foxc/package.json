@@ -1,0 +1,40 @@
+{
+    "name": "foxc-tools",
+    "displayName": "FoxC Tools",
+    "description": "Syntax highlighting, completions, and basic validation for FoxC source files.",
+    "version": "0.0.1",
+    "publisher": "azfoxxo",
+    "license": "MIT",
+    "engines": {
+        "vscode": "^1.75.0"
+    },
+    "main": "./extension.js",
+    "categories": [
+        "Programming Languages"
+    ],
+    "activationEvents": [
+        "onLanguage:foxc"
+    ],
+    "contributes": {
+        "languages": [
+            {
+                "id": "foxc",
+                "aliases": [
+                    "FoxC",
+                    "Fox C"
+                ],
+                "extensions": [
+                    ".fc"
+                ],
+                "configuration": "./language-configuration.json"
+            }
+        ],
+        "grammars": [
+            {
+                "language": "foxc",
+                "scopeName": "source.foxc",
+                "path": "./syntaxes/foxc.tmLanguage.json"
+            }
+        ]
+    }
+}
