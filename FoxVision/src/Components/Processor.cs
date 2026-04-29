@@ -8,6 +8,7 @@ namespace FoxVision
     internal class Processor
     {
         private ushort regX, regY, regSP, regPC, regCYC;
+        private ulong _totalCycleCount;
         private byte regStatus;
         private bool _waitActive;
         private ushort _waitStartCycle;
@@ -52,6 +53,7 @@ namespace FoxVision
             regSP = StackStartAddress;
             regPC = 0;
             regCYC = 0;
+            _totalCycleCount = 0;
             regStatus = 0;
             _waitActive = false;
             _waitStartCycle = 0;
@@ -117,6 +119,7 @@ namespace FoxVision
             timer.Stop();
 
             unchecked { regCYC++; }
+            _totalCycleCount++;
 
             return IsHalted;
         }
@@ -141,6 +144,26 @@ namespace FoxVision
 
         internal void SignalVBlank()
             => Interlocked.Increment(ref _vblankSequence);
+
+        internal ulong GetCycleCount()
+            => _totalCycleCount;
+
+        internal void Reset()
+        {
+            regX = 0;
+            regY = 0;
+            regSP = StackStartAddress;
+            regPC = 0;
+            regCYC = 0;
+            _totalCycleCount = 0;
+            regStatus = 0;
+            _waitActive = false;
+            _waitStartCycle = 0;
+            _waitDuration = 0;
+            _vblankWaitActive = false;
+            _vblankSequence = 0;
+            _vblankWaitSequence = 0;
+        }
 
         private ushort DecodeExecuteInstruction(ushort opcode, ushort first_operand, ushort second_operand)
         {

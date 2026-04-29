@@ -1,7 +1,10 @@
+using System.Buffers.Binary;
 using System.Diagnostics;
+using System.Runtime.InteropServices;
 using System.Text;
 using Cairo;
 using Gtk;
+using System.Numerics;
 
 namespace FoxVision.Components
 {
@@ -56,13 +59,26 @@ namespace FoxVision.Components
         private readonly Func<int, bool> _setExecutionSpeedRequested;
         private readonly Func<bool, bool> _setInstructionLoggingRequested;
         private readonly Func<bool, bool> _setPauseRequested;
+        private readonly Func<ulong> _getProcessorCycleCountRequested;
         private readonly System.Action _signalVBlankRequested;
         private readonly Func<bool> _showDecompRequested;
         private readonly EmulatorOptions _currentOptions;
         private int _windowScale;
         private int _targetFps;
+        private long _fpsSampleStartTimestamp;
+        private int _fpsSampleFrameCount;
+        private double _measuredFps;
+        private long _cycleSampleStartTimestamp;
+        private ulong _cycleSampleStartCount;
+        private double _measuredCyclesPerSecond;
+        private bool _showFpsOverlay;
+        private bool _showCycleOverlay;
         private readonly string _currentRomPath;
-        private readonly byte[] _paletteIndexFramebuffer;
+        private readonly byte[] _framebufferData;
+        private readonly GCHandle _framebufferHandle;
+        private readonly ushort[] _vramSnapshot;
+        private readonly ImageSurface _frameSurface;
+        private readonly SurfacePattern _framePattern;
         private readonly Window _window;
         private readonly DrawingArea _drawingArea;
         private uint _frameTimerId;
@@ -74,25 +90,27 @@ namespace FoxVision.Components
 
         private bool _disposed;
 
-        private static readonly (byte R, byte G, byte B)[] Palette =
+        private static readonly uint[] PaletteArgb32 =
         [
-            (0x1A, 0x1C, 0x2C),
-            (0x5D, 0x27, 0x5D),
-            (0xB1, 0x3E, 0x53),
-            (0xEF, 0x7D, 0x57),
-            (0xFF, 0xCD, 0x75),
-            (0xA7, 0xF0, 0x70),
-            (0x38, 0xB7, 0x64),
-            (0x25, 0x71, 0x79),
-            (0x29, 0x36, 0x6F),
-            (0x3B, 0x5D, 0xC9),
-            (0x41, 0xA6, 0xF6),
-            (0x73, 0xEF, 0xF7),
-            (0xF4, 0xF4, 0xF4),
-            (0x94, 0xB0, 0xC2),
-            (0x56, 0x6C, 0x86),
-            (0x33, 0x3C, 0x57)
+            0xFF1A1C2C,
+            0xFF5D275D,
+            0xFFB13E53,
+            0xFFEF7D57,
+            0xFFFFCD75,
+            0xFFA7F070,
+            0xFF38B764,
+            0xFF257179,
+            0xFF29366F,
+            0xFF3B5DC9,
+            0xFF41A6F6,
+            0xFF73EFF7,
+            0xFFF4F4F4,
+            0xFF94B0C2,
+            0xFF566C86,
+            0xFF333C57
         ];
+
+        private static readonly ulong[] PackedPaletteArgb32 = CreatePackedPaletteArgb32();
 
         internal GraphicsRenderer(
             ContiguousMemory ram,
@@ -102,6 +120,7 @@ namespace FoxVision.Components
             Func<int, bool> setExecutionSpeedRequested,
             Func<bool, bool> setInstructionLoggingRequested,
             Func<bool, bool> setPauseRequested,
+            Func<ulong> getProcessorCycleCountRequested,
             System.Action signalVBlankRequested,
             Func<bool> showDecompRequested)
         {
@@ -119,13 +138,27 @@ namespace FoxVision.Components
             _setExecutionSpeedRequested = setExecutionSpeedRequested;
             _setInstructionLoggingRequested = setInstructionLoggingRequested;
             _setPauseRequested = setPauseRequested;
+            _getProcessorCycleCountRequested = getProcessorCycleCountRequested;
             _signalVBlankRequested = signalVBlankRequested;
             _showDecompRequested = showDecompRequested;
             _currentOptions = CloneOptions(options);
             _windowScale = windowScale;
             _targetFps = targetFps;
+            _fpsSampleStartTimestamp = Stopwatch.GetTimestamp();
+            _fpsSampleFrameCount = 0;
+            _measuredFps = 0;
+            _cycleSampleStartTimestamp = _fpsSampleStartTimestamp;
+            _cycleSampleStartCount = 0;
+            _measuredCyclesPerSecond = 0;
             _currentRomPath = _currentOptions.RomPath;
-            _paletteIndexFramebuffer = new byte[Width * Height];
+            _framebufferData = new byte[Width * Height * sizeof(uint)];
+            _framebufferHandle = GCHandle.Alloc(_framebufferData, GCHandleType.Pinned);
+            _vramSnapshot = new ushort[VramSizeInBytes];
+            _frameSurface = new ImageSurface(_framebufferData, Format.ARGB32, Width, Height, Width * sizeof(uint));
+            _framePattern = new SurfacePattern(_frameSurface)
+            {
+                Filter = Filter.Nearest
+            };
 
             Gtk.Application.Init();
 
@@ -164,10 +197,6 @@ namespace FoxVision.Components
             buildRomItem.Activated += (_, _) => BuildRomFromDialog();
             fileMenu.Append(buildRomItem);
 
-            var decompItem = new Gtk.MenuItem("Show Decomp");
-            decompItem.Activated += (_, _) => _showDecompRequested();
-            fileMenu.Append(decompItem);
-
             var quitItem = new Gtk.MenuItem("Quit");
             quitItem.Activated += (_, _) => Gtk.Application.Quit();
             fileMenu.Append(quitItem);
@@ -204,6 +233,21 @@ namespace FoxVision.Components
             executionSpeedItem.Activated += (_, _) => ShowExecutionSpeedDialog();
             emulatorMenu.Append(executionSpeedItem);
 
+            emulatorMenu.ShowAll();
+            emulatorButton.Popup = emulatorMenu;
+            headerBar.PackStart(emulatorButton);
+
+            var debugButton = new MenuButton
+            {
+                Label = "Debug",
+                Relief = ReliefStyle.None,
+                FocusOnClick = false,
+                UseUnderline = false
+            };
+            debugButton.CanFocus = false;
+
+            var debugMenu = new Gtk.Menu();
+
             var logInstructionItem = new CheckMenuItem("Log instruction")
             {
                 Active = _currentOptions.LogInstruction
@@ -216,15 +260,29 @@ namespace FoxVision.Components
                     _currentOptions.LogInstruction = enabled;
                 }
             };
-            emulatorMenu.Append(logInstructionItem);
+            debugMenu.Append(logInstructionItem);
 
             var liveMemoryItem = new Gtk.MenuItem("Live memory");
             liveMemoryItem.Activated += (_, _) => ShowLiveMemoryWindow();
-            emulatorMenu.Append(liveMemoryItem);
+            debugMenu.Append(liveMemoryItem);
 
-            emulatorMenu.ShowAll();
-            emulatorButton.Popup = emulatorMenu;
-            headerBar.PackStart(emulatorButton);
+            var decompItem = new Gtk.MenuItem("Decompile to Console");
+            decompItem.Activated += (_, _) => _showDecompRequested();
+            debugMenu.Append(decompItem);
+
+            debugMenu.Append(new SeparatorMenuItem());
+
+            var showFpsItem = new Gtk.MenuItem("Show FPS");
+            showFpsItem.Activated += (_, _) => ToggleFpsOverlay();
+            debugMenu.Append(showFpsItem);
+
+            var showCycleItem = new Gtk.MenuItem("Show actual clock cycle (over rated cycles)");
+            showCycleItem.Activated += (_, _) => ToggleClockCycleOverlay();
+            debugMenu.Append(showCycleItem);
+
+            debugMenu.ShowAll();
+            debugButton.Popup = debugMenu;
+            headerBar.PackStart(debugButton);
 
             var settingsButton = new MenuButton
             {
@@ -303,6 +361,8 @@ namespace FoxVision.Components
             }
 
             _signalVBlankRequested();
+            UpdateMeasuredFps();
+            UpdateMeasuredCyclesPerSecond();
             _drawingArea.QueueDraw();
             return true;
         }
@@ -320,36 +380,117 @@ namespace FoxVision.Components
 
         private void DrawFrame(Context context)
         {
+            context.Save();
             context.Scale(_windowScale, _windowScale);
+            context.SetSource(_framePattern);
+            context.Paint();
 
-            for (int y = 0; y < Height; y++)
+            DrawOverlay(context);
+            context.Restore();
+        }
+
+        private void DrawOverlay(Context context)
+        {
+            if (!_showFpsOverlay && !_showCycleOverlay)
             {
-                for (int x = 0; x < Width; x++)
+                return;
+            }
+
+            List<string> overlayLines = [];
+            if (_showFpsOverlay)
+            {
+                overlayLines.Add($"FPS: {_measuredFps:F2}");
+            }
+
+            if (_showCycleOverlay)
+            {
+                overlayLines.Add($"Cycle: {_measuredCyclesPerSecond:N0} / {_currentOptions.ExecutionSpeedHz:N0} Hz");
+            }
+
+            const double fontSize = 4.0;
+            const double padding = 1.5;
+            const double lineSpacing = 0.0;
+
+            context.Save();
+            context.SelectFontFace("Sans", FontSlant.Normal, FontWeight.Normal);
+            context.SetFontSize(fontSize);
+
+            var fontExtents = context.FontExtents;
+            double lineHeight = fontExtents.Ascent + fontExtents.Descent + lineSpacing;
+
+            double maxWidth = 0;
+            foreach (string line in overlayLines)
+            {
+                var extents = context.TextExtents(line);
+                if (extents.Width > maxWidth)
                 {
-                    int index = (y * Width) + x;
-                    var (r, g, b) = Palette[_paletteIndexFramebuffer[index]];
-                    context.SetSourceRGB(r / 255.0, g / 255.0, b / 255.0);
-                    context.Rectangle(x, y, 1, 1);
-                    context.Fill();
+                    maxWidth = extents.Width;
                 }
             }
+
+            double boxWidth = maxWidth + (padding * 2);
+            double boxHeight = (lineHeight * overlayLines.Count) + padding;
+            double x = Width - boxWidth - 1.0;
+            double y = 1.0;
+
+            context.SetSourceRGBA(0.0, 0.0, 0.0, 0.45);
+            context.Rectangle(x, y, boxWidth, boxHeight);
+            context.Fill();
+
+            context.SetSourceRGBA(1.0, 1.0, 1.0, 0.95);
+            double textY = y + padding + fontExtents.Ascent;
+            foreach (string line in overlayLines)
+            {
+                var extents = context.TextExtents(line);
+                context.MoveTo(x + boxWidth - padding - extents.Width - extents.XBearing, textY);
+                context.ShowText(line);
+                textY += lineHeight;
+            }
+
+            context.Restore();
         }
 
         private void CopyFrameFromVram()
         {
-            int pixelIndex = 0;
-            for (int row = 0; row < Height; row++)
-            {
-                for (int packedColumn = 0; packedColumn < PackedBytesPerRow; packedColumn++)
-                {
-                    int packedIndex = (row * PackedBytesPerRow) + packedColumn;
-                    ushort address = (ushort)(VramStartAddress - packedIndex);
-                    byte packedPixels = (byte)(_ram.ReadUnchecked(address) & 0x00FF);
+            _frameSurface.Flush();
 
-                    _paletteIndexFramebuffer[pixelIndex++] = (byte)((packedPixels >> 4) & 0x0F);
-                    _paletteIndexFramebuffer[pixelIndex++] = (byte)(packedPixels & 0x0F);
+            _ram.CopyDescendingUnchecked(VramStartAddress, _vramSnapshot);
+
+            Span<ulong> framebuffer = MemoryMarshal.Cast<byte, ulong>(_framebufferData.AsSpan());
+            int vectorWidth = Vector<ulong>.Count;
+            int packedIndex = 0;
+            Span<ulong> vectorBuffer = stackalloc ulong[Vector<ulong>.Count];
+
+            while (packedIndex <= _vramSnapshot.Length - vectorWidth)
+            {
+                for (int lane = 0; lane < vectorWidth; lane++)
+                {
+                    vectorBuffer[lane] = PackedPaletteArgb32[(byte)_vramSnapshot[packedIndex + lane]];
                 }
+
+                new Vector<ulong>(vectorBuffer).CopyTo(framebuffer.Slice(packedIndex, vectorWidth));
+                packedIndex += vectorWidth;
             }
+
+            for (; packedIndex < _vramSnapshot.Length; packedIndex++)
+            {
+                framebuffer[packedIndex] = PackedPaletteArgb32[(byte)_vramSnapshot[packedIndex]];
+            }
+
+            _frameSurface.MarkDirty();
+        }
+
+        private static ulong[] CreatePackedPaletteArgb32()
+        {
+            var packedPalette = new ulong[256];
+            for (int packedPixels = 0; packedPixels < packedPalette.Length; packedPixels++)
+            {
+                uint highPixel = PaletteArgb32[(packedPixels >> 4) & 0x0F];
+                uint lowPixel = PaletteArgb32[packedPixels & 0x0F];
+                packedPalette[packedPixels] = lowPixel | ((ulong)highPixel << 32);
+            }
+
+            return packedPalette;
         }
 
         private void LoadRomFromDialog()
@@ -375,7 +516,7 @@ namespace FoxVision.Components
                     updatedOptions.RomPath = selectedPath;
                     if (_launchOptionsRequested(updatedOptions))
                     {
-                        Gtk.Application.Quit();
+                        _currentOptions.RomPath = selectedPath;
                     }
                 }
             }
@@ -412,7 +553,9 @@ namespace FoxVision.Components
                 {
                     if (_buildAndLaunchRomRequested(selectedPath, CloneOptions(_currentOptions)))
                     {
-                        Gtk.Application.Quit();
+                        _currentOptions.RomPath = System.IO.Path.Combine(
+                            System.IO.Path.GetDirectoryName(System.IO.Path.GetFullPath(selectedPath)) ?? Environment.CurrentDirectory,
+                            "vfox16.bin");
                     }
                 }
             }
@@ -485,6 +628,49 @@ namespace FoxVision.Components
             _drawingArea.SetSizeRequest(width, height);
             _window.SetDefaultSize(width, height + 28);
             _window.Resize(width, height + 28);
+            _drawingArea.QueueDraw();
+        }
+
+        private void UpdateMeasuredFps()
+        {
+            _fpsSampleFrameCount++;
+            long nowTimestamp = Stopwatch.GetTimestamp();
+            long elapsedTicks = nowTimestamp - _fpsSampleStartTimestamp;
+            if (elapsedTicks < Stopwatch.Frequency)
+            {
+                return;
+            }
+
+            _measuredFps = _fpsSampleFrameCount * (double)Stopwatch.Frequency / elapsedTicks;
+            _fpsSampleFrameCount = 0;
+            _fpsSampleStartTimestamp = nowTimestamp;
+        }
+
+        private void UpdateMeasuredCyclesPerSecond()
+        {
+            ulong currentCycleCount = _getProcessorCycleCountRequested();
+            long nowTimestamp = Stopwatch.GetTimestamp();
+            long elapsedTicks = nowTimestamp - _cycleSampleStartTimestamp;
+            if (elapsedTicks < Stopwatch.Frequency)
+            {
+                return;
+            }
+
+            ulong cycleDelta = currentCycleCount - _cycleSampleStartCount;
+            _measuredCyclesPerSecond = cycleDelta * (double)Stopwatch.Frequency / elapsedTicks;
+            _cycleSampleStartCount = currentCycleCount;
+            _cycleSampleStartTimestamp = nowTimestamp;
+        }
+
+        private void ToggleFpsOverlay()
+        {
+            _showFpsOverlay = !_showFpsOverlay;
+            _drawingArea.QueueDraw();
+        }
+
+        private void ToggleClockCycleOverlay()
+        {
+            _showCycleOverlay = !_showCycleOverlay;
             _drawingArea.QueueDraw();
         }
 
@@ -999,6 +1185,10 @@ namespace FoxVision.Components
 
             if (_memoryTimerId != 0)
                 GLib.Source.Remove(_memoryTimerId);
+            _framePattern.Dispose();
+            _frameSurface.Dispose();
+            if (_framebufferHandle.IsAllocated)
+                _framebufferHandle.Free();
             _window.Destroy();
         }
     }

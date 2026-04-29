@@ -29,5 +29,26 @@ namespace FoxVision.Components
                 return _memory[address];
             }
         }
+
+        internal void CopyDescendingUnchecked(ushort startAddress, Span<ushort> destination)
+        {
+            lock (_memoryLock)
+            {
+                ushort address = startAddress;
+                for (int index = 0; index < destination.Length; index++)
+                {
+                    destination[index] = _memory[address];
+                    address--;
+                }
+            }
+        }
+
+        internal void ClearUnchecked()
+        {
+            lock (_memoryLock)
+            {
+                Array.Clear(_memory, 0, _memory.Length);
+            }
+        }
     }
 }

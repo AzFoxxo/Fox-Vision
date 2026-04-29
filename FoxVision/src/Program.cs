@@ -23,12 +23,7 @@ namespace FoxVision
 
             if (!string.IsNullOrWhiteSpace(options.RomPath))
             {
-                if (!TryLoadROMFile(options.RomPath, out var rawRom))
-                {
-                    return;
-                }
-
-                if (!TryDecodeRom(rawRom, out ROM))
+                if (!TryLoadRomWords(options.RomPath, out ROM))
                 {
                     return;
                 }
@@ -119,6 +114,46 @@ namespace FoxVision
 
         internal static bool TryBuildAndLaunchRomProcess(string sourcePath, EmulatorOptions options)
         {
+            if (!TryBuildRom(sourcePath, out var builtRomPath))
+            {
+                return false;
+            }
+
+            var updatedOptions = new EmulatorOptions
+            {
+                RomPath = builtRomPath,
+                WindowScale = options.WindowScale,
+                TargetFps = options.TargetFps,
+                ExecutionSpeedHz = options.ExecutionSpeedHz,
+                LogInstruction = options.LogInstruction,
+                RomPreviewWords = options.RomPreviewWords,
+                ControllerUpKey = options.ControllerUpKey,
+                ControllerDownKey = options.ControllerDownKey,
+                ControllerLeftKey = options.ControllerLeftKey,
+                ControllerRightKey = options.ControllerRightKey,
+                ControllerAKey = options.ControllerAKey,
+                ControllerBKey = options.ControllerBKey,
+                ControllerStartKey = options.ControllerStartKey,
+                ControllerSelectKey = options.ControllerSelectKey
+            };
+
+            return TryLaunchRomProcess(updatedOptions.RomPath, updatedOptions);
+        }
+
+        internal static bool TryLoadRomWords(string romPath, out ushort[] rom)
+        {
+            rom = [];
+            if (!TryLoadROMFile(romPath, out var rawRom))
+            {
+                return false;
+            }
+
+            return TryDecodeRom(rawRom, out rom);
+        }
+
+        internal static bool TryBuildRom(string sourcePath, out string builtRomPath)
+        {
+            builtRomPath = string.Empty;
             if (string.IsNullOrWhiteSpace(sourcePath))
             {
                 return false;
@@ -289,7 +324,7 @@ namespace FoxVision
                     return false;
                 }
 
-                var builtRomPath = Path.Combine(sourceDirectory, "vfox16.bin");
+                builtRomPath = Path.Combine(sourceDirectory, "vfox16.bin");
                 if (!File.Exists(builtRomPath))
                 {
                     Console.ForegroundColor = ConsoleColor.Red;
@@ -298,25 +333,7 @@ namespace FoxVision
                     return false;
                 }
 
-                var updatedOptions = new EmulatorOptions
-                {
-                    RomPath = builtRomPath,
-                    WindowScale = options.WindowScale,
-                    TargetFps = options.TargetFps,
-                    ExecutionSpeedHz = options.ExecutionSpeedHz,
-                    LogInstruction = options.LogInstruction,
-                    RomPreviewWords = options.RomPreviewWords,
-                    ControllerUpKey = options.ControllerUpKey,
-                    ControllerDownKey = options.ControllerDownKey,
-                    ControllerLeftKey = options.ControllerLeftKey,
-                    ControllerRightKey = options.ControllerRightKey,
-                    ControllerAKey = options.ControllerAKey,
-                    ControllerBKey = options.ControllerBKey,
-                    ControllerStartKey = options.ControllerStartKey,
-                    ControllerSelectKey = options.ControllerSelectKey
-                };
-
-                return TryLaunchRomProcess(updatedOptions.RomPath, updatedOptions);
+                return true;
             }
             catch (Exception ex)
             {
