@@ -3,6 +3,9 @@
 ; Minimal V1.10 / extended-mode smoke test.
 ; Assemble with: fox16asm -i test/port_io_test.f16 --mode extended
 
+; Enable extended mode by setting EM register to 1
+MOV %1 EM
+
 IN PORT0 X
 OUT X PORT1
 HLT
