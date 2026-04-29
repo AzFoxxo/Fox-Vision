@@ -1,0 +1,8 @@
+:main
+
+; Minimal V1.10 / extended-mode smoke test.
+; Assemble with: fox16asm -i test/port_io_test.f16 --mode extended
+
+IN PORT0 X
+OUT X PORT1
+HLT

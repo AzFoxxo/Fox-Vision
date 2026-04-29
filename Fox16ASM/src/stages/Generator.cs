@@ -8,25 +8,45 @@ namespace Fox16ASM;
 
 class Generator
 {
-    private const int HeaderSizeBytes = 10;
-    private const int StrictFormatMaxPayloadWords = 2 * 1024;
     private const byte OperandTypeRegister = 0b00;
     private const byte OperandTypeImmediate = 0b01;
     private const byte OperandTypeDirectMemory = 0b10;
     private const byte OperandTypeIndirectMemory = 0b11;
+    private const int LegacyStrictFormatMaxPayloadWords = 2 * 1024;
+    private const int ExtendedStrictFormatMaxPayloadWords = 16 * 1024;
+
     private readonly record struct ResolvedOperand(ushort Value, IROperandKind Kind);
 
-    public static CompilationResult<byte[]> Generate(AssemblerIR ir, string outputFile, string sourceFile, DebugFlags debugFlags, bool strictFormat = false)
+    public static CompilationResult<byte[]> Generate(
+        AssemblerIR ir,
+        string outputFile,
+        string sourceFile,
+        AssemblerMode mode,
+        DebugFlags debugFlags,
+        bool strictFormat = false)
     {
         var diagnostics = new List<Diagnostic>();
         var labelTable = ResolveLabelAddresses(ir, sourceFile, debugFlags, diagnostics);
         if (diagnostics.Any(d => d.Severity == DiagnosticSeverity.Error))
             return CompilationResult<byte[]>.Failed(diagnostics);
 
+        var payloadWordCount = GetPayloadWordCount(ir);
+        if (strictFormat)
+        {
+            var maximumPayloadWords = GetStrictFormatMaxPayloadWords(mode);
+            if (payloadWordCount > maximumPayloadWords)
+            {
+                diagnostics.Add(Diagnostic.Error(
+                    $"ROM payload size is {payloadWordCount} words, which exceeds strict format limit of {maximumPayloadWords} words for {mode.ToString().ToLowerInvariant()} mode.",
+                    sourceFile));
+                return CompilationResult<byte[]>.Failed(diagnostics);
+            }
+        }
+
         using var memory = new MemoryStream();
         using var writer = new EndianBinaryWriter(EndianBitConverter.Big, memory);
 
-        WriteHeader(memory);
+        WriteHeader(memory, mode, payloadWordCount);
 
         foreach (var instruction in ir.Instructions)
         {
@@ -50,6 +70,9 @@ class Generator
                 resolvedOperands.Add(resolvedOperand);
             }
 
+            if (!ValidateInstructionOperands(instruction, resolvedOperands, sourceFile, diagnostics))
+                continue;
+
             var encodedOpcode = EncodeOpcode(instruction, opcodeValue, resolvedOperands);
             writer.Write(encodedOpcode);
             if (debugFlags.ShowTokens)
@@ -69,20 +92,6 @@ class Generator
             return CompilationResult<byte[]>.Failed(diagnostics);
 
         var bytes = memory.ToArray();
-
-        if (strictFormat)
-        {
-            var payloadSizeBytes = Math.Max(0, bytes.Length - HeaderSizeBytes);
-            var payloadSizeWords = payloadSizeBytes / sizeof(ushort);
-            if (payloadSizeWords > StrictFormatMaxPayloadWords)
-            {
-                diagnostics.Add(Diagnostic.Error(
-                    $"ROM payload size is {payloadSizeWords} words ({payloadSizeBytes} bytes), which exceeds strict format limit of {StrictFormatMaxPayloadWords} words (4096 bytes, header excluded).",
-                    sourceFile));
-                return CompilationResult<byte[]>.Failed(diagnostics);
-            }
-        }
-
         File.WriteAllBytes(outputFile, bytes);
 
         Console.ForegroundColor = ConsoleColor.White;
@@ -90,6 +99,82 @@ class Generator
         Console.WriteLine($"ROM file written to {outputFile}");
 
         return new CompilationResult<byte[]>(bytes, diagnostics);
+    }
+
+    private static int GetPayloadWordCount(AssemblerIR ir)
+        => ir.Instructions.Sum(instruction => 1 + instruction.Operands.Count) + 2;
+
+    private static int GetStrictFormatMaxPayloadWords(AssemblerMode mode)
+        => mode == AssemblerMode.Extended ? ExtendedStrictFormatMaxPayloadWords : LegacyStrictFormatMaxPayloadWords;
+
+    private static bool ValidateInstructionOperands(
+        IRInstruction instruction,
+        IReadOnlyList<ResolvedOperand> resolvedOperands,
+        string sourceFile,
+        List<Diagnostic> diagnostics)
+    {
+        return instruction.Opcode switch
+        {
+            "IN" => ValidatePortTransfer(instruction, resolvedOperands, sourceFile, diagnostics, portOperandIndex: 0, registerOperandIndex: 1),
+            "OUT" => ValidatePortTransfer(instruction, resolvedOperands, sourceFile, diagnostics, portOperandIndex: 1, registerOperandIndex: 0),
+            _ => true,
+        };
+    }
+
+    private static bool ValidatePortTransfer(
+        IRInstruction instruction,
+        IReadOnlyList<ResolvedOperand> resolvedOperands,
+        string sourceFile,
+        List<Diagnostic> diagnostics,
+        int portOperandIndex,
+        int registerOperandIndex)
+    {
+        if (resolvedOperands.Count != 2)
+        {
+            diagnostics.Add(Diagnostic.Error(
+                $"Opcode '{instruction.Opcode}' expects exactly two operands.",
+                sourceFile,
+                instruction.Line,
+                instruction.Column,
+                instruction.SourceLine));
+            return false;
+        }
+
+        if (resolvedOperands[registerOperandIndex].Kind != IROperandKind.Register)
+        {
+            diagnostics.Add(Diagnostic.Error(
+                $"Opcode '{instruction.Opcode}' requires a register operand in position {registerOperandIndex + 1}.",
+                sourceFile,
+                instruction.Line,
+                instruction.Column,
+                instruction.SourceLine));
+            return false;
+        }
+
+        var portOperand = resolvedOperands[portOperandIndex];
+        if (portOperand.Kind == IROperandKind.Register)
+        {
+            diagnostics.Add(Diagnostic.Error(
+                $"Opcode '{instruction.Opcode}' requires a port immediate in position {portOperandIndex + 1}.",
+                sourceFile,
+                instruction.Line,
+                instruction.Column,
+                instruction.SourceLine));
+            return false;
+        }
+
+        if (portOperand.Value > 0x0007)
+        {
+            diagnostics.Add(Diagnostic.Error(
+                $"Port operand for opcode '{instruction.Opcode}' must be in the range 0x0000 to 0x0007.",
+                sourceFile,
+                instruction.Line,
+                instruction.Column,
+                instruction.SourceLine));
+            return false;
+        }
+
+        return true;
     }
 
     private static Dictionary<string, ushort> ResolveLabelAddresses(
@@ -281,12 +366,27 @@ class Generator
         };
     }
 
-    private static void WriteHeader(Stream stream)
+    private static void WriteHeader(Stream stream, AssemblerMode mode, int payloadWordCount)
     {
-        using var writer = new BinaryWriter(stream, System.Text.Encoding.ASCII, leaveOpen: true);
-        var magic = ".VISOFOX16";
-        var magicBytes = System.Text.Encoding.ASCII.GetBytes(magic);
-        writer.Write(magicBytes, 0, magicBytes.Length);
+        if (mode == AssemblerMode.Extended)
+        {
+            var magicBytes = System.Text.Encoding.ASCII.GetBytes(".VFOX16EXT");
+            stream.Write(magicBytes, 0, magicBytes.Length);
+            stream.WriteByte(1);
+            WriteBigEndianUInt16(stream, 1);
+            WriteBigEndianUInt16(stream, 0);
+            WriteBigEndianUInt16(stream, (ushort)payloadWordCount);
+            return;
+        }
+
+        var legacyMagicBytes = System.Text.Encoding.ASCII.GetBytes(".VISOFOX16");
+        stream.Write(legacyMagicBytes, 0, legacyMagicBytes.Length);
+    }
+
+    private static void WriteBigEndianUInt16(Stream stream, ushort value)
+    {
+        stream.WriteByte((byte)(value >> 8));
+        stream.WriteByte((byte)(value & 0xFF));
     }
 
     private static void WriteFooter(EndianBinaryWriter writer)

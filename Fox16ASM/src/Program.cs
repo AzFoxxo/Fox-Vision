@@ -16,6 +16,7 @@ namespace Fox16ASM
             string outputFile = "vfox16.bin";
             bool showHelp = false;
             bool strictFormat = false;
+            var mode = AssemblerMode.Legacy;
             var debugFlags = new DebugFlags();
 
             // Parse command-line arguments
@@ -60,6 +61,29 @@ namespace Fox16ASM
                     case "--strict-format":
                         strictFormat = true;
                         break;
+                    case "--mode":
+                        if (i + 1 >= args.Length)
+                        {
+                            Console.WriteLine("Error: --mode requires a value of 'legacy' or 'extended'");
+                            return 1;
+                        }
+
+                        var modeValue = args[++i];
+                        if (modeValue.Equals("legacy", StringComparison.OrdinalIgnoreCase))
+                        {
+                            mode = AssemblerMode.Legacy;
+                        }
+                        else if (modeValue.Equals("extended", StringComparison.OrdinalIgnoreCase))
+                        {
+                            mode = AssemblerMode.Extended;
+                        }
+                        else
+                        {
+                            Console.WriteLine($"Error: Unknown assembler mode '{modeValue}'");
+                            return 1;
+                        }
+
+                        break;
                     default:
                         Console.WriteLine($"Error: Unknown argument '{args[i]}'");
                         return 1;
@@ -74,9 +98,10 @@ namespace Fox16ASM
                 Console.WriteLine("Options:");
                 Console.WriteLine("  -i, --input <file>    Input assembly file (.f16)");
                 Console.WriteLine("  -o, --output <rom>    Output ROM file (default: vfox16.bin)");
+                Console.WriteLine("  --mode <legacy|extended>  Select machine mode (default: legacy)");
                 Console.WriteLine("  --tokens              Show token debug output");
                 Console.WriteLine("  --labels              Show label resolution debug output");
-                Console.WriteLine("  --strict-format       Enforce ROM payload limit (2048 words / 4096 bytes, excluding header)");
+                Console.WriteLine("  --strict-format       Enforce ROM payload limit for the selected mode");
                 Console.WriteLine("  -h, --help            Show this help message");
                 return 0;
             }
@@ -113,14 +138,14 @@ namespace Fox16ASM
             }
 
             var irBuilder = new IRBuilder();
-            var irResult = irBuilder.Build(preprocessed.Value, inputFile, debugFlags);
+            var irResult = irBuilder.Build(preprocessed.Value, inputFile, mode, debugFlags);
             if (!irResult.Success)
             {
                 DiagnosticPrinter.Print(irResult.Diagnostics);
                 return 1;
             }
 
-            var generationResult = Generator.Generate(irResult.Value, outputFile, inputFile, debugFlags, strictFormat);
+            var generationResult = Generator.Generate(irResult.Value, outputFile, inputFile, mode, debugFlags, strictFormat);
             if (!generationResult.Success)
             {
                 DiagnosticPrinter.Print(generationResult.Diagnostics);

@@ -8,7 +8,7 @@ class IRBuilder
     private static readonly Regex LabelIdentifier = new("^[A-Za-z_][A-Za-z0-9_]*$", RegexOptions.Compiled);
     private static readonly Regex ConstantReference = new("^<([^<>]+)>$", RegexOptions.Compiled);
 
-    public CompilationResult<AssemblerIR> Build(SourceLine[] lines, string sourceFile, DebugFlags? debugFlags = null)
+    public CompilationResult<AssemblerIR> Build(SourceLine[] lines, string sourceFile, AssemblerMode mode, DebugFlags? debugFlags = null)
     {
         debugFlags ??= new DebugFlags();
         var diagnostics = new List<Diagnostic>();
@@ -58,7 +58,7 @@ class IRBuilder
             }
 
             var valueToken = parts[2];
-            if (!TryParseOperandToken(valueToken, sourceLine, sourceFile, diagnostics, out var constantValue))
+            if (!TryParseOperandToken(valueToken, sourceLine, sourceFile, mode, diagnostics, out var constantValue))
                 continue;
 
             constants[name] = constantValue;
@@ -110,11 +110,14 @@ class IRBuilder
             var operands = new List<IROperand>();
             for (var i = cursor + 1; i < parts.Length; i++)
             {
-                if (!TryParseOperandToken(parts[i], sourceLine, sourceFile, diagnostics, out var operand))
+                if (!TryParseOperandToken(parts[i], sourceLine, sourceFile, mode, diagnostics, out var operand))
                     continue;
 
                 operands.Add(operand);
             }
+
+            if (!ValidateOpcodeMode(opcode, operands.Count, mode, sourceLine, sourceFile, diagnostics))
+                continue;
 
             RewriteOverloadedOpcode(opcode, operands, out var rewrittenOpcode);
             instructions.Add(new IRInstruction(rewrittenOpcode, operands, sourceLine.LineNumber, 1, sourceLine.Text));
@@ -147,6 +150,7 @@ class IRBuilder
         string part,
         SourceLine sourceLine,
         string sourceFile,
+        AssemblerMode mode,
         List<Diagnostic> diagnostics,
         out IROperand operand)
     {
@@ -190,6 +194,26 @@ class IRBuilder
             return true;
         }
 
+        var upperPart = part.ToUpperInvariant();
+        if (upperPart.Length == 5 && upperPart.StartsWith("PORT", StringComparison.Ordinal) && upperPart[4] >= '0' && upperPart[4] <= '7')
+        {
+            if (mode != AssemblerMode.Extended)
+            {
+                diagnostics.Add(Diagnostic.Error(
+                    $"Port operand '{part}' requires --mode extended.",
+                    sourceFile,
+                    sourceLine.LineNumber,
+                    column,
+                    sourceLine.Text));
+                operand = default;
+                return false;
+            }
+
+            var portIndex = upperPart[4] - '0';
+            operand = IROperand.Immediate((ushort)portIndex, sourceLine.LineNumber, column);
+            return true;
+        }
+
         var constMatch = ConstantReference.Match(part);
         if (constMatch.Success)
         {
@@ -230,6 +254,89 @@ class IRBuilder
         else
         {
             operand = IROperand.Label(part, sourceLine.LineNumber, column);
+        }
+
+        return true;
+    }
+
+    private static bool ValidateOpcodeMode(
+        string opcode,
+        int operandCount,
+        AssemblerMode mode,
+        SourceLine sourceLine,
+        string sourceFile,
+        List<Diagnostic> diagnostics)
+    {
+        if (mode == AssemblerMode.Legacy)
+            return ValidateLegacyMode(opcode, sourceLine, sourceFile, diagnostics);
+
+        return ValidateExtendedMode(opcode, operandCount, sourceLine, sourceFile, diagnostics);
+    }
+
+    private static bool ValidateLegacyMode(
+        string opcode,
+        SourceLine sourceLine,
+        string sourceFile,
+        List<Diagnostic> diagnostics)
+    {
+        if (opcode is "IN" or "OUT")
+        {
+            diagnostics.Add(Diagnostic.Error(
+                $"Opcode '{opcode}' requires --mode extended.",
+                sourceFile,
+                sourceLine.LineNumber,
+                1,
+                sourceLine.Text));
+            return false;
+        }
+
+        return true;
+    }
+
+    private static bool ValidateExtendedMode(
+        string opcode,
+        int operandCount,
+        SourceLine sourceLine,
+        string sourceFile,
+        List<Diagnostic> diagnostics)
+    {
+        if (opcode is "IN" or "OUT")
+            return true;
+
+        if (opcode is "DBG_LGC" or "DBG_MEM" or "DBG_INP" or "DGB_MEM" or "DGB_INP")
+        {
+            diagnostics.Add(Diagnostic.Error(
+                $"Opcode '{opcode}' is only available in legacy mode.",
+                sourceFile,
+                sourceLine.LineNumber,
+                1,
+                sourceLine.Text));
+            return false;
+        }
+
+        if (opcode is "LFM" or "WTM" or "SRA" or "DWR" or "ILM" or "IWR" or "INC" or "DEC")
+        {
+            diagnostics.Add(Diagnostic.Error(
+                $"Opcode '{opcode}' is disabled in extension mode.",
+                sourceFile,
+                sourceLine.LineNumber,
+                1,
+                sourceLine.Text));
+            return false;
+        }
+
+        if (opcode is "AXY" or "SXY" or "MXY" or "DXY" or "AND" or "ORA" or "XOR" or "BSL" or "BSR")
+        {
+            if (operandCount == 2)
+                return true;
+
+            diagnostics.Add(Diagnostic.Error(
+                $"Opcode '{opcode}' requires the two-operand form in extension mode.",
+                sourceFile,
+                sourceLine.LineNumber,
+                1,
+                sourceLine.Text));
+            return false;
         }
 
         return true;
