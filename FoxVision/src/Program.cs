@@ -5,7 +5,7 @@ using FoxVision.Components;
 
 namespace FoxVision
 {
-    public class Program()
+    public class Program
     {
         private const int RomHeaderLength = 10;
         private const byte OperandTypeRegister = 0b00;
@@ -34,7 +34,7 @@ namespace FoxVision
                 Console.ForegroundColor = ConsoleColor.Yellow;
                 Console.WriteLine("No ROM selected at startup. Use File -> Load ROM.");
                 Console.ForegroundColor = ConsoleColor.White;
-                ROM = [0x0000, 0x000E];
+                ROM = new ushort[] { 0x0000, 0x000E };
             }
 
             DebugLogROMAsData(ROM);
@@ -136,7 +136,7 @@ namespace FoxVision
 
         internal static bool TryLoadRomWords(string romPath, out ushort[] rom)
         {
-            rom = [];
+            rom = System.Array.Empty<ushort>();
             if (!TryLoadROMFile(romPath, out var rawRom))
             {
                 return false;
@@ -400,7 +400,7 @@ namespace FoxVision
 
         private static bool TryDecodeRom(byte[] rawRom, out ushort[] rom)
         {
-            rom = [];
+            rom = System.Array.Empty<ushort>();
 
             if (rawRom.Length < RomHeaderLength)
             {
@@ -457,7 +457,7 @@ namespace FoxVision
         /// <returns>The ROM file as a byte array</returns>
         private static bool TryLoadROMFile(string ROMfile, out byte[] rom)
         {
-            rom = [];
+            rom = System.Array.Empty<byte>();
 
             if (!File.Exists(ROMfile))
             {

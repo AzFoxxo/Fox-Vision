@@ -2,6 +2,7 @@ using System.Buffers.Binary;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Text.Json;
 using Cairo;
 using Gtk;
 using System.Numerics;
@@ -15,6 +16,7 @@ namespace FoxVision.Components
         private const int PixelsPerPackedByte = 2;
         private const int PackedBytesPerRow = Width / PixelsPerPackedByte;
         private const int VramSizeInBytes = 5000;
+        private const int MaxRecentFiles = 10;
 
         private const ushort VramStartAddress = 0xFFFF;
         private const ushort VramEndAddress = (ushort)(VramStartAddress - VramSizeInBytes + 1);
@@ -41,8 +43,8 @@ namespace FoxVision.Components
             Select
         }
 
-        private static readonly ControllerButton[] ControllerButtons =
-        [
+        private static readonly ControllerButton[] ControllerButtons = new[]
+        {
             ControllerButton.Up,
             ControllerButton.Down,
             ControllerButton.Left,
@@ -51,7 +53,7 @@ namespace FoxVision.Components
             ControllerButton.B,
             ControllerButton.Start,
             ControllerButton.Select
-        ];
+        };
 
         private readonly ContiguousMemory _ram;
         private readonly Func<EmulatorOptions, bool> _launchOptionsRequested;
@@ -63,6 +65,8 @@ namespace FoxVision.Components
         private readonly System.Action _signalVBlankRequested;
         private readonly Func<bool> _showDecompRequested;
         private readonly EmulatorOptions _currentOptions;
+        private readonly List<string> _recentBuildSources;
+        private readonly List<string> _recentRunRoms;
         private int _windowScale;
         private int _targetFps;
         private long _fpsSampleStartTimestamp;
@@ -87,11 +91,13 @@ namespace FoxVision.Components
         private Entry? _memoryStartEntry;
         private Entry? _memoryLengthEntry;
         private uint _memoryTimerId;
+        private readonly Gtk.Menu _buildRecentsMenu;
+        private readonly Gtk.Menu _runRecentsMenu;
 
         private bool _disposed;
 
-        private static readonly uint[] PaletteArgb32 =
-        [
+        private static readonly uint[] PaletteArgb32 = new uint[]
+        {
             0xFF1A1C2C,
             0xFF5D275D,
             0xFFB13E53,
@@ -108,7 +114,7 @@ namespace FoxVision.Components
             0xFF94B0C2,
             0xFF566C86,
             0xFF333C57
-        ];
+        };
 
         private static readonly ulong[] PackedPaletteArgb32 = CreatePackedPaletteArgb32();
 
@@ -142,6 +148,7 @@ namespace FoxVision.Components
             _signalVBlankRequested = signalVBlankRequested;
             _showDecompRequested = showDecompRequested;
             _currentOptions = CloneOptions(options);
+            (_recentBuildSources, _recentRunRoms) = LoadRecentFiles();
             _windowScale = windowScale;
             _targetFps = targetFps;
             _fpsSampleStartTimestamp = Stopwatch.GetTimestamp();
@@ -189,21 +196,53 @@ namespace FoxVision.Components
             fileButton.CanFocus = false;
 
             var fileMenu = new Gtk.Menu();
-            var loadItem = new Gtk.MenuItem("Load ROM");
-            loadItem.Activated += (_, _) => LoadRomFromDialog();
-            fileMenu.Append(loadItem);
 
-            var buildRomItem = new Gtk.MenuItem("Build ROM");
+            var buildRootItem = new Gtk.MenuItem("Build");
+            var buildMenu = new Gtk.Menu();
+            var buildRomItem = new Gtk.MenuItem("Build");
             buildRomItem.Activated += (_, _) => BuildRomFromDialog();
-            fileMenu.Append(buildRomItem);
+            buildMenu.Append(buildRomItem);
+
+            var clearBuildRecentsItem = new Gtk.MenuItem("Clear");
+            clearBuildRecentsItem.Activated += (_, _) => ClearRecentBuildSources();
+            buildMenu.Append(clearBuildRecentsItem);
+
+            var buildRecentItem = new Gtk.MenuItem("Most recent (1-10)");
+            _buildRecentsMenu = new Gtk.Menu();
+            buildRecentItem.Submenu = _buildRecentsMenu;
+            buildMenu.Append(buildRecentItem);
+            buildRootItem.Submenu = buildMenu;
+            fileMenu.Append(buildRootItem);
+
+            var runRootItem = new Gtk.MenuItem("Run");
+            var runMenu = new Gtk.Menu();
+            var runItem = new Gtk.MenuItem("Run");
+            runItem.Activated += (_, _) => LoadRomFromDialog();
+            runMenu.Append(runItem);
+
+            var clearRunRecentsItem = new Gtk.MenuItem("Clear");
+            clearRunRecentsItem.Activated += (_, _) => ClearRecentRunRoms();
+            runMenu.Append(clearRunRecentsItem);
+
+            var runRecentItem = new Gtk.MenuItem("Most recent (1-10)");
+            _runRecentsMenu = new Gtk.Menu();
+            runRecentItem.Submenu = _runRecentsMenu;
+            runMenu.Append(runRecentItem);
+            runRootItem.Submenu = runMenu;
+            fileMenu.Append(runRootItem);
+
+            fileMenu.Append(new SeparatorMenuItem());
 
             var quitItem = new Gtk.MenuItem("Quit");
             quitItem.Activated += (_, _) => Gtk.Application.Quit();
             fileMenu.Append(quitItem);
-            fileMenu.ShowAll();
 
+            fileMenu.ShowAll();
             fileButton.Popup = fileMenu;
             headerBar.PackStart(fileButton);
+
+            RefreshBuildRecentsMenu();
+            RefreshRunRecentsMenu();
 
             var emulatorButton = new MenuButton
             {
@@ -396,7 +435,7 @@ namespace FoxVision.Components
                 return;
             }
 
-            List<string> overlayLines = [];
+            var overlayLines = new List<string>();
             if (_showFpsOverlay)
             {
                 overlayLines.Add($"FPS: {_measuredFps:F2}");
@@ -517,6 +556,7 @@ namespace FoxVision.Components
                     if (_launchOptionsRequested(updatedOptions))
                     {
                         _currentOptions.RomPath = selectedPath;
+                        AddRecentRunRom(selectedPath);
                     }
                 }
             }
@@ -553,9 +593,11 @@ namespace FoxVision.Components
                 {
                     if (_buildAndLaunchRomRequested(selectedPath, CloneOptions(_currentOptions)))
                     {
+                        AddRecentBuildSource(selectedPath);
                         _currentOptions.RomPath = System.IO.Path.Combine(
                             System.IO.Path.GetDirectoryName(System.IO.Path.GetFullPath(selectedPath)) ?? Environment.CurrentDirectory,
                             "vfox16.bin");
+                        AddRecentRunRom(_currentOptions.RomPath);
                     }
                 }
             }
@@ -1153,6 +1195,211 @@ namespace FoxVision.Components
                 ControllerStartKey = options.ControllerStartKey,
                 ControllerSelectKey = options.ControllerSelectKey
             };
+        }
+
+        private void AddRecentBuildSource(string sourcePath)
+        {
+            AddRecentFile(_recentBuildSources, sourcePath);
+            RefreshBuildRecentsMenu();
+            SaveRecentFiles();
+        }
+
+        private void AddRecentRunRom(string romPath)
+        {
+            AddRecentFile(_recentRunRoms, romPath);
+            RefreshRunRecentsMenu();
+            SaveRecentFiles();
+        }
+
+        private static void AddRecentFile(List<string> target, string path)
+        {
+            if (string.IsNullOrWhiteSpace(path))
+            {
+                return;
+            }
+
+            string normalizedPath = System.IO.Path.GetFullPath(path);
+            target.RemoveAll(existing => string.Equals(existing, normalizedPath, StringComparison.OrdinalIgnoreCase));
+            target.Insert(0, normalizedPath);
+
+            if (target.Count > MaxRecentFiles)
+            {
+                target.RemoveRange(MaxRecentFiles, target.Count - MaxRecentFiles);
+            }
+        }
+
+        private void ClearRecentBuildSources()
+        {
+            _recentBuildSources.Clear();
+            RefreshBuildRecentsMenu();
+            SaveRecentFiles();
+        }
+
+        private void ClearRecentRunRoms()
+        {
+            _recentRunRoms.Clear();
+            RefreshRunRecentsMenu();
+            SaveRecentFiles();
+        }
+
+        private void RefreshBuildRecentsMenu()
+        {
+            RefreshRecentsMenu(
+                _buildRecentsMenu,
+                _recentBuildSources,
+                (sourcePath) =>
+                {
+                    if (_buildAndLaunchRomRequested(sourcePath, CloneOptions(_currentOptions)))
+                    {
+                        AddRecentBuildSource(sourcePath);
+                        _currentOptions.RomPath = System.IO.Path.Combine(
+                            System.IO.Path.GetDirectoryName(System.IO.Path.GetFullPath(sourcePath)) ?? Environment.CurrentDirectory,
+                            "vfox16.bin");
+                        AddRecentRunRom(_currentOptions.RomPath);
+                    }
+                });
+        }
+
+        private void RefreshRunRecentsMenu()
+        {
+            RefreshRecentsMenu(
+                _runRecentsMenu,
+                _recentRunRoms,
+                (romPath) =>
+                {
+                    var updatedOptions = CloneOptions(_currentOptions);
+                    updatedOptions.RomPath = romPath;
+                    if (_launchOptionsRequested(updatedOptions))
+                    {
+                        _currentOptions.RomPath = romPath;
+                        AddRecentRunRom(romPath);
+                    }
+                });
+        }
+
+        private void RefreshRecentsMenu(Gtk.Menu menu, List<string> recentFiles, Action<string> onActivated)
+        {
+            foreach (Widget child in menu.Children)
+            {
+                menu.Remove(child);
+                child.Destroy();
+            }
+
+            bool removedMissingEntries = false;
+            for (int i = recentFiles.Count - 1; i >= 0; i--)
+            {
+                if (!System.IO.File.Exists(recentFiles[i]))
+                {
+                    recentFiles.RemoveAt(i);
+                    removedMissingEntries = true;
+                }
+            }
+
+            if (removedMissingEntries)
+            {
+                SaveRecentFiles();
+            }
+
+            if (recentFiles.Count == 0)
+            {
+                var emptyItem = new Gtk.MenuItem("(No recent files)")
+                {
+                    Sensitive = false
+                };
+                menu.Append(emptyItem);
+                menu.ShowAll();
+                return;
+            }
+
+            for (int i = 0; i < recentFiles.Count && i < MaxRecentFiles; i++)
+            {
+                string recentPath = recentFiles[i];
+                string fileName = System.IO.Path.GetFileName(recentPath);
+                var recentItem = new Gtk.MenuItem($"{i + 1}. {fileName}");
+                recentItem.TooltipText = recentPath;
+                recentItem.Activated += (_, _) => onActivated(recentPath);
+                menu.Append(recentItem);
+            }
+
+            menu.ShowAll();
+        }
+
+        private static (List<string> buildSources, List<string> runRoms) LoadRecentFiles()
+        {
+            try
+            {
+                var configPath = GetRecentFilesConfigPath();
+                if (!System.IO.File.Exists(configPath))
+                {
+                    return (new List<string>(), new List<string>());
+                }
+
+                var json = System.IO.File.ReadAllText(configPath);
+                var data = JsonSerializer.Deserialize<RecentFilesConfig>(json);
+                var buildSources = data?.BuildSources ?? new List<string>();
+                var runRoms = data?.RunRoms ?? new List<string>();
+
+                if (buildSources.Count > MaxRecentFiles)
+                {
+                    buildSources = buildSources.GetRange(0, MaxRecentFiles);
+                }
+
+                if (runRoms.Count > MaxRecentFiles)
+                {
+                    runRoms = runRoms.GetRange(0, MaxRecentFiles);
+                }
+
+                return (buildSources, runRoms);
+            }
+            catch
+            {
+                return (new List<string>(), new List<string>());
+            }
+        }
+
+        private void SaveRecentFiles()
+        {
+            try
+            {
+                var configPath = GetRecentFilesConfigPath();
+                var directory = System.IO.Path.GetDirectoryName(configPath);
+                if (!string.IsNullOrWhiteSpace(directory))
+                {
+                    Directory.CreateDirectory(directory);
+                }
+
+                var payload = new RecentFilesConfig
+                {
+                    BuildSources = _recentBuildSources.Take(MaxRecentFiles).ToList(),
+                    RunRoms = _recentRunRoms.Take(MaxRecentFiles).ToList()
+                };
+
+                var json = JsonSerializer.Serialize(payload, new JsonSerializerOptions
+                {
+                    WriteIndented = true
+                });
+                System.IO.File.WriteAllText(configPath, json);
+            }
+            catch
+            {
+                // Keep UI responsive even if recents persistence fails.
+            }
+        }
+
+        private static string GetRecentFilesConfigPath()
+        {
+            var xdgConfigHome = Environment.GetEnvironmentVariable("XDG_CONFIG_HOME");
+            var baseConfigDir = !string.IsNullOrWhiteSpace(xdgConfigHome)
+                ? xdgConfigHome
+                : System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".config");
+
+            return System.IO.Path.Combine(baseConfigDir, "foxvision", "recent-files.json");
+        }
+
+        private sealed class RecentFilesConfig
+        {
+            public List<string> BuildSources { get; set; } = new();
+            public List<string> RunRoms { get; set; } = new();
         }
 
         private static void ShowError(Window parent, string message)

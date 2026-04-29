@@ -96,7 +96,7 @@ namespace FoxVision
 
             if (!_waitActive && !_vblankWaitActive)
             {
-                ushort[] data = [RAM.ReadUnchecked(regPC), 0, 0];
+                ushort[] data = new ushort[] { RAM.ReadUnchecked(regPC), 0, 0 };
                 if (regPC != RAM.MaxAddress)
                     data[1] = RAM.ReadUnchecked((ushort)(regPC + 1));
                 if (regPC + 1 != RAM.MaxAddress)
@@ -549,12 +549,14 @@ namespace FoxVision
                     }
                     return 2;
 
+                // V1.9 vertical blank wait instruction.
                 case 0x2F:
                     LogInstructionExecuting("VBLANK", first_operand);
                     _vblankWaitSequence = Interlocked.CompareExchange(ref _vblankSequence, 0, 0);
                     _vblankWaitActive = true;
                     return 1;
 
+                // Debug extension opcodes
                 case 0xC000:
                     LogInstructionExecuting("DBG_LGC", first_operand);
                     Console.Write(DebugCharacters.GetCharacter(first_operand));
