@@ -586,7 +586,7 @@ namespace FoxVision
         private void LogInstructionExecuting(string opcode, ushort data)
         {
             if (Interlocked.CompareExchange(ref _logInstructionEnabled, 0, 0) == 1)
-                Console.WriteLine($"{opcode} @ {regPC:X4} ({data})");
+                Program.DebugLogInstructionFromMemory(RAM, regPC);
         }
 
         private void ChangeActiveRegister(ushort regID)

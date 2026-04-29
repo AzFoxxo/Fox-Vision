@@ -248,7 +248,7 @@ namespace FoxVision.Components
 
             var debugMenu = new Gtk.Menu();
 
-            var logInstructionItem = new CheckMenuItem("Log instruction")
+            var logInstructionItem = new CheckMenuItem("Live Instruction Logging")
             {
                 Active = _currentOptions.LogInstruction
             };

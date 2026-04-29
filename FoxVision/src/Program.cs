@@ -1,6 +1,7 @@
 ﻿using System.Diagnostics;
 using System.Reflection;
 using Fox16Shared;
+using FoxVision.Components;
 
 namespace FoxVision
 {
@@ -36,14 +37,7 @@ namespace FoxVision
                 ROM = [0x0000, 0x000E];
             }
 
-            if (ROM.Length <= 512)
-            {
-                DebugLogROMAsData(ROM);
-            }
-            else
-            {
-                Console.WriteLine($"ROM size: {ROM.Length} words (disassembly preview skipped for performance)");
-            }
+            DebugLogROMAsData(ROM);
 
             vm = new VirtualMachine(ROM, options);
         }
@@ -496,114 +490,129 @@ namespace FoxVision
             Console.WriteLine("ROM contents: ");
             for (var i = 0; i < ROM.Length; i++)
             {
-                ushort opcodeWord = ROM[i];
-                ushort opcodeValue = DecodeDisplayOpcodeValue(opcodeWord);
-                string opcode = GetDisplayOpcode(opcodeValue);
+                string line = FormatInstructionLine(
+                    (ushort)i,
+                    offset =>
+                    {
+                        int index = i + offset;
+                        return index < ROM.Length ? ROM[index] : (ushort?)null;
+                    },
+                    out int consumedWords);
 
-                Console.ForegroundColor = ConsoleColor.Red;
-                Console.Write($"${i:X4}");
-                Console.ForegroundColor = ConsoleColor.Blue;
-                Console.Write($" {opcodeWord:X4}");
-                Console.ForegroundColor = ConsoleColor.White;
-                Console.Write($"→");
-                Console.ForegroundColor = ConsoleColor.Yellow;
-                Console.Write($"{opcode} ");
+                Console.WriteLine(line);
+                i += consumedWords;
+            }
+        }
 
-                // If instruction takes address or value, skip
-                Console.ForegroundColor = ConsoleColor.Green;
-                switch (opcodeValue)
+        internal static void DebugLogInstructionFromMemory(ContiguousMemory ram, ushort address)
+        {
+            string line = FormatInstructionLine(
+                address,
+                offset =>
                 {
-                    case 0x1:
-                    case 0x2:
-                    case 0xA:
-                    case 0xB:
-                    case 0xC:
-                    case 0x1D:
-                    case 0x1E:
-                    case 0x1F:
-                    case 0x20:
-                    case 0x21:
-                    case 0x22:
-                        // Convert byte array to ushort
-                        if (i + 1 < ROM.Length)
+                    int target = address + offset;
+                    if (target > ram.MaxAddress)
+                    {
+                        return null;
+                    }
+
+                    return ram.ReadUnchecked((ushort)target);
+                },
+                out _);
+
+            Console.WriteLine(line);
+        }
+
+        private static string FormatInstructionLine(ushort address, Func<int, ushort?> readWord, out int consumedWords)
+        {
+            consumedWords = 0;
+
+            ushort opcodeWord = readWord(0) ?? 0;
+            ushort opcodeValue = DecodeDisplayOpcodeValue(opcodeWord);
+            string opcode = GetDisplayOpcode(opcodeValue);
+
+            string prefix = $"${address:X4} {opcodeWord:X4}→{opcode} ";
+
+            switch (opcodeValue)
+            {
+                case 0x1:
+                case 0x2:
+                case 0xA:
+                case 0xB:
+                case 0xC:
+                case 0x1D:
+                case 0x1E:
+                case 0x1F:
+                case 0x20:
+                case 0x21:
+                case 0x22:
+                    {
+                        ushort? operand = readWord(1);
+                        if (operand.HasValue)
                         {
-                            Console.Write($"{ROM[i + 1]:X4} ({ROM[i + 1]})");
-                            i += 1;
-                        }
-                        else
-                        {
-                            Console.Write("<missing operand>");
+                            consumedWords = 1;
+                            return prefix + $"{operand.Value:X4} ({operand.Value})";
                         }
 
-                        break;
+                        return prefix + "<missing operand>";
+                    }
 
-                    case 0x3:
-                    case 0x14:
-                    case Opcodes.DEBUG_EXTENSION_OFFSET:
-                        // Convert byte array to ushort
-                        if (i + 1 < ROM.Length)
+                case 0x3:
+                case 0x14:
+                case Opcodes.DEBUG_EXTENSION_OFFSET:
+                    {
+                        ushort? operand = readWord(1);
+                        if (operand.HasValue)
                         {
-                            Console.ForegroundColor = ConsoleColor.Cyan;
-                            Console.Write($"({ROM[i + 1]})");
-                            i += 1;
+                            consumedWords = 1;
+                            return prefix + $"({operand.Value})";
                         }
-                        else
+
+                        return prefix + "<missing operand>";
+                    }
+
+                case 0x2C:
+                case 0x2D:
+                    {
+                        ushort? operand = readWord(1);
+                        if (operand.HasValue)
                         {
-                            Console.Write("<missing operand>");
+                            consumedWords = 1;
+                            string firstOperand = BuildTypedOperandDisplay(opcodeWord, operand.Value, operandIndex: 0);
+                            return prefix + $"[{BuildOperandControlSummary(opcodeWord)}] OP1={firstOperand}";
                         }
-                        break;
 
-                    case 0x2C:
-                    case 0x2D:
-                        if (i + 1 < ROM.Length)
+                        return prefix + "<missing operand>";
+                    }
+
+                case 0x19:
+                case 0x1A:
+                case 0x1B:
+                case 0x23:
+                case 0x24:
+                case 0x25:
+                case 0x26:
+                case 0x27:
+                case 0x28:
+                case 0x29:
+                case 0x2A:
+                case 0x2B:
+                    {
+                        ushort? operandOne = readWord(1);
+                        ushort? operandTwo = readWord(2);
+                        if (operandOne.HasValue && operandTwo.HasValue)
                         {
-                            Console.Write($"[{BuildOperandControlSummary(opcodeWord)}] ");
-
-                            string firstOperand = BuildTypedOperandDisplay(opcodeWord, ROM[i + 1], operandIndex: 0);
-                            Console.Write($"OP1={firstOperand}");
-                            i += 1;
+                            consumedWords = 2;
+                            string firstOperand = BuildTypedOperandDisplay(opcodeWord, operandOne.Value, operandIndex: 0);
+                            string secondOperand = BuildTypedOperandDisplay(opcodeWord, operandTwo.Value, operandIndex: 1);
+                            return prefix + $"[{BuildOperandControlSummary(opcodeWord)}] OP1={firstOperand} OP2={secondOperand}";
                         }
-                        else
-                        {
-                            Console.Write("<missing operand>");
-                        }
-                        break;
 
-                    case 0x19:
-                    case 0x1A:
-                    case 0x1B:
-                    case 0x23:
-                    case 0x24:
-                    case 0x25:
-                    case 0x26:
-                    case 0x27:
-                    case 0x28:
-                    case 0x29:
-                    case 0x2A:
-                    case 0x2B:
-                        if (i + 2 < ROM.Length)
-                        {
-                            Console.Write($"[{BuildOperandControlSummary(opcodeWord)}] ");
+                        return prefix + "<missing operands>";
+                    }
 
-                            string firstOperand = BuildTypedOperandDisplay(opcodeWord, ROM[i + 1], operandIndex: 0);
-                            string secondOperand = BuildTypedOperandDisplay(opcodeWord, ROM[i + 2], operandIndex: 1);
-                            Console.Write($"OP1={firstOperand} OP2={secondOperand}");
-                            i += 2;
-                        }
-                        else
-                        {
-                            Console.Write("<missing operands>");
-                        }
-                        break;
-
-                    default:
-                        Console.ForegroundColor = ConsoleColor.DarkGreen;
-                        Console.Write("NOR");
-                        break;
-                }
-
-                Console.WriteLine();
-                Console.ForegroundColor = ConsoleColor.White;
+                default:
+                    return prefix + "NOR";
             }
         }
 
