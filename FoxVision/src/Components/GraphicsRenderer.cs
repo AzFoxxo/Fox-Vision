@@ -65,7 +65,7 @@ namespace FoxVision.Components
         private readonly System.Action _signalVBlankRequested;
         private readonly Func<bool> _showDecompRequested;
         private readonly EmulatorOptions _currentOptions;
-        private readonly List<string> _recentBuildSources;
+        private readonly List<RecentBuildEntry> _recentBuildSources;
         private readonly List<string> _recentRunRoms;
         private int _windowScale;
         private int _targetFps;
@@ -199,9 +199,13 @@ namespace FoxVision.Components
 
             var buildRootItem = new Gtk.MenuItem("Build");
             var buildMenu = new Gtk.Menu();
-            var buildRomItem = new Gtk.MenuItem("Build");
-            buildRomItem.Activated += (_, _) => BuildRomFromDialog();
-            buildMenu.Append(buildRomItem);
+            var buildLegacyItem = new Gtk.MenuItem("Build Legacy");
+            buildLegacyItem.Activated += (_, _) => BuildRomFromDialog(false);
+            buildMenu.Append(buildLegacyItem);
+
+            var buildExtendedItem = new Gtk.MenuItem("Build Extended");
+            buildExtendedItem.Activated += (_, _) => BuildRomFromDialog(true);
+            buildMenu.Append(buildExtendedItem);
 
             var clearBuildRecentsItem = new Gtk.MenuItem("Clear");
             clearBuildRecentsItem.Activated += (_, _) => ClearRecentBuildSources();
@@ -564,7 +568,7 @@ namespace FoxVision.Components
             dialog.Destroy();
         }
 
-        private void BuildRomFromDialog()
+        private void BuildRomFromDialog(bool buildExtended)
         {
             var dialog = new FileChooserDialog(
                 "Build ROM From Source",
@@ -591,9 +595,11 @@ namespace FoxVision.Components
                 var selectedPath = dialog.Filename;
                 if (!string.IsNullOrWhiteSpace(selectedPath))
                 {
-                    if (_buildAndLaunchRomRequested(selectedPath, CloneOptions(_currentOptions)))
+                    var updatedOptions = CloneOptions(_currentOptions);
+                    updatedOptions.BuildExtended = buildExtended;
+                    if (_buildAndLaunchRomRequested(selectedPath, updatedOptions))
                     {
-                        AddRecentBuildSource(selectedPath);
+                        AddRecentBuildSource(selectedPath, buildExtended);
                         _currentOptions.RomPath = System.IO.Path.Combine(
                             System.IO.Path.GetDirectoryName(System.IO.Path.GetFullPath(selectedPath)) ?? Environment.CurrentDirectory,
                             "vfox16.bin");
@@ -1194,12 +1200,22 @@ namespace FoxVision.Components
                 ControllerBKey = options.ControllerBKey,
                 ControllerStartKey = options.ControllerStartKey,
                 ControllerSelectKey = options.ControllerSelectKey
+                ,
+                BuildExtended = options.BuildExtended
             };
         }
 
-        private void AddRecentBuildSource(string sourcePath)
+        private void AddRecentBuildSource(string sourcePath, bool buildExtended)
         {
-            AddRecentFile(_recentBuildSources, sourcePath);
+            if (string.IsNullOrWhiteSpace(sourcePath))
+                return;
+
+            string normalizedPath = System.IO.Path.GetFullPath(sourcePath);
+            _recentBuildSources.RemoveAll(e => string.Equals(e.Path, normalizedPath, StringComparison.OrdinalIgnoreCase));
+            _recentBuildSources.Insert(0, new RecentBuildEntry { Path = normalizedPath, BuildExtended = buildExtended });
+            if (_recentBuildSources.Count > MaxRecentFiles)
+                _recentBuildSources.RemoveRange(MaxRecentFiles, _recentBuildSources.Count - MaxRecentFiles);
+
             RefreshBuildRecentsMenu();
             SaveRecentFiles();
         }
@@ -1244,20 +1260,59 @@ namespace FoxVision.Components
 
         private void RefreshBuildRecentsMenu()
         {
-            RefreshRecentsMenu(
-                _buildRecentsMenu,
-                _recentBuildSources,
-                (sourcePath) =>
+            foreach (Widget child in _buildRecentsMenu.Children)
+            {
+                _buildRecentsMenu.Remove(child);
+                child.Destroy();
+            }
+
+            bool removedMissingEntries = false;
+            for (int i = _recentBuildSources.Count - 1; i >= 0; i--)
+            {
+                if (!System.IO.File.Exists(_recentBuildSources[i].Path))
                 {
-                    if (_buildAndLaunchRomRequested(sourcePath, CloneOptions(_currentOptions)))
+                    _recentBuildSources.RemoveAt(i);
+                    removedMissingEntries = true;
+                }
+            }
+
+            if (removedMissingEntries)
+            {
+                SaveRecentFiles();
+            }
+
+            if (_recentBuildSources.Count == 0)
+            {
+                var emptyItem = new Gtk.MenuItem("(No recent files)") { Sensitive = false };
+                _buildRecentsMenu.Append(emptyItem);
+                _buildRecentsMenu.ShowAll();
+                return;
+            }
+
+            for (int i = 0; i < _recentBuildSources.Count && i < MaxRecentFiles; i++)
+            {
+                var entry = _recentBuildSources[i];
+                string fileName = System.IO.Path.GetFileName(entry.Path);
+                string label = entry.BuildExtended ? $"{i + 1}. {fileName} [EXT]" : $"{i + 1}. {fileName}";
+                var recentItem = new Gtk.MenuItem(label);
+                recentItem.TooltipText = entry.Path;
+                recentItem.Activated += (_, _) =>
+                {
+                    var updatedOptions = CloneOptions(_currentOptions);
+                    updatedOptions.BuildExtended = entry.BuildExtended;
+                    if (_buildAndLaunchRomRequested(entry.Path, updatedOptions))
                     {
-                        AddRecentBuildSource(sourcePath);
+                        AddRecentBuildSource(entry.Path, entry.BuildExtended);
                         _currentOptions.RomPath = System.IO.Path.Combine(
-                            System.IO.Path.GetDirectoryName(System.IO.Path.GetFullPath(sourcePath)) ?? Environment.CurrentDirectory,
+                            System.IO.Path.GetDirectoryName(System.IO.Path.GetFullPath(entry.Path)) ?? Environment.CurrentDirectory,
                             "vfox16.bin");
                         AddRecentRunRom(_currentOptions.RomPath);
                     }
-                });
+                };
+                _buildRecentsMenu.Append(recentItem);
+            }
+
+            _buildRecentsMenu.ShowAll();
         }
 
         private void RefreshRunRecentsMenu()
@@ -1324,19 +1379,18 @@ namespace FoxVision.Components
             menu.ShowAll();
         }
 
-        private static (List<string> buildSources, List<string> runRoms) LoadRecentFiles()
+        private static (List<RecentBuildEntry> buildSources, List<string> runRoms) LoadRecentFiles()
         {
             try
             {
                 var configPath = GetRecentFilesConfigPath();
                 if (!System.IO.File.Exists(configPath))
                 {
-                    return (new List<string>(), new List<string>());
+                    return (new List<RecentBuildEntry>(), new List<string>());
                 }
-
                 var json = System.IO.File.ReadAllText(configPath);
                 var data = JsonSerializer.Deserialize<RecentFilesConfig>(json);
-                var buildSources = data?.BuildSources ?? new List<string>();
+                var buildSources = data?.BuildSources ?? new List<RecentBuildEntry>();
                 var runRoms = data?.RunRoms ?? new List<string>();
 
                 if (buildSources.Count > MaxRecentFiles)
@@ -1353,7 +1407,7 @@ namespace FoxVision.Components
             }
             catch
             {
-                return (new List<string>(), new List<string>());
+                return (new List<RecentBuildEntry>(), new List<string>());
             }
         }
 
@@ -1398,8 +1452,14 @@ namespace FoxVision.Components
 
         private sealed class RecentFilesConfig
         {
-            public List<string> BuildSources { get; set; } = new();
+            public List<RecentBuildEntry> BuildSources { get; set; } = new();
             public List<string> RunRoms { get; set; } = new();
+        }
+
+        private sealed class RecentBuildEntry
+        {
+            public string Path { get; set; } = string.Empty;
+            public bool BuildExtended { get; set; } = false;
         }
 
         private static void ShowError(Window parent, string message)

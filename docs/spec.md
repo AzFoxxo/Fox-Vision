@@ -410,7 +410,7 @@ VRAM starts at address `FFFF` and descends the next 5000 bytes.
 
 ## Memory
 
-The device has a total of 65,536 bytes (64K words) of addressable space.
+The device has a total of 65,536 ushort (64K words) of addressable space.
 
 This memory is broken up into several sections.
 

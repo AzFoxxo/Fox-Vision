@@ -12,8 +12,8 @@ class Generator
     private const byte OperandTypeImmediate = 0b01;
     private const byte OperandTypeDirectMemory = 0b10;
     private const byte OperandTypeIndirectMemory = 0b11;
-    private const int LegacyStrictFormatMaxPayloadWords = 2 * 1024;
-    private const int ExtendedStrictFormatMaxPayloadWords = 16 * 1024;
+    private const int LegacyStrictFormatMaxPayloadWords = 4 * 1024;
+    private const int ExtendedStrictFormatMaxPayloadWords = 32 * 1024;
 
     private readonly record struct ResolvedOperand(ushort Value, IROperandKind Kind);
 

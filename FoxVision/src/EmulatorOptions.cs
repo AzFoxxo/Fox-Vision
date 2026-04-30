@@ -33,6 +33,10 @@ namespace FoxVision
         internal uint ControllerStartKey { get; set; } = ParseEnvUInt("FOXVISION_CONTROLLER_START_KEY", DefaultControllerStartKey);
         internal uint ControllerSelectKey { get; set; } = ParseEnvUInt("FOXVISION_CONTROLLER_SELECT_KEY", DefaultControllerSelectKey);
 
+        // When true, build operations invoked from the GUI will target extended mode
+        // (passes `--mode extended` to the FoxC compiler and assembler).
+        internal bool BuildExtended { get; set; } = false;
+
         internal EmulatorOptions()
         {
             ApplySavedInputConfigIfUnset();

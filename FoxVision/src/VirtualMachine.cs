@@ -5,26 +5,25 @@ namespace FoxVision
 {
     internal class VirtualMachine
     {
-        private const int MachineRomLimitWords = 0x1000;
         private readonly ContiguousMemory _unprotectedMemory;
         private Processor _processor;
         private readonly EmulatorOptions _options;
         private readonly object _reloadLock = new();
-        private ushort[] _currentRom;
+        private RomImage _currentRom;
         private int _shutdownRequested;
         private Thread? _cpuThread;
 
-        internal VirtualMachine(ushort[] ROM, EmulatorOptions options)
+        internal VirtualMachine(RomImage initialRom, EmulatorOptions options)
         {
             _options = options;
-            _currentRom = ROM;
+            _currentRom = initialRom;
 
             // Create a new block of contiguous memory for the RAM
             _unprotectedMemory = new(ushort.MaxValue);
-            bool loadedRom = LoadRomIntoMemory(ROM);
+            bool loadedRom = LoadRomIntoMemory(_currentRom);
 
             // Create the CPU
-            _processor = new(_unprotectedMemory, _options.ExecutionSpeedHz, _options.LogInstruction);
+            _processor = new(_unprotectedMemory, _options.ExecutionSpeedHz, _options.LogInstruction, _currentRom.StartAddress);
             if (loadedRom)
             {
                 StartCpuThread();
@@ -57,7 +56,7 @@ namespace FoxVision
                 },
                 () =>
                 {
-                    Program.DebugLogROMAsData(_currentRom);
+                    Program.DebugLogROMAsData(_currentRom.Words);
                     return true;
                 }))
             {
@@ -77,7 +76,7 @@ namespace FoxVision
                 return false;
             }
 
-            if (!Program.TryLoadRomWords(updated.RomPath, out var romWords))
+            if (!Program.TryLoadRomImage(updated.RomPath, out var romImage))
             {
                 return false;
             }
@@ -85,14 +84,14 @@ namespace FoxVision
             lock (_reloadLock)
             {
                 StopCpuThread();
-                if (!LoadRomIntoMemory(romWords))
+                if (!LoadRomIntoMemory(romImage))
                 {
                     return false;
                 }
 
-                _processor = new Processor(_unprotectedMemory, updated.ExecutionSpeedHz, updated.LogInstruction);
+                _processor = new Processor(_unprotectedMemory, updated.ExecutionSpeedHz, updated.LogInstruction, romImage.StartAddress);
                 StartCpuThread();
-                _currentRom = romWords;
+                _currentRom = romImage;
                 _options.RomPath = updated.RomPath;
                 _options.ExecutionSpeedHz = updated.ExecutionSpeedHz;
                 _options.LogInstruction = updated.LogInstruction;
@@ -103,7 +102,7 @@ namespace FoxVision
 
         private bool TryBuildAndLoadRomInPlace(string sourcePath, EmulatorOptions updated)
         {
-            if (!Program.TryBuildRom(sourcePath, out var builtRomPath))
+            if (!Program.TryBuildRom(sourcePath, updated, out var builtRomPath))
             {
                 return false;
             }
@@ -112,12 +111,21 @@ namespace FoxVision
             return TryLoadRomInPlace(updated);
         }
 
-        private bool LoadRomIntoMemory(ushort[] rom)
+        private bool LoadRomIntoMemory(RomImage rom)
         {
-            if (rom.Length > MachineRomLimitWords)
+            if (rom.Words.Length > rom.MaximumWords)
             {
                 Console.ForegroundColor = ConsoleColor.Red;
-                Console.WriteLine($"ROM is larger than the 4 KB machine limit (0x0000-0x0FFF). The machine will remain halted.");
+                Console.WriteLine($"ROM is larger than the machine limit (0x0000-0x{(rom.MaximumWords - 1):X4}). The machine will remain halted.");
+                Console.ForegroundColor = ConsoleColor.White;
+
+                return false;
+            }
+
+            if ((uint)rom.StartAddress + (uint)rom.Words.Length > (uint)_unprotectedMemory.MaxAddress + 1)
+            {
+                Console.ForegroundColor = ConsoleColor.Red;
+                Console.WriteLine("ROM payload does not fit in RAM at the requested start address.");
                 Console.ForegroundColor = ConsoleColor.White;
 
                 return false;
@@ -125,13 +133,13 @@ namespace FoxVision
 
             _unprotectedMemory.ClearUnchecked();
 
-            var size = rom.Length;
+            var size = rom.Words.Length;
             Console.ForegroundColor = ConsoleColor.Yellow;
             int previewWords = Math.Min(size, _options.RomPreviewWords);
             for (int i = 0; i < size; i++)
             {
-                ushort address = (ushort)i;
-                _unprotectedMemory.WriteUnchecked(address, rom[i]);
+                ushort address = (ushort)(rom.StartAddress + i);
+                _unprotectedMemory.WriteUnchecked(address, rom.Words[i]);
 
                 if (i < previewWords)
                     Console.Write(_unprotectedMemory.ReadUnchecked(address).ToString("X4") + " ");

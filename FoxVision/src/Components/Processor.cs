@@ -8,6 +8,7 @@ namespace FoxVision
     internal class Processor
     {
         private ushort regX, regY, regSP, regPC, regCYC;
+        private ushort regEM;
         private ulong _totalCycleCount;
         private byte regStatus;
         private bool _waitActive;
@@ -35,6 +36,9 @@ namespace FoxVision
         private const ushort RegisterIdStatus = 0x0003;
         private const ushort RegisterIdSP = 0x0004;
         private const ushort RegisterIdCYC = 0x0005;
+        private const ushort RegisterIdEM = 0x0006;
+        private const ushort ControllerStateAddress = 0x1000;
+        private const int PortCount = 8;
         private const ushort VramSizeInWords = 5000;
         private const ushort StackStartAddress = (ushort)(ushort.MaxValue - VramSizeInWords);
 
@@ -45,14 +49,20 @@ namespace FoxVision
         private int _pauseRequested;
 
         internal Processor(ContiguousMemory RAM, int executionSpeedHz, bool logInstruction)
+            : this(RAM, executionSpeedHz, logInstruction, 0)
+        {
+        }
+
+        internal Processor(ContiguousMemory RAM, int executionSpeedHz, bool logInstruction, ushort initialPC)
         {
             this.RAM = RAM;
 
             regX = 0;
             regY = 0;
             regSP = StackStartAddress;
-            regPC = 0;
+            regPC = initialPC;
             regCYC = 0;
+            regEM = 0;
             _totalCycleCount = 0;
             regStatus = 0;
             _waitActive = false;
@@ -155,6 +165,7 @@ namespace FoxVision
             regSP = StackStartAddress;
             regPC = 0;
             regCYC = 0;
+            regEM = 0;
             _totalCycleCount = 0;
             regStatus = 0;
             _waitActive = false;
@@ -190,6 +201,13 @@ namespace FoxVision
 
                 case 0x3:
                     LogInstructionExecuting("SRA", first_operand);
+                    if (IsExtendedModeEnabled)
+                    {
+                        Console.ForegroundColor = ConsoleColor.Red;
+                        Console.WriteLine("SRA is unavailable in extension mode.");
+                        Console.ResetColor();
+                        goto NOP;
+                    }
                     ChangeActiveRegister(first_operand);
                     return 2;
 
@@ -556,18 +574,111 @@ namespace FoxVision
                     _vblankWaitActive = true;
                     return 1;
 
+                case 0x30:
+                    LogInstructionExecuting("IN", first_operand);
+                    if (!IsExtendedModeEnabled)
+                    {
+                        Console.ForegroundColor = ConsoleColor.Red;
+                        Console.WriteLine("IN is unavailable until EM is enabled.");
+                        Console.ResetColor();
+                        goto NOP;
+                    }
+
+                    if (firstOperandType != OperandTypeImmediate)
+                    {
+                        Console.ForegroundColor = ConsoleColor.Red;
+                        Console.WriteLine($"Illegal IN port operand {first_operand:X4}");
+                        Console.ResetColor();
+                        goto NOP;
+                    }
+
+                    if (!TryReadPort(first_operand, out ushort inValue))
+                    {
+                        Console.ForegroundColor = ConsoleColor.Red;
+                        Console.WriteLine($"Illegal IN port {first_operand:X4}");
+                        Console.ResetColor();
+                        goto NOP;
+                    }
+
+                    if (!TryWriteRegisterOperand(second_operand, secondOperandType, inValue, allowStatus: true))
+                    {
+                        Console.ForegroundColor = ConsoleColor.Red;
+                        Console.WriteLine($"Illegal IN destination register {second_operand:X4}");
+                        Console.ResetColor();
+                        goto NOP;
+                    }
+
+                    return 3;
+
+                case 0x31:
+                    LogInstructionExecuting("OUT", first_operand);
+                    if (!IsExtendedModeEnabled)
+                    {
+                        Console.ForegroundColor = ConsoleColor.Red;
+                        Console.WriteLine("OUT is unavailable until EM is enabled.");
+                        Console.ResetColor();
+                        goto NOP;
+                    }
+
+                    if (!TryReadRegisterOperand(first_operand, firstOperandType, out ushort outValue, allowStatus: true))
+                    {
+                        Console.ForegroundColor = ConsoleColor.Red;
+                        Console.WriteLine($"Illegal OUT source register {first_operand:X4}");
+                        Console.ResetColor();
+                        goto NOP;
+                    }
+
+                    if (secondOperandType != OperandTypeImmediate)
+                    {
+                        Console.ForegroundColor = ConsoleColor.Red;
+                        Console.WriteLine($"Illegal OUT port operand {second_operand:X4}");
+                        Console.ResetColor();
+                        goto NOP;
+                    }
+
+                    if (!TryWritePort(second_operand, outValue))
+                    {
+                        Console.ForegroundColor = ConsoleColor.Red;
+                        Console.WriteLine($"Illegal OUT port {second_operand:X4}");
+                        Console.ResetColor();
+                        goto NOP;
+                    }
+
+                    return 3;
+
                 // Debug extension opcodes
                 case 0xC000:
+                    if (IsExtendedModeEnabled)
+                    {
+                        Console.ForegroundColor = ConsoleColor.Red;
+                        Console.WriteLine("Legacy debug opcodes are unavailable in extension mode.");
+                        Console.ResetColor();
+                        goto NOP;
+                    }
                     LogInstructionExecuting("DBG_LGC", first_operand);
                     Console.Write(DebugCharacters.GetCharacter(first_operand));
                     return 2;
 
                 case 0xC001:
+                    if (IsExtendedModeEnabled)
+                    {
+                        Console.ForegroundColor = ConsoleColor.Red;
+                        Console.WriteLine("Legacy debug opcodes are unavailable in extension mode.");
+                        Console.ResetColor();
+                        goto NOP;
+                    }
                     LogInstructionExecuting("DBG_MEM", first_operand);
                     DumpMemoryHex();
                     break;
 
                 case 0xC002:
+                    if (IsExtendedModeEnabled)
+                    {
+                        Console.ForegroundColor = ConsoleColor.Red;
+                        Console.WriteLine("Legacy debug opcodes are unavailable in extension mode.");
+                        Console.ResetColor();
+                        goto NOP;
+                    }
                     LogInstructionExecuting("DBG_INP", first_operand);
                     ushort chrIn = 0x28;
                     char key = Console.ReadKey().KeyChar;
@@ -611,6 +722,9 @@ namespace FoxVision
 
         private bool IsPredicateSet
             => (regStatus & StatusPredicateMask) != 0;
+
+        private bool IsExtendedModeEnabled
+            => regEM != 0;
 
         private bool IsEqual
             => IsPredicateSet;
@@ -696,6 +810,7 @@ namespace FoxVision
                 RegisterIdStatus when allowStatus => SetOutValue(regStatus, out value),
                 RegisterIdSP => SetOutValue(regSP, out value),
                 RegisterIdCYC => SetOutValue(regCYC, out value),
+                RegisterIdEM => SetOutValue(regEM, out value),
                 _ => false
             };
         }
@@ -726,6 +841,12 @@ namespace FoxVision
             if (operand == RegisterIdSP)
             {
                 regSP = value;
+                return true;
+            }
+
+            if (operand == RegisterIdEM)
+            {
+                regEM = value;
                 return true;
             }
 
@@ -788,7 +909,40 @@ namespace FoxVision
             if (operandType != OperandTypeRegister && operandType != OperandTypeIndirectMemory)
                 return false;
 
-            return operand == RegisterIdX || operand == RegisterIdY || operand == RegisterIdStatus || operand == RegisterIdSP || operand == RegisterIdCYC;
+            return operand == RegisterIdX || operand == RegisterIdY || operand == RegisterIdStatus || operand == RegisterIdSP || operand == RegisterIdCYC || operand == RegisterIdEM;
+        }
+
+        private bool TryReadPort(ushort port, out ushort value)
+        {
+            if (port >= PortCount)
+            {
+                value = 0;
+                return false;
+            }
+
+            if (port == 0)
+            {
+                value = RAM.ReadUnchecked(ControllerStateAddress);
+                return true;
+            }
+
+            value = 0;
+            return true;
+        }
+
+        private bool TryWritePort(ushort port, ushort value)
+        {
+            if (port >= PortCount)
+            {
+                return false;
+            }
+
+            if (port == 0)
+            {
+                RAM.WriteUnchecked(ControllerStateAddress, value);
+            }
+
+            return true;
         }
 
         private static bool SetOutValue(ushort source, out ushort destination)

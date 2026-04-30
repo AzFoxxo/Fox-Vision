@@ -1,13 +1,19 @@
 ﻿using System.Diagnostics;
+using System.Buffers.Binary;
 using System.Reflection;
+using System.Text;
 using Fox16Shared;
 using FoxVision.Components;
-
 namespace FoxVision
 {
     public class Program
     {
-        private const int RomHeaderLength = 10;
+        private const int LegacyRomHeaderLength = 10;
+        private const int ExtendedRomHeaderLength = 17;
+        private const int LegacyRomLimitWords = 0x1000;
+        private const int ExtendedRomLimitWords = 0x8000;
+        private const string LegacyRomMagic = ".VISOFOX16";
+        private const string ExtendedRomMagic = ".VFOX16EXT";
         private const byte OperandTypeRegister = 0b00;
         private const byte OperandTypeImmediate = 0b01;
         private const byte OperandTypeDirectMemory = 0b10;
@@ -20,11 +26,11 @@ namespace FoxVision
             if (!TryApplyCommandLineArguments(args, options))
                 return;
 
-            ushort[] ROM;
+            RomImage initialImage;
 
             if (!string.IsNullOrWhiteSpace(options.RomPath))
             {
-                if (!TryLoadRomWords(options.RomPath, out ROM))
+                if (!TryLoadRomImage(options.RomPath, out initialImage))
                 {
                     return;
                 }
@@ -34,12 +40,12 @@ namespace FoxVision
                 Console.ForegroundColor = ConsoleColor.Yellow;
                 Console.WriteLine("No ROM selected at startup. Use File -> Load ROM.");
                 Console.ForegroundColor = ConsoleColor.White;
-                ROM = [0x0000, 0x000E];
+                initialImage = new RomImage(new ushort[] { 0x0000, 0x000E }, 0, LegacyRomLimitWords);
             }
 
-            DebugLogROMAsData(ROM);
+            DebugLogROMAsData(initialImage.Words);
 
-            vm = new VirtualMachine(ROM, options);
+            vm = new VirtualMachine(initialImage, options);
         }
 
         internal static bool TryLaunchRomProcess(string romPath, EmulatorOptions options)
@@ -108,7 +114,7 @@ namespace FoxVision
 
         internal static bool TryBuildAndLaunchRomProcess(string sourcePath, EmulatorOptions options)
         {
-            if (!TryBuildRom(sourcePath, out var builtRomPath))
+            if (!TryBuildRom(sourcePath, options, out var builtRomPath))
             {
                 return false;
             }
@@ -129,6 +135,8 @@ namespace FoxVision
                 ControllerBKey = options.ControllerBKey,
                 ControllerStartKey = options.ControllerStartKey,
                 ControllerSelectKey = options.ControllerSelectKey
+                ,
+                BuildExtended = options.BuildExtended
             };
 
             return TryLaunchRomProcess(updatedOptions.RomPath, updatedOptions);
@@ -137,15 +145,27 @@ namespace FoxVision
         internal static bool TryLoadRomWords(string romPath, out ushort[] rom)
         {
             rom = [];
+            if (!TryLoadRomImage(romPath, out var image))
+            {
+                return false;
+            }
+
+            rom = image.Words;
+            return true;
+        }
+
+        internal static bool TryLoadRomImage(string romPath, out RomImage image)
+        {
+            image = default;
             if (!TryLoadROMFile(romPath, out var rawRom))
             {
                 return false;
             }
 
-            return TryDecodeRom(rawRom, out rom);
+            return TryDecodeRom(rawRom, out image);
         }
 
-        internal static bool TryBuildRom(string sourcePath, out string builtRomPath)
+        internal static bool TryBuildRom(string sourcePath, EmulatorOptions options, out string builtRomPath)
         {
             builtRomPath = string.Empty;
             if (string.IsNullOrWhiteSpace(sourcePath))
@@ -232,6 +252,24 @@ namespace FoxVision
                     foxcStartInfo.ArgumentList.Add(sourcePath);
                     foxcStartInfo.ArgumentList.Add("-o");
                     foxcStartInfo.ArgumentList.Add(assemblySourcePath);
+                    // Request foxc to only emit assembly; assembler will be run explicitly
+                    foxcStartInfo.ArgumentList.Add("--asm");
+                    // Enforce strict-format for GUI-invoked builds
+                    foxcStartInfo.ArgumentList.Add("--strict-format");
+                    // Pass extended mode to foxc when requested from the GUI
+                    if (options.BuildExtended)
+                    {
+                        foxcStartInfo.ArgumentList.Add("--mode");
+                        foxcStartInfo.ArgumentList.Add("extended");
+                    }
+                    // Pass extended mode to foxc when requested from the GUI
+                    if (options.BuildExtended)
+                    {
+                        foxcStartInfo.ArgumentList.Add("--mode");
+                        foxcStartInfo.ArgumentList.Add("extended");
+                    }
+                    // Enforce strict-format for builds invoked from the GUI
+                    foxcStartInfo.ArgumentList.Add("--strict-format");
 
                     using var foxcProcess = Process.Start(foxcStartInfo);
                     if (foxcProcess is null)
@@ -286,6 +324,11 @@ namespace FoxVision
                 startInfo.ArgumentList.Add(assemblerProjectPath);
                 startInfo.ArgumentList.Add("--");
                 startInfo.ArgumentList.Add("--strict-format");
+                if (options.BuildExtended)
+                {
+                    startInfo.ArgumentList.Add("--mode");
+                    startInfo.ArgumentList.Add("extended");
+                }
                 startInfo.ArgumentList.Add("-i");
                 startInfo.ArgumentList.Add(assemblySourcePath);
 
@@ -399,28 +442,103 @@ namespace FoxVision
             Console.WriteLine("  -h, --help          Show this help message");
         }
 
-        private static bool TryDecodeRom(byte[] rawRom, out ushort[] rom)
+        private static bool TryDecodeRom(byte[] rawRom, out RomImage image)
         {
-            rom = [];
+            image = default;
 
-            if (rawRom.Length < RomHeaderLength)
+            if (rawRom.Length < LegacyRomHeaderLength)
             {
                 Console.ForegroundColor = ConsoleColor.Red;
-                Console.WriteLine($"ROM file is too small. Expected at least {RomHeaderLength} bytes, got {rawRom.Length}.");
+                Console.WriteLine($"ROM file is too small. Expected at least {LegacyRomHeaderLength} bytes, got {rawRom.Length}.");
                 Console.ForegroundColor = ConsoleColor.White;
                 return false;
             }
 
             Console.Write("10 byte identifier: ");
             Console.ForegroundColor = ConsoleColor.Blue;
-            for (int i = 0; i < RomHeaderLength; i++)
+            for (int i = 0; i < LegacyRomHeaderLength; i++)
             {
                 Console.Write((char)rawRom[i]);
             }
             Console.ForegroundColor = ConsoleColor.White;
             Console.WriteLine();
 
-            rawRom = rawRom.Skip(RomHeaderLength).ToArray();
+            string magic = Encoding.ASCII.GetString(rawRom, 0, LegacyRomHeaderLength);
+            if (magic == ExtendedRomMagic)
+            {
+                if (rawRom.Length < ExtendedRomHeaderLength)
+                {
+                    Console.ForegroundColor = ConsoleColor.Red;
+                    Console.WriteLine($"Extended ROM header is too small. Expected at least {ExtendedRomHeaderLength} bytes, got {rawRom.Length}.");
+                    Console.ForegroundColor = ConsoleColor.White;
+                    return false;
+                }
+
+                byte version = rawRom[10];
+                if (version != 1)
+                {
+                    Console.ForegroundColor = ConsoleColor.Red;
+                    Console.WriteLine($"Unsupported extended ROM version: {version}");
+                    Console.ForegroundColor = ConsoleColor.White;
+                    return false;
+                }
+
+                ushort mapper = BinaryPrimitives.ReadUInt16BigEndian(rawRom.AsSpan(11, 2));
+                ushort romStart = BinaryPrimitives.ReadUInt16BigEndian(rawRom.AsSpan(13, 2));
+                ushort expectedWords = BinaryPrimitives.ReadUInt16BigEndian(rawRom.AsSpan(15, 2));
+                int romLimitWords = mapper switch
+                {
+                    0 => LegacyRomLimitWords,
+                    1 => ExtendedRomLimitWords,
+                    _ => LegacyRomLimitWords
+                };
+
+                var payloadLengthBytes = rawRom.Length - ExtendedRomHeaderLength;
+                if (payloadLengthBytes < 0)
+                {
+                    Console.ForegroundColor = ConsoleColor.Red;
+                    Console.WriteLine("Extended ROM payload is missing.");
+                    Console.ForegroundColor = ConsoleColor.White;
+                    return false;
+                }
+
+                if ((payloadLengthBytes & 1) != 0)
+                {
+                    Console.ForegroundColor = ConsoleColor.Yellow;
+                    Console.WriteLine("ROM payload has odd byte count. Padding one trailing zero byte.");
+                    Console.ForegroundColor = ConsoleColor.White;
+                    payloadLengthBytes++;
+                }
+
+                if (payloadLengthBytes / 2 != expectedWords)
+                {
+                    Console.ForegroundColor = ConsoleColor.Red;
+                    Console.WriteLine($"Extended ROM size mismatch. Header says {expectedWords} words but payload contains {payloadLengthBytes / 2} words.");
+                    Console.ForegroundColor = ConsoleColor.White;
+                    return false;
+                }
+
+                var payload = new byte[payloadLengthBytes];
+                Array.Copy(rawRom, ExtendedRomHeaderLength, payload, 0, rawRom.Length - ExtendedRomHeaderLength);
+                ushort[] rom = new ushort[payload.Length / 2];
+                for (int i = 0; i < rom.Length; i++)
+                {
+                    rom[i] = BinaryPrimitives.ReadUInt16BigEndian(payload.AsSpan(i * 2, 2));
+                }
+
+                image = new RomImage(rom, romStart, romLimitWords);
+                return true;
+            }
+
+            if (magic != LegacyRomMagic)
+            {
+                Console.ForegroundColor = ConsoleColor.Red;
+                Console.WriteLine($"Unrecognized ROM header: {magic}");
+                Console.ForegroundColor = ConsoleColor.White;
+                return false;
+            }
+
+            rawRom = rawRom.Skip(LegacyRomHeaderLength).ToArray();
 
             if (rawRom.Length == 0)
             {
@@ -438,16 +556,17 @@ namespace FoxVision
                 Array.Resize(ref rawRom, rawRom.Length + 1);
             }
 
-            rom = new ushort[rawRom.Length / 2];
-            for (int i = 0; i < rom.Length; i++)
+            ushort[] legacyRom = new ushort[rawRom.Length / 2];
+            for (int i = 0; i < legacyRom.Length; i++)
             {
                 if (BitConverter.IsLittleEndian)
                 {
                     Array.Reverse(rawRom, i * 2, 2);
                 }
-                rom[i] = BitConverter.ToUInt16(rawRom, i * 2);
+                legacyRom[i] = BitConverter.ToUInt16(rawRom, i * 2);
             }
 
+            image = new RomImage(legacyRom, 0, LegacyRomLimitWords);
             return true;
         }
 
@@ -491,23 +610,21 @@ namespace FoxVision
             Console.WriteLine("ROM contents: ");
             for (var i = 0; i < ROM.Length; i++)
             {
-                string line = FormatInstructionLine(
+                int consumedWords = WriteInstructionLineColored(
                     (ushort)i,
                     offset =>
                     {
                         int index = i + offset;
                         return index < ROM.Length ? ROM[index] : (ushort?)null;
-                    },
-                    out int consumedWords);
+                    });
 
-                Console.WriteLine(line);
                 i += consumedWords;
             }
         }
 
         internal static void DebugLogInstructionFromMemory(ContiguousMemory ram, ushort address)
         {
-            string line = FormatInstructionLine(
+            WriteInstructionLineColored(
                 address,
                 offset =>
                 {
@@ -518,10 +635,168 @@ namespace FoxVision
                     }
 
                     return ram.ReadUnchecked((ushort)target);
-                },
-                out _);
+                });
+        }
 
-            Console.WriteLine(line);
+        // Writes a single disassembled instruction line to Console with lightweight colorization.
+        // Returns the number of operand words consumed (excluding the opcode word).
+        private static int WriteInstructionLineColored(ushort address, Func<int, ushort?> readWord)
+        {
+            ushort opcodeWord = readWord(0) ?? 0;
+            ushort opcodeValue = DecodeDisplayOpcodeValue(opcodeWord);
+            string opcode = GetDisplayOpcode(opcodeValue);
+
+            // Address and raw opcode word
+            var prev = Console.ForegroundColor;
+            Console.ForegroundColor = ConsoleColor.DarkGray;
+            Console.Write($"${address:X4} {opcodeWord:X4}");
+            Console.ForegroundColor = prev;
+
+            Console.Write("→");
+
+            Console.ForegroundColor = ConsoleColor.Yellow;
+            Console.Write(opcode);
+            Console.ForegroundColor = prev;
+            Console.Write(' ');
+
+            switch (opcodeValue)
+            {
+                case 0x1:
+                case 0x2:
+                case 0xA:
+                case 0xB:
+                case 0xC:
+                case 0x1D:
+                case 0x1E:
+                case 0x1F:
+                case 0x20:
+                case 0x21:
+                case 0x22:
+                    {
+                        ushort? operand = readWord(1);
+                        if (operand.HasValue)
+                        {
+                            Console.ForegroundColor = ConsoleColor.DarkGray;
+                            Console.Write($"{operand.Value:X4} ");
+                            Console.ForegroundColor = prev;
+                            Console.WriteLine($"({operand.Value})");
+                            return 1;
+                        }
+
+                        Console.WriteLine("<missing operand>");
+                        return 0;
+                    }
+
+                case 0x3:
+                case 0x14:
+                case Opcodes.DEBUG_EXTENSION_OFFSET:
+                    {
+                        ushort? operand = readWord(1);
+                        if (operand.HasValue)
+                        {
+                            Console.ForegroundColor = ConsoleColor.DarkGray;
+                            Console.Write('(');
+                            Console.ForegroundColor = prev;
+                            Console.Write(operand.Value);
+                            Console.ForegroundColor = ConsoleColor.DarkGray;
+                            Console.WriteLine(")");
+                            Console.ForegroundColor = prev;
+                            return 1;
+                        }
+
+                        Console.WriteLine("<missing operand>");
+                        return 0;
+                    }
+
+                case 0x2C:
+                case 0x2D:
+                    {
+                        ushort? operand = readWord(1);
+                        if (operand.HasValue)
+                        {
+                            Console.ForegroundColor = ConsoleColor.DarkGray;
+                            Console.Write($"[{BuildOperandControlSummary(opcodeWord)}] ");
+                            Console.ForegroundColor = prev;
+                            Console.Write("OP1=");
+                            WriteTypedOperandColored(opcodeWord, operand.Value, 0);
+                            Console.WriteLine();
+                            return 1;
+                        }
+
+                        Console.WriteLine("<missing operand>");
+                        return 0;
+                    }
+
+                case 0x19:
+                case 0x1A:
+                case 0x1B:
+                case 0x23:
+                case 0x24:
+                case 0x25:
+                case 0x26:
+                case 0x27:
+                case 0x28:
+                case 0x29:
+                case 0x2A:
+                case 0x2B:
+                case 0x30: // IN
+                case 0x31: // OUT
+                    {
+                        ushort? operandOne = readWord(1);
+                        ushort? operandTwo = readWord(2);
+                        if (operandOne.HasValue && operandTwo.HasValue)
+                        {
+                            Console.ForegroundColor = ConsoleColor.DarkGray;
+                            Console.Write($"[{BuildOperandControlSummary(opcodeWord)}] ");
+                            Console.ForegroundColor = prev;
+                            Console.Write("OP1=");
+                            WriteTypedOperandColored(opcodeWord, operandOne.Value, 0);
+                            Console.Write(" ");
+                            Console.Write("OP2=");
+                            WriteTypedOperandColored(opcodeWord, operandTwo.Value, 1);
+                            Console.WriteLine();
+                            return 2;
+                        }
+
+                        Console.WriteLine("<missing operands>");
+                        return 0;
+                    }
+
+                default:
+                    Console.WriteLine("NOR");
+                    return 0;
+            }
+        }
+
+        private static void WriteTypedOperandColored(ushort opcodeWord, ushort operandValue, int operandIndex)
+        {
+            byte operandType = DecodeOperandType(opcodeWord, operandIndex);
+            var prev = Console.ForegroundColor;
+            switch (operandType)
+            {
+                case OperandTypeRegister:
+                    Console.ForegroundColor = ConsoleColor.Cyan;
+                    Console.Write($"REG:{FormatRegisterOrRaw(operandValue)}");
+                    break;
+                case OperandTypeImmediate:
+                    Console.ForegroundColor = ConsoleColor.Magenta;
+                    Console.Write($"IMM:{operandValue:X4}({operandValue})");
+                    break;
+                case OperandTypeDirectMemory:
+                    Console.ForegroundColor = ConsoleColor.Green;
+                    Console.Write($"MEM[{operandValue}]");
+                    break;
+                case OperandTypeIndirectMemory:
+                    Console.ForegroundColor = ConsoleColor.Green;
+                    Console.Write($"MEM[" + FormatRegisterOrRaw(operandValue) + "]");
+                    break;
+                default:
+                    Console.ForegroundColor = prev;
+                    Console.Write(operandValue);
+                    break;
+            }
+
+            Console.ForegroundColor = prev;
         }
 
         private static string FormatInstructionLine(ushort address, Func<int, ushort?> readWord, out int consumedWords)
@@ -598,6 +873,8 @@ namespace FoxVision
                 case 0x29:
                 case 0x2A:
                 case 0x2B:
+                case 0x30:
+                case 0x31:
                     {
                         ushort? operandOne = readWord(1);
                         ushort? operandTwo = readWord(2);
@@ -667,6 +944,7 @@ namespace FoxVision
                 0x0001 => "Y",
                 0x0003 => "STATUS",
                 0x0004 => "SP",
+                0x0006 => "EM",
                 _ => $"${value:X4}"
             };
 
@@ -711,3 +989,5 @@ namespace FoxVision
         }
     }
 }
+
+internal readonly record struct RomImage(ushort[] Words, ushort StartAddress, int MaximumWords);
