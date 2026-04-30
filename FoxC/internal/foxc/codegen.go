@@ -55,7 +55,8 @@ type funcFrame struct {
 }
 
 type gen struct {
-	prog *Program
+	prog         *Program
+	extendedMode bool
 
 	consts []string
 	ir     []irInst
@@ -80,16 +81,17 @@ type gen struct {
 	stackLimit        uint16
 }
 
-func generate(prog *Program) (string, error) {
+func generate(prog *Program, opts CompileOptions) (string, error) {
 	g := &gen{
-		prog:        prog,
-		nextAddr:    globalBaseAddr,
-		globals:     map[string]storage{},
-		funcs:       map[string]*FuncDecl{},
-		frames:      map[string]*funcFrame{},
-		inline:      map[string]inlineFn{},
-		inlineDepth: map[string]int{},
-		stackLimit:  0xFFFF,
+		prog:         prog,
+		extendedMode: isExtendedMode(opts.Mode),
+		nextAddr:     globalBaseAddr,
+		globals:      map[string]storage{},
+		funcs:        map[string]*FuncDecl{},
+		frames:       map[string]*funcFrame{},
+		inline:       map[string]inlineFn{},
+		inlineDepth:  map[string]int{},
+		stackLimit:   0xFFFF,
 	}
 	g.configureStackChecks()
 
@@ -130,6 +132,9 @@ func generate(prog *Program) (string, error) {
 	}
 
 	g.emit(":main")
+	if g.extendedMode {
+		g.emit("MOV %1 EM")
+	}
 	g.emit("MOV %28672 X")
 	g.storeToGlobal(g.stackTopSlot)
 	g.emit("MOV %0 X")
@@ -528,6 +533,12 @@ func (g *gen) emitExpr(e Expr) error {
 		if n.Callee == "vblank" {
 			return g.emitBuiltinVBlank(n)
 		}
+		if n.Callee == "in_port" {
+			return g.emitBuiltinInPort(n)
+		}
+		if n.Callee == "out_port" {
+			return g.emitBuiltinOutPort(n)
+		}
 		return g.emitFunctionCall(n)
 	default:
 		return fmt.Errorf("unsupported expression")
@@ -642,6 +653,47 @@ func (g *gen) emitBuiltinVBlank(call *CallExpr) error {
 	}
 	g.emit("VBLANK")
 	return nil
+}
+
+func (g *gen) emitBuiltinInPort(call *CallExpr) error {
+	if len(call.Args) != 1 {
+		return fmt.Errorf("in_port expects 1 argument")
+	}
+	port, err := portImmediateValue(call.Args[0])
+	if err != nil {
+		return err
+	}
+	g.emit(fmt.Sprintf("IN %%%d X", port))
+	return nil
+}
+
+func (g *gen) emitBuiltinOutPort(call *CallExpr) error {
+	if len(call.Args) != 2 {
+		return fmt.Errorf("out_port expects 2 arguments")
+	}
+	port, err := portImmediateValue(call.Args[0])
+	if err != nil {
+		return err
+	}
+	// Second arg: value to write
+	if err := g.emitExpr(call.Args[1]); err != nil {
+		return err
+	}
+	g.emit("MOV X Y")
+	g.emit(fmt.Sprintf("OUT Y %%%d", port))
+	g.emit("MOV %0 X")
+	return nil
+}
+
+func portImmediateValue(expr Expr) (int, error) {
+	lit, ok := expr.(*IntLit)
+	if !ok {
+		return 0, fmt.Errorf("port operand must be a constant 0-7")
+	}
+	if lit.Value < 0 || lit.Value > 7 {
+		return 0, fmt.Errorf("port operand %d out of range 0-7", lit.Value)
+	}
+	return lit.Value, nil
 }
 
 func (g *gen) emitFunctionCall(call *CallExpr) error {

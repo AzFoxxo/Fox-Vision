@@ -1,0 +1,20 @@
+// V1.10 Extended Mode Port I/O Demo
+// Demonstrates in_port() and out_port() built-ins in extended mode
+
+void main() {
+    u16 frame_count = 0;
+    
+    while (1) {
+        // Read controller state from PORT0
+        u16 input = in_port(0);
+        
+        // Write frame count to PORT1 (for logging/debug)
+        out_port(1, frame_count);
+        
+        // Increment frame counter
+        frame_count = frame_count + 1;
+        
+        // Wait for next VBlank
+        vblank();
+    }
+}

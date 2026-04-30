@@ -8,16 +8,18 @@ type funcSig struct {
 }
 
 type semantic struct {
-	funcs   map[string]funcSig
-	globals map[string]TypeKind
-	scopes  []map[string]TypeKind
-	currFn  *FuncDecl
+	funcs        map[string]funcSig
+	globals      map[string]TypeKind
+	scopes       []map[string]TypeKind
+	currFn       *FuncDecl
+	extendedMode bool
 }
 
-func check(prog *Program) error {
+func check(prog *Program, opts CompileOptions) error {
 	s := &semantic{
-		funcs:   map[string]funcSig{},
-		globals: map[string]TypeKind{},
+		funcs:        map[string]funcSig{},
+		globals:      map[string]TypeKind{},
+		extendedMode: isExtendedMode(opts.Mode),
 	}
 
 	s.funcs["poke"] = funcSig{ret: TypeVoid, params: []TypeKind{TypeU16, TypeU16}}
@@ -25,6 +27,8 @@ func check(prog *Program) error {
 	s.funcs["wait"] = funcSig{ret: TypeVoid, params: []TypeKind{TypeU16}}
 	s.funcs["cyc"] = funcSig{ret: TypeU16, params: []TypeKind{}}
 	s.funcs["vblank"] = funcSig{ret: TypeVoid, params: []TypeKind{}}
+	s.funcs["in_port"] = funcSig{ret: TypeU16, params: []TypeKind{TypeU16}}
+	s.funcs["out_port"] = funcSig{ret: TypeVoid, params: []TypeKind{TypeU16, TypeU16}}
 
 	for _, g := range prog.Globals {
 		if g.Type == TypeVoid {
@@ -232,6 +236,9 @@ func (s *semantic) exprType(e Expr) (TypeKind, error) {
 			return TypeInvalid, fmt.Errorf("unsupported operator %q", n.Op)
 		}
 	case *CallExpr:
+		if !s.extendedMode && (n.Callee == "in_port" || n.Callee == "out_port") {
+			return TypeInvalid, fmt.Errorf("%s requires extended mode", n.Callee)
+		}
 		sig, ok := s.funcs[n.Callee]
 		if !ok {
 			return TypeInvalid, fmt.Errorf("unknown function %q", n.Callee)

@@ -15,6 +15,8 @@ FoxC is a compiler written in Go for a practical C-like subset that targets Fox1
     - `wait(cycles)` block execution for `cycles` using CPU `WAIT`
     - `cyc()` read the CPU cycle counter (`CYC` register)
     - `vblank()` block until the next frame VBlank
+    - `in_port(port)` read from a port (V1.10 extended mode, port 0-7)
+    - `out_port(port, value)` write to a port (V1.10 extended mode, port 0-7)
 
 ## Formal grammar
 
@@ -29,10 +31,16 @@ go build ./cmd/foxc
 ## Usage
 
 ```bash
-./foxc -i input.fc -o output.f16
+./foxc -i input.fc [-o output.f16] [options]
 ```
 
-If `-o` is omitted, output defaults to `out.f16`.
+### Options
+
+- `-i <file>` - Input FoxC source file (required)
+- `-o <file>` - Output path (default: `out.f16` for assembly, `out.bin` for ROM)
+- `--mode legacy|extended` - Target machine mode (default: `legacy`)
+- `--strict-format` - Enforce ROM size compliance for the selected mode
+- `-a, --asm` - Assemble only: output Fox16ASM instead of binary ROM (skips assembler invocation)
 
 ## Example
 

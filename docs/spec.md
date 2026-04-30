@@ -346,6 +346,12 @@ When extension mode is enabled (`0x0001`):
 - Memory-mapped I/O is removed except for VRAM
 - Port I/O becomes available
 
+Programs that use port I/O should initialize the runtime mode register before their first `IN` or `OUT` instruction by writing `0x0001` to `EM`:
+
+- `MOV %1 EM`
+
+Compilers that target V1.10 extended mode are expected to emit this initialization at the start of the program image.
+
 Ports are not memory-mapped.
 
 - Eight ports are exposed

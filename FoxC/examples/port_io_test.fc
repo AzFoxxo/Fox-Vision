@@ -1,0 +1,14 @@
+// V1.10 port I/O test
+void main() {
+    // Enable extended mode
+    u16 em_reg = 6;
+    poke(0, 1);  // Write EM=1
+    
+    // Read from PORT0
+    u16 controller_state = in_port(0);
+    
+    // Write to PORT1
+    out_port(1, controller_state);
+    
+    // Halt
+}

@@ -34,7 +34,7 @@ namespace FoxVision
                 Console.ForegroundColor = ConsoleColor.Yellow;
                 Console.WriteLine("No ROM selected at startup. Use File -> Load ROM.");
                 Console.ForegroundColor = ConsoleColor.White;
-                ROM = new ushort[] { 0x0000, 0x000E };
+                ROM = [0x0000, 0x000E];
             }
 
             DebugLogROMAsData(ROM);
@@ -136,7 +136,7 @@ namespace FoxVision
 
         internal static bool TryLoadRomWords(string romPath, out ushort[] rom)
         {
-            rom = System.Array.Empty<ushort>();
+            rom = [];
             if (!TryLoadROMFile(romPath, out var rawRom))
             {
                 return false;
@@ -401,7 +401,7 @@ namespace FoxVision
 
         private static bool TryDecodeRom(byte[] rawRom, out ushort[] rom)
         {
-            rom = System.Array.Empty<ushort>();
+            rom = [];
 
             if (rawRom.Length < RomHeaderLength)
             {
@@ -458,7 +458,7 @@ namespace FoxVision
         /// <returns>The ROM file as a byte array</returns>
         private static bool TryLoadROMFile(string ROMfile, out byte[] rom)
         {
-            rom = System.Array.Empty<byte>();
+            rom = [];
 
             if (!File.Exists(ROMfile))
             {
