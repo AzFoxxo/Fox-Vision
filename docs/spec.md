@@ -4,15 +4,15 @@
 The CPU is a single threaded 8MHz RISC chip. It uses the FoxVision16 architecture.
 
 ### Registers
-| ID  | Register | Size   | Read/Write | Description                                                                                                                                                                                                     |
-| --- | -------- | ------ | ---------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 0x0 | X        | 16-bit | Yes        | General-purpose register #1                                                                                                                                                                                     |
-| 0x1 | Y        | 16-bit | Yes        | General-purpose register #2                                                                                                                                                                                     |
-| 0x2 | PC       | 16-bit | No         | Program counter (only modified internally by CPU control-flow logic; not directly accessible)                                                                                                                   |
-| 0x3 | STATUS   | 8-bit  | Limited    | CPU flags register (written by CPU operations like CMP, DIV, HLT, CLR, and by `POP STATUS`)                                                                                                                     |
-| 0x4 | SP       | 16-bit | Yes        | Stack Pointer. Points to the top of the stack in memory. Modified by PUSH/POP instructions and may be read/written directly for low-level control.                                                              |
-| 0x5 | CYC      | 16-bit | Read-only  | Global cycle counter. Increments by 1 every CPU cycle (wrapping at 0xFFFF → 0x0000). Represents elapsed CPU cycles since reset and is used for timing and synchronisation.                                      |
-| 0x6 | EM       | 16-bit | Yes        | Extension Mode control register. Defaults to `0x0000`. Writing `0x0001` enables extension mode; writing `0x0000` disables it. Used to toggle extended CPU features and unlock up to 32 KB of ROM address space. |
+| ID  | Register | Size   | Read/Write | Description                                                                                                                                                                                                         |
+| --- | -------- | ------ | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 0x0 | X        | 16-bit | Yes        | General-purpose register #1                                                                                                                                                                                         |
+| 0x1 | Y        | 16-bit | Yes        | General-purpose register #2                                                                                                                                                                                         |
+| 0x2 | PC       | 16-bit | No         | Program counter (only modified internally by CPU control-flow logic; not directly accessible)                                                                                                                       |
+| 0x3 | STATUS   | 8-bit  | Limited    | CPU flags register (written by CPU operations like CMP, DIV, HLT, CLR, and by `POP STATUS`)                                                                                                                         |
+| 0x4 | SP       | 16-bit | Yes        | Stack Pointer. Points to the top of the stack in memory. Modified by PUSH/POP instructions and may be read/written directly for low-level control.                                                                  |
+| 0x5 | CYC      | 16-bit | Read-only  | Global cycle counter. Increments by 1 every CPU cycle (wrapping at 0xFFFF → 0x0000). Represents elapsed CPU cycles since reset and is used for timing and synchronisation.                                          |
+| 0x6 | EM       | 16-bit | Yes        | Extension Mode control register. Defaults to `0x0000`. Writing `0x0001` enables extension mode; writing `0x0000` disables it. Used to toggle extended CPU features and unlock up to 32K words of ROM address space. |
 
 | Bit | Name                   | Meaning                                              |
 | --- | ---------------------- | ---------------------------------------------------- |
@@ -76,8 +76,8 @@ Compatibility note: existing tools in this repository currently write a 10-byte 
 
 Size limits and enforcement (current implementation):
 
-- The assembler generator enforces a strict-format check when requested via the assembler's `--strict-format` option. In that mode the assembler enforces a maximum payload size of 2,048 words (4,096 bytes) excluding the 10-byte header. This preserves compatibility with legacy ROM size expectations.
-- The emulator's runtime loader accepts ROMs up to 0x1000 words (4,096 words) when copying into the machine memory area; ROMs larger than this will be rejected by the emulator. The repository's configuration and extension-mode design allow larger ROM sizes conceptually (extension mode may expand ROM space up to 32 KB), but the current emulator enforces the limits above.
+- The assembler generator enforces a strict-format check when requested via the assembler's `--strict-format` option. In that mode the assembler enforces a maximum payload size of 2,048 words (4K words) excluding the 10-byte header. This preserves compatibility with legacy ROM size expectations.
+- The emulator's runtime loader accepts ROMs up to 0x1000 words (4,096 words) when copying into the machine memory area; ROMs larger than this will be rejected by the emulator. The repository's configuration and extension-mode design allow larger ROM sizes conceptually (extension mode may expand ROM space up to 32K words), but the current emulator enforces the limits above.
 
 Notes for tool authors and integrators:
 
@@ -410,20 +410,20 @@ VRAM starts at address `FFFF` and descends the next 5000 bytes.
 
 ## Memory
 
-The device has a total of 65,536 bytes (64kb) of addressable space.
+The device has a total of 65,536 bytes (64K words) of addressable space.
 
 This memory is broken up into several sections.
 
 ### Legacy mode (`EM = 0x0000`)
 
-- `0x0000 - 0x0FFF` ROM (4kb)
+- `0x0000 - 0x0FFF` ROM (4K words)
 - `0x1000` Controller input
 - `0xEC78 - 0xFFFF` VRAM
 - Remaining space available for RAM and VRAM
 
 ### Extension mode (`EM = 0x0001`)
 
-- ROM may expand to use up to 32 KB of address space
+- ROM may expand to use up to 32K words of address space
 - VRAM remains fixed at 5000 bytes (`0xEC78 - 0xFFFF`)
 - Memory-mapped I/O is removed except for VRAM
 - Remaining space available for RAM and VRAM

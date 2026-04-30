@@ -32,7 +32,7 @@ fox16asm -i myprogram.f16 -o custom.bin
 # Compile with debug output
 fox16asm -i myprogram.f16 --tokens --labels
 
-# Compile forcing ROM size compliance in legacy mode (4kb word limit)
+# Compile forcing ROM size compliance in legacy mode (4K-word limit)
 fox16asm -i myprogram.f16 --strict-format
 
 # Compile with extension mode enabled and the larger ROM payload limit
@@ -124,7 +124,7 @@ All preprocessor directives (lines starting with `@`) are removed before compila
 - `0x0000` keeps legacy behavior enabled.
 - `0x0001` enables extension mode and port I/O.
 - `--mode` is the assembler flag used to select the machine mode; use `--mode extended` to enable extension mode for a build.
-- `--strict-format` limits ROM payloads to 4 KB in legacy mode and 32 KB in extension mode.
+- `--strict-format` limits ROM payloads to 4K words in legacy mode and 32K words in extension mode.
 - Ports do not latch, queue, clear, or acknowledge input.
 
 ## Default constants
