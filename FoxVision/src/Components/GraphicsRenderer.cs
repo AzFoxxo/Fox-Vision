@@ -357,10 +357,6 @@ namespace FoxVision.Components
             windowScaleItem.Activated += (_, _) => ShowWindowScaleDialog();
             settingsMenu.Append(windowScaleItem);
 
-            var controllerConfigItem = new Gtk.MenuItem("Controller Configuration");
-            controllerConfigItem.Activated += (_, _) => ShowControllerConfigurationDialog();
-            settingsMenu.Append(controllerConfigItem);
-
             settingsMenu.ShowAll();
             settingsButton.Popup = settingsMenu;
             headerBar.PackStart(settingsButton);
@@ -1030,16 +1026,16 @@ namespace FoxVision.Components
             switch (deviceKind)
             {
                 case PortDeviceKind.VF16Pad:
-                {
-                    var controllerConfigItem = new Gtk.MenuItem("Controller configuration");
-                    controllerConfigItem.Activated += (_, _) => ShowControllerConfigurationDialog();
-                    menu.Append(controllerConfigItem);
+                    {
+                        var controllerConfigItem = new Gtk.MenuItem("Controller configuration");
+                        controllerConfigItem.Activated += (_, _) => ShowControllerConfigurationDialog();
+                        menu.Append(controllerConfigItem);
 
-                    var saveInputItem = new Gtk.MenuItem("Save input configuration");
-                    saveInputItem.Activated += (_, _) => SaveInputConfiguration();
-                    menu.Append(saveInputItem);
-                    break;
-                }
+                        var saveInputItem = new Gtk.MenuItem("Save input configuration");
+                        saveInputItem.Activated += (_, _) => SaveInputConfiguration();
+                        menu.Append(saveInputItem);
+                        break;
+                    }
             }
 
             bool hasConfigurationEntries = false;

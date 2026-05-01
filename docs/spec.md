@@ -146,7 +146,9 @@ The low byte defines how the two operand words are interpreted:
 - `0000 0000` `0001 0111` - `INC` - Increase the value in the active register by one (Legacy mode only)
 - `0000 0000` `0001 1000` - `DEC` - Decrease the value in the active register by one (Legacy mode only)
 
-### Input Output Controls (V1.3)
+### Input Output Controls (V1.3, deprecated)
+
+V1.3 controller support is deprecated. To use controllers, ROMs must run in extended mode (`EM = 0x0001`) and read controller state through configured ports.
 
 **NOTE:** V1.10 (`EM=1` mode) introduces ports. When enabled, the system exposes eight generic 16-bit I/O ports (`0x0000`–`0x0007`). Ports are simple bidirectional data endpoints with no fixed semantic meaning in the ISA. Device behaviour is defined externally by the emulator/system configuration.
 
@@ -162,25 +164,9 @@ Ports do not latch, queue, clear, or acknowledge input. They always return the m
 
 ---
 
-## Legacy Mode
+## Basic VF16Pad Port Layout
 
-Fox Vision supports one digital controller.
-
-The controller is exposed through memory-mapped input.
-
-- Address `0x1000` - Controller state byte
-
-Reading address `0x1000` returns an 8-bit value representing the current button state.
-
-This value reflects the instantaneous state of the controller at the time of read.
-
-Writing to `0x1000` has no effect.
-
----
-
-## Basic VF16Pad Memory Layout
-
-Controller state is a level-based snapshot:
+Controller state is a level-based snapshot exposed by a configured port device:
 
 - `1` = Button is currently held
 - `0` = Button is not held
@@ -211,7 +197,7 @@ Examples:
 
 ## Programming Model
 
-- Programs read controller state using standard memory load instructions.
+- Programs read controller state through the configured port device.
 - Input is polled; it is not event-driven.
 - No explicit clearing or acknowledgment is required.
 
@@ -417,7 +403,6 @@ This memory is broken up into several sections.
 ### Legacy mode (`EM = 0x0000`)
 
 - `0x0000 - 0x0FFF` ROM (4K words)
-- `0x1000` Controller input
 - `0xEC78 - 0xFFFF` VRAM
 - Remaining space available for RAM and VRAM
 
@@ -436,7 +421,7 @@ They are all use bidirectional single lane to send/retrieve data and use same po
 
 ## VF16Pad
 
-Controller state is a level-based snapshot:
+Controller state is a level-based snapshot exposed by a configured port device:
 
 - `1` = Button is currently held
 - `0` = Button is not held

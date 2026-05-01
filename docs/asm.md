@@ -64,12 +64,10 @@ Frame pacing instructions include `WAIT` for cycle-based delays and `VBLANK` for
 
 Extension mode adds the `EM` machine register and the `IN`/`OUT` port I/O instructions in the machine spec. When writing assembly that targets V1.10-capable ROMs, use `EM` to switch between modes:
 
-- Legacy (default, `EM = 0x0000`): the traditional memory-mapped controller interface remains available at `0x1000` and active-register instruction forms are permitted.
+- Legacy (default, `EM = 0x0000`): active-register instruction forms are permitted.
 - Extended (new, `EM = 0x0001`): active-register instruction forms are disabled; the ISA exposes port I/O via `IN`/`OUT` and named port identifiers.
 
 In extended mode ports `0x0000` through `0x0007` are available as 16-bit bidirectional endpoints and return the current device state at the time of execution. The assembler accepts symbolic port names `PORT0`..`PORT7` (case-insensitive) which encode to immediate values `0x0000`..`0x0007` when used as port operands.
-
-Legacy controller input remains memory-mapped at `0x1000` in legacy mode. That input is level-based: the emulator reflects the current button state directly, and the ROM does not need to clear or acknowledge it.
 
 Example (extended mode):
 
