@@ -2,8 +2,15 @@ using System.Text.Json;
 
 namespace FoxVision
 {
+    internal enum PortDeviceKind
+    {
+        None = 0,
+        VF16Pad = 1
+    }
+
     internal sealed class EmulatorOptions
     {
+        internal const int PortCount = 8;
         internal const int DefaultWindowScale = 8;
         internal const int DefaultTargetFps = 60;
         internal const int DefaultExecutionSpeedHz = 8_000_000;
@@ -32,6 +39,7 @@ namespace FoxVision
         internal uint ControllerBKey { get; set; } = ParseEnvUInt("FOXVISION_CONTROLLER_B_KEY", DefaultControllerBKey);
         internal uint ControllerStartKey { get; set; } = ParseEnvUInt("FOXVISION_CONTROLLER_START_KEY", DefaultControllerStartKey);
         internal uint ControllerSelectKey { get; set; } = ParseEnvUInt("FOXVISION_CONTROLLER_SELECT_KEY", DefaultControllerSelectKey);
+        internal PortDeviceKind[] PortDevices { get; set; } = CreateDefaultPortDevices();
 
         // When true, build operations invoked from the GUI will target extended mode
         // (passes `--mode extended` to the FoxC compiler and assembler).
@@ -39,6 +47,7 @@ namespace FoxVision
 
         internal EmulatorOptions()
         {
+            ApplyPortDeviceEnvironmentOverrides();
             ApplySavedInputConfigIfUnset();
         }
 
@@ -53,7 +62,8 @@ namespace FoxVision
                 ControllerAKey = ControllerAKey,
                 ControllerBKey = ControllerBKey,
                 ControllerStartKey = ControllerStartKey,
-                ControllerSelectKey = ControllerSelectKey
+                ControllerSelectKey = ControllerSelectKey,
+                PortDevices = ClonePortDevices(PortDevices)
             };
 
             var configPath = GetInputConfigPath();
@@ -94,10 +104,54 @@ namespace FoxVision
                     ControllerStartKey = saved.ControllerStartKey;
                 if (string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("FOXVISION_CONTROLLER_SELECT_KEY")))
                     ControllerSelectKey = saved.ControllerSelectKey;
+
+                var savedPortDevices = saved.PortDevices;
+                if (savedPortDevices is not null && savedPortDevices.Length == PortCount)
+                {
+                    for (int i = 0; i < PortCount; i++)
+                    {
+                        string envName = $"FOXVISION_PORT{i}_DEVICE";
+                        if (string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable(envName)))
+                            PortDevices[i] = savedPortDevices[i];
+                    }
+                }
             }
             catch
             {
                 // Ignore invalid persisted config and keep current defaults/environment values.
+            }
+        }
+
+        private static PortDeviceKind[] CreateDefaultPortDevices()
+        {
+            var portDevices = new PortDeviceKind[PortCount];
+            portDevices[0] = PortDeviceKind.VF16Pad;
+            return portDevices;
+        }
+
+        private static PortDeviceKind[] ClonePortDevices(IReadOnlyList<PortDeviceKind>? source)
+        {
+            var portDevices = CreateDefaultPortDevices();
+            if (source is null)
+            {
+                return portDevices;
+            }
+
+            int count = Math.Min(PortCount, source.Count);
+            for (int i = 0; i < count; i++)
+            {
+                portDevices[i] = source[i];
+            }
+
+            return portDevices;
+        }
+
+        private void ApplyPortDeviceEnvironmentOverrides()
+        {
+            for (int i = 0; i < PortCount; i++)
+            {
+                string envName = $"FOXVISION_PORT{i}_DEVICE";
+                PortDevices[i] = ParseEnvPortDevice(envName, PortDevices[i]);
             }
         }
 
@@ -121,6 +175,7 @@ namespace FoxVision
             public uint ControllerBKey { get; set; } = DefaultControllerBKey;
             public uint ControllerStartKey { get; set; } = DefaultControllerStartKey;
             public uint ControllerSelectKey { get; set; } = DefaultControllerSelectKey;
+            public PortDeviceKind[] PortDevices { get; set; } = CreateDefaultPortDevices();
         }
 
         private static int ParseEnvInt(string name, int fallback)
@@ -139,6 +194,17 @@ namespace FoxVision
                 return parsed;
 
             return fallback;
+        }
+
+        private static PortDeviceKind ParseEnvPortDevice(string name, PortDeviceKind fallback)
+        {
+            var value = Environment.GetEnvironmentVariable(name);
+            if (string.IsNullOrWhiteSpace(value))
+            {
+                return fallback;
+            }
+
+            return Enum.TryParse(value, true, out PortDeviceKind parsed) ? parsed : fallback;
         }
 
         private static bool ParseEnvBool(string name, bool fallback)

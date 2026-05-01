@@ -99,6 +99,10 @@ namespace FoxVision
                 startInfo.EnvironmentVariables["FOXVISION_CONTROLLER_B_KEY"] = options.ControllerBKey.ToString();
                 startInfo.EnvironmentVariables["FOXVISION_CONTROLLER_START_KEY"] = options.ControllerStartKey.ToString();
                 startInfo.EnvironmentVariables["FOXVISION_CONTROLLER_SELECT_KEY"] = options.ControllerSelectKey.ToString();
+                for (int port = 0; port < options.PortDevices.Length; port++)
+                {
+                    startInfo.EnvironmentVariables[$"FOXVISION_PORT{port}_DEVICE"] = options.PortDevices[port].ToString();
+                }
 
                 Process.Start(startInfo);
                 return true;
@@ -134,8 +138,8 @@ namespace FoxVision
                 ControllerAKey = options.ControllerAKey,
                 ControllerBKey = options.ControllerBKey,
                 ControllerStartKey = options.ControllerStartKey,
-                ControllerSelectKey = options.ControllerSelectKey
-                ,
+                ControllerSelectKey = options.ControllerSelectKey,
+                PortDevices = options.PortDevices.ToArray(),
                 BuildExtended = options.BuildExtended
             };
 

@@ -17,6 +17,7 @@ namespace FoxVision
         private bool _vblankWaitActive;
         private int _vblankSequence;
         private int _vblankWaitSequence;
+        private byte _controllerState;
 
         private const byte StatusPredicateMask = 1 << 0;
         private const byte StatusLessThanMask = 1 << 1;
@@ -37,23 +38,23 @@ namespace FoxVision
         private const ushort RegisterIdSP = 0x0004;
         private const ushort RegisterIdCYC = 0x0005;
         private const ushort RegisterIdEM = 0x0006;
-        private const ushort ControllerStateAddress = 0x1000;
         private const int PortCount = 8;
         private const ushort VramSizeInWords = 5000;
         private const ushort StackStartAddress = (ushort)(ushort.MaxValue - VramSizeInWords);
 
         private readonly Stopwatch timer;
         private readonly ContiguousMemory RAM;
+        private PortDeviceKind[] _portDevices;
         private long _ticksToWaitPerCycle;
         private int _logInstructionEnabled;
         private int _pauseRequested;
 
         internal Processor(ContiguousMemory RAM, int executionSpeedHz, bool logInstruction)
-            : this(RAM, executionSpeedHz, logInstruction, 0)
+            : this(RAM, executionSpeedHz, logInstruction, 0, null)
         {
         }
 
-        internal Processor(ContiguousMemory RAM, int executionSpeedHz, bool logInstruction, ushort initialPC)
+        internal Processor(ContiguousMemory RAM, int executionSpeedHz, bool logInstruction, ushort initialPC, PortDeviceKind[]? portDevices = null)
         {
             this.RAM = RAM;
 
@@ -71,6 +72,8 @@ namespace FoxVision
             _vblankWaitActive = false;
             _vblankSequence = 0;
             _vblankWaitSequence = 0;
+            _controllerState = 0;
+            _portDevices = ClonePortDevices(portDevices);
 
             timer = new Stopwatch();
             SetExecutionSpeedHz(executionSpeedHz);
@@ -152,6 +155,9 @@ namespace FoxVision
         internal void SetInstructionLogging(bool enabled)
             => Interlocked.Exchange(ref _logInstructionEnabled, enabled ? 1 : 0);
 
+        internal void SetPortConfiguration(PortDeviceKind[] portDevices)
+            => Interlocked.Exchange(ref _portDevices, ClonePortDevices(portDevices));
+
         internal void SignalVBlank()
             => Interlocked.Increment(ref _vblankSequence);
 
@@ -174,6 +180,12 @@ namespace FoxVision
             _vblankWaitActive = false;
             _vblankSequence = 0;
             _vblankWaitSequence = 0;
+            _controllerState = 0;
+        }
+
+        internal void LatchControllerButton(byte buttonMask)
+        {
+            _controllerState = (byte)(_controllerState | buttonMask);
         }
 
         private ushort DecodeExecuteInstruction(ushort opcode, ushort first_operand, ushort second_operand)
@@ -711,7 +723,6 @@ namespace FoxVision
         private ushort GetValueOfTheInactiveRegister()
             => IsActiveRegisterY ? regX : regY;
 
-        [Obsolete]
         private void SetValueOfTheActiveRegister(ushort value)
         {
             if (IsActiveRegisterY)
@@ -920,9 +931,10 @@ namespace FoxVision
                 return false;
             }
 
-            if (port == 0)
+            var portDevices = _portDevices;
+            if (port < portDevices.Length && portDevices[port] == PortDeviceKind.VF16Pad)
             {
-                value = RAM.ReadUnchecked(ControllerStateAddress);
+                value = _controllerState;
                 return true;
             }
 
@@ -937,12 +949,35 @@ namespace FoxVision
                 return false;
             }
 
-            if (port == 0)
+            var portDevices = _portDevices;
+            if (port < portDevices.Length && portDevices[port] == PortDeviceKind.VF16Pad)
             {
-                RAM.WriteUnchecked(ControllerStateAddress, value);
+                if (!IsExtendedModeEnabled)
+                {
+                    _controllerState = (byte)(value & 0x00FF);
+                }
             }
 
             return true;
+        }
+
+        private static PortDeviceKind[] ClonePortDevices(IReadOnlyList<PortDeviceKind>? portDevices)
+        {
+            var cloned = new PortDeviceKind[PortCount];
+            cloned[0] = PortDeviceKind.VF16Pad;
+
+            if (portDevices is null)
+            {
+                return cloned;
+            }
+
+            int count = Math.Min(PortCount, portDevices.Count);
+            for (int i = 0; i < count; i++)
+            {
+                cloned[i] = portDevices[i];
+            }
+
+            return cloned;
         }
 
         private static bool SetOutValue(ushort source, out ushort destination)

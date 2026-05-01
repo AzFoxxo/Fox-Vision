@@ -427,3 +427,31 @@ This memory is broken up into several sections.
 - VRAM remains fixed at 5000 bytes (`0xEC78 - 0xFFFF`)
 - Memory-mapped I/O is removed except for VRAM
 - Remaining space available for RAM and VRAM
+
+## Port devices
+
+The machine supports 8 port devices, these are not defined by the CPU ISA as they are platform devices.
+
+They are all use bidirectional single lane to send/retrieve data and use same port type `VF16P` which delivers power and offers single lane for data transfers.
+
+## VF16Pad
+
+Controller state is a level-based snapshot:
+
+- `1` = Button is currently held
+- `0` = Button is not held
+
+State is continuously updated by the emulator from host input events.
+
+Bit layout:
+
+| Bit | Button |
+| --- | ------ |
+| 0   | Up     |
+| 1   | Down   |
+| 2   | Left   |
+| 3   | Right  |
+| 4   | A      |
+| 5   | B      |
+| 6   | Start  |
+| 7   | Select |

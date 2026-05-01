@@ -20,8 +20,6 @@ namespace FoxVision.Components
 
         private const ushort VramStartAddress = 0xFFFF;
         private const ushort VramEndAddress = (ushort)(VramStartAddress - VramSizeInBytes + 1);
-        private const ushort ControllerStateAddress = 0x1000;
-
         private const byte ControllerUpMask = 1 << 0;
         private const byte ControllerDownMask = 1 << 1;
         private const byte ControllerLeftMask = 1 << 2;
@@ -61,6 +59,8 @@ namespace FoxVision.Components
         private readonly Func<int, bool> _setExecutionSpeedRequested;
         private readonly Func<bool, bool> _setInstructionLoggingRequested;
         private readonly Func<bool, bool> _setPauseRequested;
+        private readonly Func<EmulatorOptions, bool> _setPortConfigurationRequested;
+        private readonly Func<byte, bool> _setControllerStateRequested;
         private readonly Func<ulong> _getProcessorCycleCountRequested;
         private readonly System.Action _signalVBlankRequested;
         private readonly Func<bool> _showDecompRequested;
@@ -85,6 +85,7 @@ namespace FoxVision.Components
         private readonly SurfacePattern _framePattern;
         private readonly Window _window;
         private readonly DrawingArea _drawingArea;
+        private readonly Gtk.Menu _portDevicesMenu;
         private uint _frameTimerId;
         private Window? _memoryWindow;
         private TextView? _memoryTextView;
@@ -126,6 +127,8 @@ namespace FoxVision.Components
             Func<int, bool> setExecutionSpeedRequested,
             Func<bool, bool> setInstructionLoggingRequested,
             Func<bool, bool> setPauseRequested,
+            Func<EmulatorOptions, bool> setPortConfigurationRequested,
+            Func<byte, bool> setControllerStateRequested,
             Func<ulong> getProcessorCycleCountRequested,
             System.Action signalVBlankRequested,
             Func<bool> showDecompRequested)
@@ -144,6 +147,8 @@ namespace FoxVision.Components
             _setExecutionSpeedRequested = setExecutionSpeedRequested;
             _setInstructionLoggingRequested = setInstructionLoggingRequested;
             _setPauseRequested = setPauseRequested;
+            _setPortConfigurationRequested = setPortConfigurationRequested;
+            _setControllerStateRequested = setControllerStateRequested;
             _getProcessorCycleCountRequested = getProcessorCycleCountRequested;
             _signalVBlankRequested = signalVBlankRequested;
             _showDecompRequested = showDecompRequested;
@@ -276,6 +281,12 @@ namespace FoxVision.Components
             executionSpeedItem.Activated += (_, _) => ShowExecutionSpeedDialog();
             emulatorMenu.Append(executionSpeedItem);
 
+            var portDevicesItem = new Gtk.MenuItem("Port devices");
+            _portDevicesMenu = new Gtk.Menu();
+            portDevicesItem.Submenu = _portDevicesMenu;
+            emulatorMenu.Append(portDevicesItem);
+            RefreshPortDevicesMenu();
+
             emulatorMenu.ShowAll();
             emulatorButton.Popup = emulatorMenu;
             headerBar.PackStart(emulatorButton);
@@ -382,9 +393,6 @@ namespace FoxVision.Components
             _window.Add(outerBox);
             _window.ShowAll();
             _drawingArea.GrabFocus();
-
-            // Controller state is exposed as a memory-mapped byte at 0x1000.
-            _ram.WriteUnchecked(ControllerStateAddress, 0);
 
             _frameTimerId = GLib.Timeout.Add((uint)Math.Max(1, 1000 / _targetFps), OnFrameTick);
 
@@ -732,14 +740,7 @@ namespace FoxVision.Components
 
         private void LatchControllerButton(byte buttonMask)
         {
-            // Controller input is latched: key press sets the corresponding bit,
-            // and release does not clear it. ROM code must clear 0x1000 explicitly.
-            byte currentState = (byte)(_ram.ReadUnchecked(ControllerStateAddress) & 0x00FF);
-            byte nextState = (byte)(currentState | buttonMask);
-            if (nextState != currentState)
-            {
-                _ram.WriteUnchecked(ControllerStateAddress, nextState);
-            }
+            _setControllerStateRequested(buttonMask);
         }
 
         private bool TryMapKeyToControllerMask(uint keyValue, out byte buttonMask)
@@ -875,7 +876,7 @@ namespace FoxVision.Components
             };
 
             captureDialog.AddButton("Cancel", ResponseType.Cancel);
-            captureDialog.AddEvents((int)Gdk.EventMask.KeyPressMask);
+            captureDialog.AddEvents((int)(Gdk.EventMask.KeyPressMask | Gdk.EventMask.FocusChangeMask));
 
             captureDialog.ContentArea.Add(new Label("Press any key to bind this controller button.")
             {
@@ -886,6 +887,36 @@ namespace FoxVision.Components
                 Wrap = true
             });
 
+            var captureEntry = new Entry()
+            {
+                WidthChars = 1,
+                HasFrame = false,
+                IsEditable = false
+            };
+            captureEntry.CanFocus = true;
+            captureEntry.AddEvents((int)Gdk.EventMask.KeyPressMask);
+            captureEntry.KeyPressEvent += (_, args) =>
+            {
+                var keyValue = args.Event.KeyValue;
+                if ((Gdk.Key)keyValue == Gdk.Key.Escape)
+                {
+                    captureDialog.Respond(ResponseType.Cancel);
+                    args.RetVal = true;
+                    return;
+                }
+
+                SetControllerKey(_currentOptions, button, keyValue);
+                mappingLabel.Text = GetKeyDisplayName(GetControllerKey(_currentOptions, button));
+                captureDialog.Respond(ResponseType.Ok);
+                args.RetVal = true;
+            };
+
+            // Add hidden entry and focus it so we reliably receive arrow keys.
+            captureDialog.ContentArea.Add(captureEntry);
+            captureDialog.ShowAll();
+            try { captureEntry.GrabFocus(); } catch { }
+
+            // Also attach handler to dialog as a fallback.
             captureDialog.KeyPressEvent += (_, args) =>
             {
                 var keyValue = args.Event.KeyValue;
@@ -902,7 +933,6 @@ namespace FoxVision.Components
                 args.RetVal = true;
             };
 
-            captureDialog.ShowAll();
             captureDialog.Run();
             captureDialog.Destroy();
         }
@@ -920,6 +950,146 @@ namespace FoxVision.Components
                 ControllerButton.Start => options.ControllerStartKey,
                 ControllerButton.Select => options.ControllerSelectKey,
                 _ => 0
+            };
+        }
+
+        private void RefreshPortDevicesMenu()
+        {
+            foreach (Widget child in _portDevicesMenu.Children)
+            {
+                _portDevicesMenu.Remove(child);
+                child.Destroy();
+            }
+
+            for (int port = 0; port < EmulatorOptions.PortCount; port++)
+            {
+                var currentDevice = _currentOptions.PortDevices[port];
+                var portItem = new Gtk.MenuItem($"{port + 1} | {GetPortDeviceDisplayName(currentDevice)}");
+                portItem.Submenu = BuildPortDeviceMenu(port);
+                _portDevicesMenu.Append(portItem);
+            }
+
+            _portDevicesMenu.ShowAll();
+        }
+
+        private Gtk.Menu BuildPortDeviceMenu(int portIndex)
+        {
+            var menu = new Gtk.Menu();
+
+            var selectDeviceItem = new Gtk.MenuItem("Select device");
+            selectDeviceItem.Submenu = BuildPortDeviceSelectionMenu(portIndex);
+            menu.Append(selectDeviceItem);
+
+            var configureItem = new Gtk.MenuItem("Configure device");
+            var configureMenu = BuildPortDeviceConfigurationMenu(portIndex);
+            bool hasConfigurationEntries = false;
+            foreach (Widget child in configureMenu.Children)
+            {
+                hasConfigurationEntries = true;
+                break;
+            }
+
+            if (!hasConfigurationEntries)
+            {
+                configureItem.Sensitive = false;
+            }
+
+            configureItem.Submenu = configureMenu;
+            menu.Append(configureItem);
+            menu.ShowAll();
+
+            return menu;
+        }
+
+        private Gtk.Menu BuildPortDeviceSelectionMenu(int portIndex)
+        {
+            var menu = new Gtk.Menu();
+
+            var noneItem = new RadioMenuItem("None");
+            noneItem.Active = _currentOptions.PortDevices[portIndex] == PortDeviceKind.None;
+            noneItem.Activated += (_, _) =>
+            {
+                if (noneItem.Active)
+                {
+                    ApplyPortDeviceSelection(portIndex, PortDeviceKind.None);
+                }
+            };
+            menu.Append(noneItem);
+
+            var vf16PadItem = new RadioMenuItem(noneItem.Group, "VF16Pad");
+            vf16PadItem.Active = _currentOptions.PortDevices[portIndex] == PortDeviceKind.VF16Pad;
+            vf16PadItem.Activated += (_, _) =>
+            {
+                if (vf16PadItem.Active)
+                {
+                    ApplyPortDeviceSelection(portIndex, PortDeviceKind.VF16Pad);
+                }
+            };
+            menu.Append(vf16PadItem);
+
+            menu.ShowAll();
+            return menu;
+        }
+
+        private Gtk.Menu BuildPortDeviceConfigurationMenu(int portIndex)
+        {
+            var menu = new Gtk.Menu();
+            var deviceKind = _currentOptions.PortDevices[portIndex];
+
+            switch (deviceKind)
+            {
+                case PortDeviceKind.VF16Pad:
+                {
+                    var controllerConfigItem = new Gtk.MenuItem("Controller configuration");
+                    controllerConfigItem.Activated += (_, _) => ShowControllerConfigurationDialog();
+                    menu.Append(controllerConfigItem);
+
+                    var saveInputItem = new Gtk.MenuItem("Save input configuration");
+                    saveInputItem.Activated += (_, _) => SaveInputConfiguration();
+                    menu.Append(saveInputItem);
+                    break;
+                }
+            }
+
+            bool hasConfigurationEntries = false;
+            foreach (Widget child in menu.Children)
+            {
+                hasConfigurationEntries = true;
+                break;
+            }
+
+            if (!hasConfigurationEntries)
+            {
+                var emptyItem = new Gtk.MenuItem("No configuration available")
+                {
+                    Sensitive = false
+                };
+                menu.Append(emptyItem);
+            }
+
+            menu.ShowAll();
+            return menu;
+        }
+
+        private void ApplyPortDeviceSelection(int portIndex, PortDeviceKind deviceKind)
+        {
+            var updatedOptions = CloneOptions(_currentOptions);
+            updatedOptions.PortDevices[portIndex] = deviceKind;
+
+            if (_setPortConfigurationRequested(updatedOptions))
+            {
+                _currentOptions.PortDevices = updatedOptions.PortDevices;
+                RefreshPortDevicesMenu();
+            }
+        }
+
+        private static string GetPortDeviceDisplayName(PortDeviceKind deviceKind)
+        {
+            return deviceKind switch
+            {
+                PortDeviceKind.None => "None",
+                PortDeviceKind.VF16Pad => "VF16Pad",
+                _ => deviceKind.ToString()
             };
         }
 
@@ -1201,6 +1371,7 @@ namespace FoxVision.Components
                 ControllerStartKey = options.ControllerStartKey,
                 ControllerSelectKey = options.ControllerSelectKey
                 ,
+                PortDevices = options.PortDevices.ToArray(),
                 BuildExtended = options.BuildExtended
             };
         }

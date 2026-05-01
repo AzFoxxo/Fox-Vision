@@ -23,7 +23,7 @@ namespace FoxVision
             bool loadedRom = LoadRomIntoMemory(_currentRom);
 
             // Create the CPU
-            _processor = new(_unprotectedMemory, _options.ExecutionSpeedHz, _options.LogInstruction, _currentRom.StartAddress);
+            _processor = new(_unprotectedMemory, _options.ExecutionSpeedHz, _options.LogInstruction, _currentRom.StartAddress, _options.PortDevices);
             if (loadedRom)
             {
                 StartCpuThread();
@@ -47,6 +47,17 @@ namespace FoxVision
                 paused =>
                 {
                     _processor.SetPaused(paused);
+                    return true;
+                },
+                portConfig =>
+                {
+                    _processor.SetPortConfiguration(portConfig.PortDevices);
+                    _options.PortDevices = portConfig.PortDevices.ToArray();
+                    return true;
+                },
+                buttonMask =>
+                {
+                    _processor.LatchControllerButton(buttonMask);
                     return true;
                 },
                 () => _processor.GetCycleCount(),
@@ -90,11 +101,13 @@ namespace FoxVision
                 }
 
                 _processor = new Processor(_unprotectedMemory, updated.ExecutionSpeedHz, updated.LogInstruction, romImage.StartAddress);
+                _processor.SetPortConfiguration(updated.PortDevices);
                 StartCpuThread();
                 _currentRom = romImage;
                 _options.RomPath = updated.RomPath;
                 _options.ExecutionSpeedHz = updated.ExecutionSpeedHz;
                 _options.LogInstruction = updated.LogInstruction;
+                _options.PortDevices = updated.PortDevices.ToArray();
             }
 
             return true;
