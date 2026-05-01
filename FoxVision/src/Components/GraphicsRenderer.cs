@@ -361,10 +361,6 @@ namespace FoxVision.Components
             controllerConfigItem.Activated += (_, _) => ShowControllerConfigurationDialog();
             settingsMenu.Append(controllerConfigItem);
 
-            var saveInputConfigItem = new Gtk.MenuItem("Save Input Configuration");
-            saveInputConfigItem.Activated += (_, _) => SaveInputConfiguration();
-            settingsMenu.Append(saveInputConfigItem);
-
             settingsMenu.ShowAll();
             settingsButton.Popup = settingsMenu;
             headerBar.PackStart(settingsButton);
@@ -877,6 +873,7 @@ namespace FoxVision.Components
 
             captureDialog.AddButton("Cancel", ResponseType.Cancel);
             captureDialog.AddEvents((int)(Gdk.EventMask.KeyPressMask | Gdk.EventMask.FocusChangeMask));
+            captureDialog.CanFocus = true;
 
             captureDialog.ContentArea.Add(new Label("Press any key to bind this controller button.")
             {
@@ -887,15 +884,13 @@ namespace FoxVision.Components
                 Wrap = true
             });
 
-            var captureEntry = new Entry()
+            var captureSurface = new EventBox
             {
-                WidthChars = 1,
-                HasFrame = false,
-                IsEditable = false
+                VisibleWindow = false,
+                CanFocus = true
             };
-            captureEntry.CanFocus = true;
-            captureEntry.AddEvents((int)Gdk.EventMask.KeyPressMask);
-            captureEntry.KeyPressEvent += (_, args) =>
+            captureSurface.AddEvents((int)(Gdk.EventMask.KeyPressMask | Gdk.EventMask.FocusChangeMask));
+            captureSurface.KeyPressEvent += (_, args) =>
             {
                 var keyValue = args.Event.KeyValue;
                 if ((Gdk.Key)keyValue == Gdk.Key.Escape)
@@ -911,27 +906,23 @@ namespace FoxVision.Components
                 args.RetVal = true;
             };
 
-            // Add hidden entry and focus it so we reliably receive arrow keys.
-            captureDialog.ContentArea.Add(captureEntry);
+            captureSurface.Add(new Label("Press any key to bind this controller button.")
+            {
+                MarginTop = 16,
+                MarginBottom = 16,
+                MarginStart = 16,
+                MarginEnd = 16,
+                Wrap = true
+            });
+
+            captureDialog.ContentArea.Add(captureSurface);
+
             captureDialog.ShowAll();
-            try { captureEntry.GrabFocus(); } catch { }
-
-            // Also attach handler to dialog as a fallback.
-            captureDialog.KeyPressEvent += (_, args) =>
+            GLib.Idle.Add(() =>
             {
-                var keyValue = args.Event.KeyValue;
-                if ((Gdk.Key)keyValue == Gdk.Key.Escape)
-                {
-                    captureDialog.Respond(ResponseType.Cancel);
-                    args.RetVal = true;
-                    return;
-                }
-
-                SetControllerKey(_currentOptions, button, keyValue);
-                mappingLabel.Text = GetKeyDisplayName(GetControllerKey(_currentOptions, button));
-                captureDialog.Respond(ResponseType.Ok);
-                args.RetVal = true;
-            };
+                try { captureSurface.GrabFocus(); } catch { }
+                return false;
+            });
 
             captureDialog.Run();
             captureDialog.Destroy();
