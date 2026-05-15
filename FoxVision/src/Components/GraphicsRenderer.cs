@@ -1258,6 +1258,18 @@ namespace FoxVision.Components
         {
             var menu = new Gtk.Menu();
 
+            if (portIndex == _currentOptions.FixedTtyPortIndex)
+            {
+                var fixedItem = new RadioMenuItem("VF16TTY")
+                {
+                    Active = true,
+                    Sensitive = false
+                };
+                menu.Append(fixedItem);
+                menu.ShowAll();
+                return menu;
+            }
+
             var noneItem = new RadioMenuItem("None");
             noneItem.Active = _currentOptions.PortDevices[portIndex] == PortDeviceKind.None;
             noneItem.Activated += (_, _) =>
@@ -1301,6 +1313,17 @@ namespace FoxVision.Components
                 }
             };
             menu.Append(vf16MouseItem);
+
+            var vf16TtyItem = new RadioMenuItem(noneItem.Group, "VF16TTY");
+            vf16TtyItem.Active = _currentOptions.PortDevices[portIndex] == PortDeviceKind.VF16TTY;
+            vf16TtyItem.Activated += (_, _) =>
+            {
+                if (vf16TtyItem.Active)
+                {
+                    ApplyPortDeviceSelection(portIndex, PortDeviceKind.VF16TTY);
+                }
+            };
+            menu.Append(vf16TtyItem);
 
             menu.ShowAll();
             return menu;
@@ -1359,6 +1382,11 @@ namespace FoxVision.Components
 
         private void ApplyPortDeviceSelection(int portIndex, PortDeviceKind deviceKind)
         {
+            if (portIndex == _currentOptions.FixedTtyPortIndex)
+            {
+                deviceKind = PortDeviceKind.VF16TTY;
+            }
+
             var updatedOptions = CloneOptions(_currentOptions);
             updatedOptions.PortDevices[portIndex] = deviceKind;
 
@@ -1377,6 +1405,7 @@ namespace FoxVision.Components
                 PortDeviceKind.VF16Pad => "VF16Pad",
                 PortDeviceKind.VF16Keyboard => "VF16Keyboard",
                 PortDeviceKind.VF16Mouse => "VF16Mouse",
+                PortDeviceKind.VF16TTY => "VF16TTY",
                 _ => deviceKind.ToString()
             };
         }
@@ -1702,8 +1731,8 @@ namespace FoxVision.Components
                 ControllerAKey = options.ControllerAKey,
                 ControllerBKey = options.ControllerBKey,
                 ControllerStartKey = options.ControllerStartKey,
-                ControllerSelectKey = options.ControllerSelectKey
-                ,
+                ControllerSelectKey = options.ControllerSelectKey,
+                FixedTtyPortIndex = options.FixedTtyPortIndex,
                 PortDevices = options.PortDevices.ToArray(),
                 BuildExtended = options.BuildExtended
             };

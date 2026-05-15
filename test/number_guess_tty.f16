@@ -1,0 +1,252 @@
+:main
+; Number guessing game over VF16TTY.
+; Guess a number from 1 to 100.
+; Secret is derived from the cycle counter on first interaction.
+
+MOV %1 EM
+MOV %0 X
+STR X $2000
+STR X $2001
+STR X $2002
+STR X $2003
+STR X $2004
+
+; Prompt: Guess 1-100:
+MOV %71 X
+OUT X PORT4
+MOV %117 X
+OUT X PORT4
+MOV %101 X
+OUT X PORT4
+MOV %115 X
+OUT X PORT4
+MOV %115 X
+OUT X PORT4
+MOV %32 X
+OUT X PORT4
+MOV %49 X
+OUT X PORT4
+MOV %45 X
+OUT X PORT4
+MOV %49 X
+OUT X PORT4
+MOV %48 X
+OUT X PORT4
+MOV %48 X
+OUT X PORT4
+MOV %58 X
+OUT X PORT4
+MOV %10 X
+OUT X PORT4
+
+:input_loop
+IN PORT4 Y
+MOV Y X
+MOV %13 Y
+CMP
+JEQ evaluate
+MOV %8 Y
+CMP
+JEQ backspace
+MOV %48 Y
+CMP
+JLT input_loop
+MOV %57 Y
+CMP
+JGT input_loop
+; Echo the digit so the player can see what was entered.
+STR X $2003
+LOD Y $2002
+MOV %0 X
+CMP
+JEQ seed_from_digit
+JMP seed_from_digit_done
+
+:seed_from_digit
+MOV CYC X
+AND %127 X
+MOV %0 Y
+CMP
+JEQ seed_from_digit_is_zero
+MOV %100 Y
+CMP
+JGT seed_from_digit_above_hundred
+JMP seed_from_digit_ready
+
+:seed_from_digit_is_zero
+MOV %1 X
+JMP seed_from_digit_ready
+
+:seed_from_digit_above_hundred
+SUB %100 X
+MOV %0 Y
+CMP
+JEQ seed_from_digit_is_zero
+
+:seed_from_digit_ready
+STR X $2004
+MOV %1 X
+STR X $2002
+
+:seed_from_digit_done
+LOD X $2003
+OUT X PORT4
+SUB %48 X
+LOD Y $2000
+MUL %10 Y
+ADD X Y
+STR Y $2000
+LOD Y $2001
+ADD %1 Y
+STR Y $2001
+JMP input_loop
+
+:backspace
+LOD X $2001
+MOV %0 Y
+CMP
+JEQ input_loop
+MOV %8 X
+OUT X PORT4
+MOV %32 X
+OUT X PORT4
+MOV %8 X
+OUT X PORT4
+LOD Y $2000
+DIV %10 Y
+STR Y $2000
+LOD Y $2001
+SUB %1 Y
+STR Y $2001
+JMP input_loop
+
+:evaluate
+MOV %10 X
+OUT X PORT4
+LOD Y $2002
+MOV %0 X
+CMP
+JEQ seed_from_enter
+JMP seed_from_enter_done
+
+:seed_from_enter
+MOV CYC X
+AND %127 X
+MOV %0 Y
+CMP
+JEQ seed_from_enter_is_zero
+MOV %100 Y
+CMP
+JGT seed_from_enter_above_hundred
+JMP seed_from_enter_ready
+
+:seed_from_enter_is_zero
+MOV %1 X
+JMP seed_from_enter_ready
+
+:seed_from_enter_above_hundred
+SUB %100 X
+MOV %0 Y
+CMP
+JEQ seed_from_enter_is_zero
+
+:seed_from_enter_ready
+STR X $2004
+MOV %1 X
+STR X $2002
+
+:seed_from_enter_done
+LOD X $2000
+MOV %1 Y
+CMP
+JLT invalid
+MOV %100 Y
+CMP
+JGT invalid
+LOD Y $2004
+CMP
+JEQ correct
+JLT higher
+JGT lower
+
+:invalid
+MOV %73 X
+OUT X PORT4
+MOV %110 X
+OUT X PORT4
+MOV %118 X
+OUT X PORT4
+MOV %97 X
+OUT X PORT4
+MOV %108 X
+OUT X PORT4
+MOV %105 X
+OUT X PORT4
+MOV %100 X
+OUT X PORT4
+MOV %10 X
+OUT X PORT4
+MOV %0 X
+STR X $2000
+STR X $2001
+JMP input_loop
+
+:lower
+MOV %76 X
+OUT X PORT4
+MOV %111 X
+OUT X PORT4
+MOV %119 X
+OUT X PORT4
+MOV %101 X
+OUT X PORT4
+MOV %114 X
+OUT X PORT4
+MOV %10 X
+OUT X PORT4
+MOV %0 X
+STR X $2000
+STR X $2001
+JMP input_loop
+
+:higher
+MOV %72 X
+OUT X PORT4
+MOV %105 X
+OUT X PORT4
+MOV %103 X
+OUT X PORT4
+MOV %104 X
+OUT X PORT4
+MOV %101 X
+OUT X PORT4
+MOV %114 X
+OUT X PORT4
+MOV %10 X
+OUT X PORT4
+MOV %0 X
+STR X $2000
+STR X $2001
+JMP input_loop
+
+:correct
+MOV %67 X
+OUT X PORT4
+MOV %111 X
+OUT X PORT4
+MOV %114 X
+OUT X PORT4
+MOV %114 X
+OUT X PORT4
+MOV %101 X
+OUT X PORT4
+MOV %99 X
+OUT X PORT4
+MOV %116 X
+OUT X PORT4
+MOV %33 X
+OUT X PORT4
+MOV %10 X
+OUT X PORT4
+STR X $2001
+HLT

@@ -152,7 +152,17 @@ V1.3 controller support is deprecated. To use controllers, ROMs must run in exte
 
 **NOTE:** V1.10 (`EM=1` mode) introduces ports. When enabled, the system exposes eight generic 16-bit I/O ports (`0x0000`–`0x0007`). Ports are simple bidirectional data endpoints with no fixed semantic meaning in the ISA. Device behaviour is defined externally by the emulator/system configuration.
 
-In a typical configuration, controller devices may be mapped by the emulator to PORT0 (`0x0000`) and PORT1 (`0x0001`), each exposing a 16-bit input state. This mapping is not part of the CPU specification and is fully implementation-defined.
+Default emulator port convention:
+
+- PORT0 (`0x0000`) - VF16Pad Player 1
+- PORT1 (`0x0001`) - VF16Pad Player 2
+- PORT2 (`0x0002`) - VF16Keyboard
+- PORT3 (`0x0003`) - VF16Mouse
+- PORT4 (`0x0004`) - VF16TTY
+
+Ports `0x0005` through `0x0007` are available for additional emulator-defined devices or custom mappings.
+
+This mapping is the emulator's convention, not a CPU requirement. Device behaviour remains implementation-defined.
 
 Device state (including controllers) is maintained continuously by the emulator as a live snapshot. The CPU does not receive input events and does not rely on buffering, latching, or consumption semantics.
 
@@ -515,3 +525,29 @@ Bit layout:
 | 5   | B      |
 | 6   | Start  |
 | 7   | Select |
+
+## VF16TTY
+
+The `VF16TTY` port device behaves like a simple ASCII teletype on a single port.
+It is fixed to the fifth port in the default emulator layout (`PORT5` in the UI, assembler port `PORT4`, zero-based index `4`).
+
+Port layout:
+- `OUT` writes the low byte as an ASCII character to the console
+- `IN` reads the next available ASCII character from the console into the low byte
+- High byte is reserved and currently reads as `0x0000`
+
+Behaviour notes:
+- Output is immediate from the ROM’s perspective.
+- Input is polled; if no character is available, `IN` returns `0x0000`.
+- ASCII values are returned as 7-bit/8-bit character codes.
+- Non-ASCII keys are translated to `?`.
+- Enter, tab, and backspace are translated to standard ASCII control codes (`0x0D`, `0x09`, `0x08`).
+
+Examples:
+- `0x0041` written via `OUT` prints `A`
+- `IN` returning `0x0061` means the user typed `a`
+- `IN` returning `0x000D` means the user pressed Enter
+
+Programming model:
+- Use `IN PORT DST` to poll console input and `OUT SRC PORT` to emit console output.
+- ROMs should treat `0x0000` as no input available.

@@ -99,6 +99,7 @@ namespace FoxVision
                 startInfo.EnvironmentVariables["FOXVISION_CONTROLLER_B_KEY"] = options.ControllerBKey.ToString();
                 startInfo.EnvironmentVariables["FOXVISION_CONTROLLER_START_KEY"] = options.ControllerStartKey.ToString();
                 startInfo.EnvironmentVariables["FOXVISION_CONTROLLER_SELECT_KEY"] = options.ControllerSelectKey.ToString();
+                startInfo.EnvironmentVariables["FOXVISION_TTY_PORT_INDEX"] = options.FixedTtyPortIndex.ToString();
                 startInfo.EnvironmentVariables["FOXVISION_KEYBOARD_LAYOUT"] = options.KeyboardLayout ?? string.Empty;
                 for (int port = 0; port < options.PortDevices.Length; port++)
                 {
@@ -140,6 +141,7 @@ namespace FoxVision
                 ControllerBKey = options.ControllerBKey,
                 ControllerStartKey = options.ControllerStartKey,
                 ControllerSelectKey = options.ControllerSelectKey,
+                FixedTtyPortIndex = options.FixedTtyPortIndex,
                 PortDevices = options.PortDevices.ToArray(),
                 BuildExtended = options.BuildExtended
             };

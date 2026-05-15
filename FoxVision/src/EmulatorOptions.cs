@@ -8,7 +8,8 @@ namespace FoxVision
         VF16Pad = 1,
         VF16Keyboard = 2
         ,
-        VF16Mouse = 3
+        VF16Mouse = 3,
+        VF16TTY = 4
     }
 
     internal sealed class EmulatorOptions
@@ -42,6 +43,7 @@ namespace FoxVision
         internal uint ControllerBKey { get; set; } = ParseEnvUInt("FOXVISION_CONTROLLER_B_KEY", DefaultControllerBKey);
         internal uint ControllerStartKey { get; set; } = ParseEnvUInt("FOXVISION_CONTROLLER_START_KEY", DefaultControllerStartKey);
         internal uint ControllerSelectKey { get; set; } = ParseEnvUInt("FOXVISION_CONTROLLER_SELECT_KEY", DefaultControllerSelectKey);
+        internal int FixedTtyPortIndex { get; set; } = ParseEnvInt("FOXVISION_TTY_PORT_INDEX", 4);
         internal PortDeviceKind[] PortDevices { get; set; } = CreateDefaultPortDevices();
 
         // When true, build operations invoked from the GUI will target extended mode
@@ -67,6 +69,7 @@ namespace FoxVision
                 ControllerBKey = ControllerBKey,
                 ControllerStartKey = ControllerStartKey,
                 ControllerSelectKey = ControllerSelectKey,
+                FixedTtyPortIndex = FixedTtyPortIndex,
                 PortDevices = ClonePortDevices(PortDevices)
             };
             // include keyboard layout
@@ -111,6 +114,9 @@ namespace FoxVision
                 if (string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("FOXVISION_CONTROLLER_SELECT_KEY")))
                     ControllerSelectKey = saved.ControllerSelectKey;
 
+                if (string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("FOXVISION_TTY_PORT_INDEX")))
+                    FixedTtyPortIndex = saved.FixedTtyPortIndex;
+
                 if (string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("FOXVISION_KEYBOARD_LAYOUT")))
                     KeyboardLayout = saved.KeyboardLayout;
 
@@ -124,6 +130,8 @@ namespace FoxVision
                             PortDevices[i] = savedPortDevices[i];
                     }
                 }
+
+                NormalizeFixedPortDevices();
             }
             catch
             {
@@ -165,7 +173,30 @@ namespace FoxVision
                 string envName = $"FOXVISION_PORT{i}_DEVICE";
                 PortDevices[i] = ParseEnvPortDevice(envName, PortDevices[i]);
             }
+
+            NormalizeFixedPortDevices();
         }
+
+        private void NormalizeFixedPortDevices()
+        {
+            int fixedTtyPortIndex = GetNormalizedFixedTtyPortIndex();
+            for (int i = 0; i < PortCount; i++)
+            {
+                if (i == fixedTtyPortIndex)
+                {
+                    PortDevices[i] = PortDeviceKind.VF16TTY;
+                }
+                else if (PortDevices[i] == PortDeviceKind.VF16TTY)
+                {
+                    PortDevices[i] = PortDeviceKind.None;
+                }
+            }
+
+            FixedTtyPortIndex = fixedTtyPortIndex;
+        }
+
+        private int GetNormalizedFixedTtyPortIndex()
+            => Math.Clamp(FixedTtyPortIndex, 0, PortCount - 1);
 
         private static string GetInputConfigPath()
         {
@@ -187,6 +218,7 @@ namespace FoxVision
             public uint ControllerBKey { get; set; } = DefaultControllerBKey;
             public uint ControllerStartKey { get; set; } = DefaultControllerStartKey;
             public uint ControllerSelectKey { get; set; } = DefaultControllerSelectKey;
+            public int FixedTtyPortIndex { get; set; } = 4;
             public PortDeviceKind[] PortDevices { get; set; } = CreateDefaultPortDevices();
             public string KeyboardLayout { get; set; } = string.Empty;
         }

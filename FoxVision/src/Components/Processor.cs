@@ -25,6 +25,8 @@ namespace FoxVision
         private sbyte _mouseDX;
         private sbyte _mouseDY;
         private readonly object _mouseLock = new();
+        private readonly Queue<ushort> _ttyInputBuffer = new();
+        private readonly object _ttyLock = new();
 
         private const byte StatusPredicateMask = 1 << 0;
         private const byte StatusLessThanMask = 1 << 1;
@@ -188,6 +190,10 @@ namespace FoxVision
             _vblankSequence = 0;
             _vblankWaitSequence = 0;
             _controllerState = 0;
+            lock (_ttyLock)
+            {
+                _ttyInputBuffer.Clear();
+            }
         }
 
         internal void LatchControllerButton(byte buttonMask)
@@ -993,10 +999,62 @@ namespace FoxVision
                     }
                     return true;
                 }
+
+                if (kind == PortDeviceKind.VF16TTY)
+                {
+                    lock (_ttyLock)
+                    {
+                        if (_ttyInputBuffer.Count == 0)
+                        {
+                            PumpTtyInputBuffer();
+                        }
+
+                        value = _ttyInputBuffer.Count > 0 ? _ttyInputBuffer.Dequeue() : (ushort)0;
+                    }
+
+                    return true;
+                }
             }
 
             value = 0;
             return true;
+        }
+
+        private void PumpTtyInputBuffer()
+        {
+            try
+            {
+                while (Console.KeyAvailable)
+                {
+                    var keyInfo = Console.ReadKey(intercept: true);
+                    ushort ascii = NormalizeConsoleKeyToAscii(keyInfo.KeyChar, keyInfo.Key);
+                    if (ascii != 0)
+                    {
+                        _ttyInputBuffer.Enqueue(ascii);
+                    }
+                }
+            }
+            catch
+            {
+                // No console available or input not supported in this environment.
+            }
+        }
+
+        private static ushort NormalizeConsoleKeyToAscii(char keyChar, ConsoleKey key)
+        {
+            if (key == ConsoleKey.Enter)
+                return 0x000D;
+
+            if (key == ConsoleKey.Backspace)
+                return 0x0008;
+
+            if (key == ConsoleKey.Tab)
+                return 0x0009;
+
+            if (keyChar == '\0')
+                return 0;
+
+            return keyChar <= 0x7F ? (ushort)keyChar : (ushort)'?';
         }
 
         private static ushort PackSigned5(sbyte value)
@@ -1028,6 +1086,21 @@ namespace FoxVision
                 {
                     // OUT to a keyboard port is a no-op in current implementation
                     // Future: support LED state (NumLock/CapsLock) in high bits.
+                }
+
+                if (kind == PortDeviceKind.VF16TTY)
+                {
+                    char outputChar = (char)(value & 0x00FF);
+                    if (outputChar == '\n')
+                    {
+                        Console.WriteLine();
+                    }
+                    else
+                    {
+                        Console.Write(outputChar);
+                    }
+
+                    return true;
                 }
             }
 
