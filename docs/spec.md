@@ -195,6 +195,81 @@ Examples:
 
 ---
 
+## Basic VF16Keyboard Port Layout
+
+The `VF16Keyboard` port device encodes a conventional keyboard report into a single 16-bit value suitable for a 16-bit port bus. The encoding mirrors the common USB HID keyboard report's modifier + usage organisation so ROMs and host mappings can be consistent with existing keyboard tooling.
+
+Format (bits):
+
+- Bits 0–7 (low byte): USB HID usage ID (keycode) for a single non-modifier key (0x00 = none). Usage IDs follow the USB HID Usage Tables for keyboards (e.g. `0x04` = `A`, `0x05` = `B`, `0x28` = Enter).
+- Bits 8–15 (high byte): Modifier bitmap (same bit positions as USB HID modifiers):
+
+| Bit | Modifier | Meaning                  |
+| --- | -------- | ------------------------ |
+| 8   | LCTRL    | Left Control             |
+| 9   | LSHIFT   | Left Shift               |
+| 10  | LALT     | Left Alt                 |
+| 11  | LGUI     | Left GUI / Meta / OS key |
+| 12  | RCTRL    | Right Control            |
+| 13  | RSHIFT   | Right Shift              |
+| 14  | RALT     | Right Alt / AltGr        |
+| 15  | RGUI     | Right GUI / Meta         |
+
+Behaviour notes:
+
+- The keyboard port provides a stateless snapshot: each `IN` returns the current modifier mask and a single representative usage ID (no event queueing).
+- When multiple non-modifier keys are held simultaneously, the emulator selects a single usage ID to expose (recommendation: the most-recently-pressed non-modifier key). ROM authors should not rely on full N-key rollover via this 16-bit encoding.
+- Modifiers are independent bits; combinations behave predictably (for example Left Shift + `A` uses usage `0x04` with `LSHIFT` bit set in the high byte).
+- Control and non-printable keys use their HID usage IDs (for example `0x28` = Enter, `0x2A` = Backspace, `0x2B` = Tab, `0x29` = Escape). When no non-modifier key is held the low byte is `0x00`.
+
+Port mapping and configuration:
+
+- Map `VF16Keyboard` via the same `FOXVISION_PORT<N>_DEVICE` environment variables (for example `FOXVISION_PORT0_DEVICE=VF16Keyboard`).
+- Host-to-HID mapping (layouts, key repeat, dead-keys) is implementation-defined; the emulator may expose `FOXVISION_KEYBOARD_LAYOUT` or GUI settings to control translation (recommended: follow platform-native layout mapping to HID usage IDs).
+
+Examples:
+
+- `0x0000` — No key held
+- `0x0004` — `A` held (HID usage `0x04`, no modifiers)
+- `0x0204` — `A` held with Left Shift (modifier bit 9 => 0x02 << 8 = 0x0200; combined value `0x0204`)
+- `0x2800` — Enter held (HID usage `0x28`, no modifiers)
+
+Programming model:
+
+- Use `IN PORT DST` to read the 16-bit keyboard report. Inspect the low byte for the HID usage ID and the high byte for modifiers.
+- Implement debouncing, key-repeat, and composition logic in the ROM if needed — the port provides instantaneous state only.
+
+
+## Basic VF16Mouse Port Layout
+
+The `VF16Mouse` port device exposes a single 16-bit packed snapshot so it behaves like the other devices: one port, one read.
+
+Port layout (`PORT N`):
+- Bits 0-2: Buttons
+  - Bit 0: Left button
+  - Bit 1: Right button
+  - Bit 2: Middle button
+- Bit 3: Wheel up flag
+- Bit 4: Wheel down flag
+- Bits 5-9: X delta, signed 5-bit two's complement (`-16..15`)
+- Bits 10-14: Y delta, signed 5-bit two's complement (`-16..15`)
+- Bit 15: Reserved
+
+Behaviour notes:
+- The device returns the current snapshot of buttons and relative motion in a single read.
+- X/Y deltas are clamped to `-16..15` for the packed report.
+- The wheel is represented as direction flags rather than a magnitude. Positive scroll sets bit 3, negative scroll sets bit 4.
+- Reads do not clear or acknowledge the state.
+
+PS/2 and USB compatibility:
+- USB HID and PS/2 mouse events are still the source of truth inside the emulator; they are translated into the packed 16-bit report above.
+- The 16-bit report keeps the mouse port-mapped and one-read-per-device like the keyboard and gamepad ports.
+
+Examples:
+- Left-click with no motion: `0x0001`
+- Move right by 3 and up by 2: X = `3`, Y = `-2`, result uses the X/Y fields with no button bits set
+- Scroll up with right button held: right button bit plus wheel-up bit set in the same word
+
 ## Programming Model
 
 - Programs read controller state through the configured port device.

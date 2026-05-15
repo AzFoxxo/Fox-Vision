@@ -60,6 +60,16 @@ namespace FoxVision
                     _processor.LatchControllerButton(buttonMask);
                     return true;
                 },
+                keyboardReport =>
+                {
+                    _processor.SetKeyboardReport(keyboardReport);
+                    return true;
+                },
+                (buttons, wheel, dx, dy) =>
+                {
+                    _processor.SetMouseState(buttons, (sbyte)wheel, (sbyte)dx, (sbyte)dy);
+                    return true;
+                },
                 () => _processor.GetCycleCount(),
                 () =>
                 {

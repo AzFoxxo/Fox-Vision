@@ -5,6 +5,7 @@ using System.Text;
 using System.Text.Json;
 using Cairo;
 using Gtk;
+using System.Linq;
 using System.Numerics;
 
 namespace FoxVision.Components
@@ -61,6 +62,8 @@ namespace FoxVision.Components
         private readonly Func<bool, bool> _setPauseRequested;
         private readonly Func<EmulatorOptions, bool> _setPortConfigurationRequested;
         private readonly Func<byte, bool> _setControllerStateRequested;
+        private readonly Func<ushort, bool> _setKeyboardStateRequested;
+        private readonly Func<byte, sbyte, sbyte, sbyte, bool> _setMouseStateRequested;
         private readonly Func<ulong> _getProcessorCycleCountRequested;
         private readonly System.Action _signalVBlankRequested;
         private readonly Func<bool> _showDecompRequested;
@@ -86,6 +89,16 @@ namespace FoxVision.Components
         private readonly Window _window;
         private readonly DrawingArea _drawingArea;
         private readonly Gtk.Menu _portDevicesMenu;
+        private readonly HashSet<uint> _pressedNonModifierKeys = new();
+        private uint _lastNonModifierKey = 0;
+        private byte _modifierMask = 0;
+        private byte _mouseButtonsState = 0;
+        private sbyte _mouseWheelState = 0;
+        private sbyte _mouseDxState = 0;
+        private sbyte _mouseDyState = 0;
+        private double _lastPointerX = 0;
+        private double _lastPointerY = 0;
+        private bool _hasLastPointer = false;
         private uint _frameTimerId;
         private Window? _memoryWindow;
         private TextView? _memoryTextView;
@@ -99,7 +112,7 @@ namespace FoxVision.Components
 
         private static readonly uint[] PaletteArgb32 = new uint[]
         {
-            0xFF1A1C2C,
+            0xFF000044,
             0xFF5D275D,
             0xFFB13E53,
             0xFFEF7D57,
@@ -129,6 +142,8 @@ namespace FoxVision.Components
             Func<bool, bool> setPauseRequested,
             Func<EmulatorOptions, bool> setPortConfigurationRequested,
             Func<byte, bool> setControllerStateRequested,
+            Func<ushort, bool> setKeyboardStateRequested,
+            Func<byte, sbyte, sbyte, sbyte, bool> setMouseStateRequested,
             Func<ulong> getProcessorCycleCountRequested,
             System.Action signalVBlankRequested,
             Func<bool> showDecompRequested)
@@ -149,6 +164,8 @@ namespace FoxVision.Components
             _setPauseRequested = setPauseRequested;
             _setPortConfigurationRequested = setPortConfigurationRequested;
             _setControllerStateRequested = setControllerStateRequested;
+            _setKeyboardStateRequested = setKeyboardStateRequested;
+            _setMouseStateRequested = setMouseStateRequested;
             _getProcessorCycleCountRequested = getProcessorCycleCountRequested;
             _signalVBlankRequested = signalVBlankRequested;
             _showDecompRequested = showDecompRequested;
@@ -182,8 +199,9 @@ namespace FoxVision.Components
                 Resizable = false
             };
             _window.DeleteEvent += (_, _) => Gtk.Application.Quit();
-            _window.AddEvents((int)(Gdk.EventMask.KeyPressMask | Gdk.EventMask.ButtonPressMask));
+            _window.AddEvents((int)(Gdk.EventMask.KeyPressMask | Gdk.EventMask.KeyReleaseMask | Gdk.EventMask.ButtonPressMask));
             _window.KeyPressEvent += OnKeyPressEvent;
+            _window.KeyReleaseEvent += OnKeyReleaseEvent;
 
             var headerBar = new HeaderBar
             {
@@ -371,11 +389,15 @@ namespace FoxVision.Components
                 Vexpand = true
             };
             _drawingArea.CanFocus = true;
-            _drawingArea.AddEvents((int)(Gdk.EventMask.KeyPressMask | Gdk.EventMask.ButtonPressMask));
+            _drawingArea.AddEvents((int)(Gdk.EventMask.KeyPressMask | Gdk.EventMask.KeyReleaseMask | Gdk.EventMask.ButtonPressMask | Gdk.EventMask.ButtonReleaseMask | Gdk.EventMask.PointerMotionMask | Gdk.EventMask.ScrollMask));
             _drawingArea.SetSizeRequest(Width * _windowScale, Height * _windowScale);
             _drawingArea.Drawn += OnDrawn;
             _drawingArea.KeyPressEvent += OnKeyPressEvent;
-            _drawingArea.ButtonPressEvent += (_, _) => _drawingArea.GrabFocus();
+            _drawingArea.KeyReleaseEvent += OnKeyReleaseEvent;
+            _drawingArea.ButtonPressEvent += OnPointerButtonPressEvent;
+            _drawingArea.ButtonReleaseEvent += OnPointerButtonReleaseEvent;
+            _drawingArea.MotionNotifyEvent += OnPointerMotionEvent;
+            _drawingArea.ScrollEvent += OnScrollEvent;
             _window.ButtonPressEvent += (_, _) => _drawingArea.GrabFocus();
 
             var outerBox = new Box(Orientation.Vertical, 0);
@@ -724,10 +746,254 @@ namespace FoxVision.Components
 
         private void OnKeyPressEvent(object? sender, KeyPressEventArgs args)
         {
-            if (TryMapKeyToControllerMask(args.Event.KeyValue, out var buttonMask))
+            uint keyVal = args.Event.KeyValue;
+
+            // First try controller mapping
+            if (TryMapKeyToControllerMask(keyVal, out var buttonMask))
             {
                 LatchControllerButton(buttonMask);
+                return;
             }
+
+            // Map to keyboard HID usage
+            byte usage = MapGdkKeyToHidUsage(keyVal);
+            if (usage == 0)
+                return;
+
+            // Update modifier mask if this is a modifier key
+            if (IsModifierKey(keyVal, out byte modBit))
+            {
+                _modifierMask |= modBit;
+            }
+            else
+            {
+                _pressedNonModifierKeys.Add(keyVal);
+                _lastNonModifierKey = keyVal;
+            }
+
+            RecomputeAndSendKeyboardReport();
+        }
+
+        private void OnKeyReleaseEvent(object? sender, KeyReleaseEventArgs args)
+        {
+            uint keyVal = args.Event.KeyValue;
+
+            if (TryMapKeyToControllerMask(keyVal, out _))
+            {
+                // Controller release isn't explicitly tracked; leave latch behaviour as-is
+                return;
+            }
+
+            if (IsModifierKey(keyVal, out byte modBit))
+            {
+                _modifierMask = (byte)(_modifierMask & ~modBit);
+            }
+            else
+            {
+                _pressedNonModifierKeys.Remove(keyVal);
+                if (_lastNonModifierKey == keyVal)
+                {
+                    // pick any remaining key as last
+                    _lastNonModifierKey = _pressedNonModifierKeys.Count > 0 ? _pressedNonModifierKeys.First() : 0u;
+                }
+            }
+
+            RecomputeAndSendKeyboardReport();
+        }
+
+        private bool IsModifierKey(uint keyVal, out byte modBit)
+        {
+            modBit = 0;
+            switch ((Gdk.Key)keyVal)
+            {
+                case Gdk.Key.Control_L:
+                    modBit = 1 << 0; // LCTRL -> bit 8 in report
+                    return true;
+                case Gdk.Key.Shift_L:
+                    modBit = 1 << 1; // LSHIFT
+                    return true;
+                case Gdk.Key.Alt_L:
+                case Gdk.Key.Meta_L:
+                    modBit = 1 << 2; // LALT
+                    return true;
+                case Gdk.Key.Super_L:
+                    modBit = 1 << 3; // LGUI
+                    return true;
+                case Gdk.Key.Control_R:
+                    modBit = 1 << 4; // RCTRL
+                    return true;
+                case Gdk.Key.Shift_R:
+                    modBit = 1 << 5; // RSHIFT
+                    return true;
+                case Gdk.Key.Alt_R:
+                case Gdk.Key.Meta_R:
+                    modBit = 1 << 6; // RALT
+                    return true;
+                case Gdk.Key.Super_R:
+                    modBit = 1 << 7; // RGUI
+                    return true;
+                default:
+                    return false;
+            }
+        }
+
+        private void RecomputeAndSendKeyboardReport()
+        {
+            byte usage = 0;
+            if (_lastNonModifierKey != 0)
+            {
+                usage = MapGdkKeyToHidUsage(_lastNonModifierKey);
+            }
+
+            ushort report = (ushort)((_modifierMask << 8) | usage);
+            try
+            {
+                _setKeyboardStateRequested(report);
+            }
+            catch { }
+        }
+
+        private byte MapGdkKeyToHidUsage(uint keyVal)
+        {
+            // Map A-Z
+            if (keyVal >= (uint)Gdk.Key.a && keyVal <= (uint)Gdk.Key.z)
+            {
+                int index = (int)(keyVal - (uint)Gdk.Key.a);
+                return (byte)(0x04 + index);
+            }
+
+            // Map A-Z uppercase as well
+            if (keyVal >= (uint)Gdk.Key.A && keyVal <= (uint)Gdk.Key.Z)
+            {
+                int index = (int)(keyVal - (uint)Gdk.Key.A);
+                return (byte)(0x04 + index);
+            }
+
+            // Map numbers 1-0
+            // Map numeric keys by ASCII keyval range
+            if (keyVal >= (uint)'1' && keyVal <= (uint)'9')
+            {
+                int index = (int)(keyVal - (uint)'1');
+                return (byte)(0x1E + index);
+            }
+            if (keyVal == (uint)'0')
+            {
+                return 0x27;
+            }
+
+            switch ((Gdk.Key)keyVal)
+            {
+                case Gdk.Key.Return:
+                case Gdk.Key.KP_Enter:
+                    return 0x28;
+                case Gdk.Key.Escape:
+                    return 0x29;
+                case Gdk.Key.BackSpace:
+                    return 0x2A;
+                case Gdk.Key.Tab:
+                    return 0x2B;
+                case Gdk.Key.space:
+                    return 0x2C;
+                default:
+                    return 0;
+            }
+        }
+
+        private void OnPointerButtonPressEvent(object? sender, ButtonPressEventArgs args)
+        {
+            // Grab focus for keyboard input
+            try { _drawingArea.GrabFocus(); } catch { }
+
+            // Map GDK button to our mask: 1=left, 2=middle, 3=right
+            switch (args.Event.Button)
+            {
+                case 1:
+                    _mouseButtonsState |= 1 << 0;
+                    break;
+                case 2:
+                    _mouseButtonsState |= 1 << 2;
+                    break;
+                case 3:
+                    _mouseButtonsState |= 1 << 1;
+                    break;
+            }
+
+            SendMouseState();
+        }
+
+        private void OnPointerButtonReleaseEvent(object? sender, ButtonReleaseEventArgs args)
+        {
+            switch (args.Event.Button)
+            {
+                case 1:
+                    _mouseButtonsState &= unchecked((byte)~(1 << 0));
+                    break;
+                case 2:
+                    _mouseButtonsState &= unchecked((byte)~(1 << 2));
+                    break;
+                case 3:
+                    _mouseButtonsState &= unchecked((byte)~(1 << 1));
+                    break;
+            }
+
+            SendMouseState();
+        }
+
+        private void OnPointerMotionEvent(object? sender, MotionNotifyEventArgs args)
+        {
+            double x = args.Event.X;
+            double y = args.Event.Y;
+            if (!_hasLastPointer)
+            {
+                _lastPointerX = x;
+                _lastPointerY = y;
+                _hasLastPointer = true;
+                return;
+            }
+
+            double dx = x - _lastPointerX;
+            double dy = y - _lastPointerY;
+            _lastPointerX = x;
+            _lastPointerY = y;
+
+            // Convert to signed 8-bit deltas, clamp
+            int sdx = Math.Clamp((int)Math.Round(dx), -128, 127);
+            int sdy = Math.Clamp((int)Math.Round(dy), -128, 127);
+            _mouseDxState = (sbyte)sdx;
+            _mouseDyState = (sbyte)sdy;
+
+            SendMouseState();
+        }
+
+        private void OnScrollEvent(object? sender, ScrollEventArgs args)
+        {
+            // Map scroll direction to wheel increments
+            switch (args.Event.Direction)
+            {
+                case Gdk.ScrollDirection.Up:
+                    _mouseWheelState = (sbyte)Math.Clamp(_mouseWheelState + 1, -128, 127);
+                    break;
+                case Gdk.ScrollDirection.Down:
+                    _mouseWheelState = (sbyte)Math.Clamp(_mouseWheelState - 1, -128, 127);
+                    break;
+                default:
+                    // Some systems provide delta values instead
+                    double dy = args.Event.DeltaY;
+                    if (Math.Abs(dy) >= 1e-3)
+                        _mouseWheelState = (sbyte)Math.Clamp(_mouseWheelState + (int)Math.Sign(-dy), -128, 127);
+                    break;
+            }
+
+            SendMouseState();
+        }
+
+        private void SendMouseState()
+        {
+            try
+            {
+                _setMouseStateRequested(_mouseButtonsState, _mouseWheelState, _mouseDxState, _mouseDyState);
+            }
+            catch { }
         }
 
         private void LatchControllerButton(byte buttonMask)
@@ -1014,6 +1280,28 @@ namespace FoxVision.Components
             };
             menu.Append(vf16PadItem);
 
+            var vf16KeyboardItem = new RadioMenuItem(noneItem.Group, "VF16Keyboard");
+            vf16KeyboardItem.Active = _currentOptions.PortDevices[portIndex] == PortDeviceKind.VF16Keyboard;
+            vf16KeyboardItem.Activated += (_, _) =>
+            {
+                if (vf16KeyboardItem.Active)
+                {
+                    ApplyPortDeviceSelection(portIndex, PortDeviceKind.VF16Keyboard);
+                }
+            };
+            menu.Append(vf16KeyboardItem);
+
+            var vf16MouseItem = new RadioMenuItem(noneItem.Group, "VF16Mouse");
+            vf16MouseItem.Active = _currentOptions.PortDevices[portIndex] == PortDeviceKind.VF16Mouse;
+            vf16MouseItem.Activated += (_, _) =>
+            {
+                if (vf16MouseItem.Active)
+                {
+                    ApplyPortDeviceSelection(portIndex, PortDeviceKind.VF16Mouse);
+                }
+            };
+            menu.Append(vf16MouseItem);
+
             menu.ShowAll();
             return menu;
         }
@@ -1030,6 +1318,17 @@ namespace FoxVision.Components
                         var controllerConfigItem = new Gtk.MenuItem("Controller configuration");
                         controllerConfigItem.Activated += (_, _) => ShowControllerConfigurationDialog();
                         menu.Append(controllerConfigItem);
+
+                        var saveInputItem = new Gtk.MenuItem("Save input configuration");
+                        saveInputItem.Activated += (_, _) => SaveInputConfiguration();
+                        menu.Append(saveInputItem);
+                        break;
+                    }
+                case PortDeviceKind.VF16Keyboard:
+                    {
+                        var keyboardConfigItem = new Gtk.MenuItem("Keyboard configuration");
+                        keyboardConfigItem.Activated += (_, _) => ShowKeyboardConfigurationDialog();
+                        menu.Append(keyboardConfigItem);
 
                         var saveInputItem = new Gtk.MenuItem("Save input configuration");
                         saveInputItem.Activated += (_, _) => SaveInputConfiguration();
@@ -1076,8 +1375,55 @@ namespace FoxVision.Components
             {
                 PortDeviceKind.None => "None",
                 PortDeviceKind.VF16Pad => "VF16Pad",
+                PortDeviceKind.VF16Keyboard => "VF16Keyboard",
+                PortDeviceKind.VF16Mouse => "VF16Mouse",
                 _ => deviceKind.ToString()
             };
+        }
+
+        private void ShowKeyboardConfigurationDialog()
+        {
+            var dialog = new Dialog("Keyboard Configuration", _window, DialogFlags.Modal)
+            {
+                Resizable = false,
+                DefaultWidth = 420
+            };
+
+            dialog.AddButton("Close", ResponseType.Close);
+            dialog.AddButton("Apply", ResponseType.Ok);
+
+            var content = dialog.ContentArea;
+            var grid = new Grid
+            {
+                ColumnSpacing = 10,
+                RowSpacing = 8,
+                MarginTop = 12,
+                MarginBottom = 12,
+                MarginStart = 12,
+                MarginEnd = 12
+            };
+
+            var layoutEntry = new Entry(GetKeyboardLayout(_currentOptions)) { Hexpand = true };
+            grid.Attach(new Label("Keyboard layout (optional)") { Halign = Align.Start }, 0, 0, 1, 1);
+            grid.Attach(layoutEntry, 1, 0, 1, 1);
+
+            content.Add(grid);
+            dialog.ShowAll();
+
+            var result = (ResponseType)dialog.Run();
+            if (result == ResponseType.Ok)
+            {
+                var layout = layoutEntry.Text ?? string.Empty;
+                _currentOptions.KeyboardLayout = layout;
+                SaveInputConfiguration();
+            }
+
+            dialog.Destroy();
+        }
+
+        private static string GetKeyboardLayout(EmulatorOptions options)
+        {
+            return string.IsNullOrWhiteSpace(options.KeyboardLayout) ? string.Empty : options.KeyboardLayout;
         }
 
         private static void SetControllerKey(EmulatorOptions options, ControllerButton button, uint keyValue)

@@ -18,6 +18,13 @@ namespace FoxVision
         private int _vblankSequence;
         private int _vblankWaitSequence;
         private byte _controllerState;
+        private ushort _keyboardReport;
+        private readonly object _keyboardLock = new();
+        private byte _mouseButtons;
+        private sbyte _mouseWheel;
+        private sbyte _mouseDX;
+        private sbyte _mouseDY;
+        private readonly object _mouseLock = new();
 
         private const byte StatusPredicateMask = 1 << 0;
         private const byte StatusLessThanMask = 1 << 1;
@@ -186,6 +193,25 @@ namespace FoxVision
         internal void LatchControllerButton(byte buttonMask)
         {
             _controllerState = (byte)(_controllerState | buttonMask);
+        }
+
+        internal void SetKeyboardReport(ushort report)
+        {
+            lock (_keyboardLock)
+            {
+                _keyboardReport = report;
+            }
+        }
+
+        internal void SetMouseState(byte buttons, sbyte wheel, sbyte dx, sbyte dy)
+        {
+            lock (_mouseLock)
+            {
+                _mouseButtons = buttons;
+                _mouseWheel = wheel;
+                _mouseDX = dx;
+                _mouseDY = dy;
+            }
         }
 
         private ushort DecodeExecuteInstruction(ushort opcode, ushort first_operand, ushort second_operand)
@@ -932,14 +958,51 @@ namespace FoxVision
             }
 
             var portDevices = _portDevices;
-            if (port < portDevices.Length && portDevices[port] == PortDeviceKind.VF16Pad)
+            if (port < portDevices.Length)
             {
-                value = _controllerState;
-                return true;
+                var kind = portDevices[port];
+                if (kind == PortDeviceKind.VF16Pad)
+                {
+                    value = _controllerState;
+                    return true;
+                }
+
+                if (kind == PortDeviceKind.VF16Keyboard)
+                {
+                    // Read keyboard report
+                    lock (_keyboardLock)
+                    {
+                        value = _keyboardReport;
+                    }
+                    return true;
+                }
+
+                if (kind == PortDeviceKind.VF16Mouse)
+                {
+                    // Mouse is a single-port packed snapshot:
+                    // bits 0-2 buttons, bit 3 wheel up, bit 4 wheel down,
+                    // bits 5-9 X delta signed 5-bit, bits 10-14 Y delta signed 5-bit.
+                    lock (_mouseLock)
+                    {
+                        ushort packedButtons = (ushort)(_mouseButtons & 0x0007);
+                        ushort packedWheelUp = _mouseWheel > 0 ? (ushort)(1 << 3) : (ushort)0;
+                        ushort packedWheelDown = _mouseWheel < 0 ? (ushort)(1 << 4) : (ushort)0;
+                        ushort packedX = (ushort)(PackSigned5(_mouseDX) << 5);
+                        ushort packedY = (ushort)(PackSigned5(_mouseDY) << 10);
+                        value = (ushort)(packedButtons | packedWheelUp | packedWheelDown | packedX | packedY);
+                    }
+                    return true;
+                }
             }
 
             value = 0;
             return true;
+        }
+
+        private static ushort PackSigned5(sbyte value)
+        {
+            int clamped = Math.Clamp((int)value, -16, 15);
+            return (ushort)(clamped & 0x001F);
         }
 
         private bool TryWritePort(ushort port, ushort value)
@@ -950,11 +1013,21 @@ namespace FoxVision
             }
 
             var portDevices = _portDevices;
-            if (port < portDevices.Length && portDevices[port] == PortDeviceKind.VF16Pad)
+            if (port < portDevices.Length)
             {
-                if (!IsExtendedModeEnabled)
+                var kind = portDevices[port];
+                if (kind == PortDeviceKind.VF16Pad)
                 {
-                    _controllerState = (byte)(value & 0x00FF);
+                    if (!IsExtendedModeEnabled)
+                    {
+                        _controllerState = (byte)(value & 0x00FF);
+                    }
+                }
+
+                if (kind == PortDeviceKind.VF16Keyboard)
+                {
+                    // OUT to a keyboard port is a no-op in current implementation
+                    // Future: support LED state (NumLock/CapsLock) in high bits.
                 }
             }
 

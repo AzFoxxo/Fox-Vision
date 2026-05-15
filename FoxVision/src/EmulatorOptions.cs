@@ -5,7 +5,10 @@ namespace FoxVision
     internal enum PortDeviceKind
     {
         None = 0,
-        VF16Pad = 1
+        VF16Pad = 1,
+        VF16Keyboard = 2
+        ,
+        VF16Mouse = 3
     }
 
     internal sealed class EmulatorOptions
@@ -44,6 +47,7 @@ namespace FoxVision
         // When true, build operations invoked from the GUI will target extended mode
         // (passes `--mode extended` to the FoxC compiler and assembler).
         internal bool BuildExtended { get; set; } = false;
+        internal string KeyboardLayout { get; set; } = Environment.GetEnvironmentVariable("FOXVISION_KEYBOARD_LAYOUT") ?? string.Empty;
 
         internal EmulatorOptions()
         {
@@ -65,6 +69,8 @@ namespace FoxVision
                 ControllerSelectKey = ControllerSelectKey,
                 PortDevices = ClonePortDevices(PortDevices)
             };
+            // include keyboard layout
+            payload.KeyboardLayout = KeyboardLayout;
 
             var configPath = GetInputConfigPath();
             var directory = Path.GetDirectoryName(configPath);
@@ -105,6 +111,9 @@ namespace FoxVision
                 if (string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("FOXVISION_CONTROLLER_SELECT_KEY")))
                     ControllerSelectKey = saved.ControllerSelectKey;
 
+                if (string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("FOXVISION_KEYBOARD_LAYOUT")))
+                    KeyboardLayout = saved.KeyboardLayout;
+
                 var savedPortDevices = saved.PortDevices;
                 if (savedPortDevices is not null && savedPortDevices.Length == PortCount)
                 {
@@ -126,6 +135,9 @@ namespace FoxVision
         {
             var portDevices = new PortDeviceKind[PortCount];
             portDevices[0] = PortDeviceKind.VF16Pad;
+            portDevices[1] = PortDeviceKind.VF16Pad;
+            portDevices[2] = PortDeviceKind.VF16Keyboard;
+            portDevices[3] = PortDeviceKind.VF16Mouse;
             return portDevices;
         }
 
@@ -176,6 +188,7 @@ namespace FoxVision
             public uint ControllerStartKey { get; set; } = DefaultControllerStartKey;
             public uint ControllerSelectKey { get; set; } = DefaultControllerSelectKey;
             public PortDeviceKind[] PortDevices { get; set; } = CreateDefaultPortDevices();
+            public string KeyboardLayout { get; set; } = string.Empty;
         }
 
         private static int ParseEnvInt(string name, int fallback)

@@ -1,0 +1,31 @@
+:main
+
+; Mouse & Keyboard poll test for FoxVision
+; - Configure PORT3 as VF16Keyboard
+; - Configure PORT4 as VF16Mouse
+; Assemble with: fox16asm -i test/mouse_keyboard_test.f16 --mode extended
+
+; Enable extended mode
+MOV %1 EM
+
+; Start writing at top of VRAM
+MOV $FFFF X
+
+:poll_loop
+    ; Keep writes confined to the top of VRAM so the ROM never overwrites itself.
+    MOV $FFFF X
+
+    ; Read keyboard report from PORT3 and store
+    IN PORT3 Y
+    STR Y X
+    SUB %1 X
+
+    ; Read mouse report from PORT4 and store
+    IN PORT4 Y
+    STR Y X
+    SUB %1 X
+
+    ; Small delay to avoid hammering the CPU (tune as needed)
+    WAIT %10
+
+    JMP poll_loop
