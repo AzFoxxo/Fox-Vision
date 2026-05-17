@@ -1,0 +1,297 @@
+:main
+
+; Enable extended mode for port I/O
+MOV %1 EM
+
+; Read number from flash address 0
+; Command word format: (address << 1) | operation, where operation: 0=read, 1=write
+; Address 0: (0 << 1) | 0 = 0
+MOV %0 X
+OUT X PORT5    ; Issue read command
+IN PORT5 Y     ; Read the value into Y
+
+; Check if this is first run (Y == 0)
+MOV %0 X
+CMP            ; Compare X(0) with Y(read value)
+
+; If not equal, Y had data - go to subsequent_run
+JNE subsequent_run
+
+; ===== FIRST RUN: Y is 0 =====
+; Print "No number saved, saving number zero"
+
+; 'N'
+MOV %78 X
+OUT X PORT4
+; 'o'
+MOV %111 X
+OUT X PORT4
+; ' '
+MOV %32 X
+OUT X PORT4
+; 'n'
+MOV %110 X
+OUT X PORT4
+; 'u'
+MOV %117 X
+OUT X PORT4
+; 'm'
+MOV %109 X
+OUT X PORT4
+; 'b'
+MOV %98 X
+OUT X PORT4
+; 'e'
+MOV %101 X
+OUT X PORT4
+; 'r'
+MOV %114 X
+OUT X PORT4
+; ' '
+MOV %32 X
+OUT X PORT4
+; 's'
+MOV %115 X
+OUT X PORT4
+; 'a'
+MOV %97 X
+OUT X PORT4
+; 'v'
+MOV %118 X
+OUT X PORT4
+; 'e'
+MOV %101 X
+OUT X PORT4
+; 'd'
+MOV %100 X
+OUT X PORT4
+; ','
+MOV %44 X
+OUT X PORT4
+; ' '
+MOV %32 X
+OUT X PORT4
+; 's'
+MOV %115 X
+OUT X PORT4
+; 'a'
+MOV %97 X
+OUT X PORT4
+; 'v'
+MOV %118 X
+OUT X PORT4
+; 'i'
+MOV %105 X
+OUT X PORT4
+; 'n'
+MOV %110 X
+OUT X PORT4
+; 'g'
+MOV %103 X
+OUT X PORT4
+; ' '
+MOV %32 X
+OUT X PORT4
+; 'n'
+MOV %110 X
+OUT X PORT4
+; 'u'
+MOV %117 X
+OUT X PORT4
+; 'm'
+MOV %109 X
+OUT X PORT4
+; 'b'
+MOV %98 X
+OUT X PORT4
+; 'e'
+MOV %101 X
+OUT X PORT4
+; 'r'
+MOV %114 X
+OUT X PORT4
+; ' '
+MOV %32 X
+OUT X PORT4
+; 'z'
+MOV %122 X
+OUT X PORT4
+; 'e'
+MOV %101 X
+OUT X PORT4
+; 'r'
+MOV %114 X
+OUT X PORT4
+; 'o'
+MOV %111 X
+OUT X PORT4
+; newline
+MOV %10 X
+OUT X PORT4
+
+; Save 1 to flash address 0
+; Command: (0 << 1) | 1 = 1 (write)
+MOV %1 X
+OUT X PORT5    ; Issue write command
+MOV %1 Y       ; Value to save = 1
+OUT Y PORT5    ; Write it
+
+; Done
+HLT
+
+:subsequent_run
+
+; ===== SUBSEQUENT RUN: Y has previous number =====
+; Print "Number X saved, saving number plus one"
+
+; 'N'
+MOV %78 X
+OUT X PORT4
+; 'u'
+MOV %117 X
+OUT X PORT4
+; 'm'
+MOV %109 X
+OUT X PORT4
+; 'b'
+MOV %98 X
+OUT X PORT4
+; 'e'
+MOV %101 X
+OUT X PORT4
+; 'r'
+MOV %114 X
+OUT X PORT4
+; ' '
+MOV %32 X
+OUT X PORT4
+
+; Output Y (the saved number) as single digit 0-9
+; For numbers 0-9, ASCII is 48-57, so we ADD 48 to the number
+; Y currently has the value (0, 1, 2, etc.)
+; We need to output it as a character
+; Use indirect approach: MOV Y to a temp, ADD 48, output
+
+; First, save Y value for later increment
+; Since we only have X and Y, we'll work with Y directly
+
+; Output digit: Y + 48 as ASCII
+; Create a copy approach: move Y to X temporarily
+; Actually in V1.4 we have limited operations. Let me use MOV to work with Y
+
+; MOV X Y would copy X to Y (overwriting)
+; Better approach: directly output Y+48
+; In V1.6 MOI, we could do ADD but need to preserve Y for increment
+
+; Output the saved number as an ASCII digit (Y + 48)
+MOV Y X        ; copy Y to X so we preserve Y for later increment
+ADD %48 X      ; convert 0-9 -> ASCII '0'-'9'
+OUT X PORT4
+
+; ' '
+MOV %32 X
+OUT X PORT4
+; 's'
+MOV %115 X
+OUT X PORT4
+; 'a'
+MOV %97 X
+OUT X PORT4
+; 'v'
+MOV %118 X
+OUT X PORT4
+; 'e'
+MOV %101 X
+OUT X PORT4
+; 'd'
+MOV %100 X
+OUT X PORT4
+; ','
+MOV %44 X
+OUT X PORT4
+; ' '
+MOV %32 X
+OUT X PORT4
+; 's'
+MOV %115 X
+OUT X PORT4
+; 'a'
+MOV %97 X
+OUT X PORT4
+; 'v'
+MOV %118 X
+OUT X PORT4
+; 'i'
+MOV %105 X
+OUT X PORT4
+; 'n'
+MOV %110 X
+OUT X PORT4
+; 'g'
+MOV %103 X
+OUT X PORT4
+; ' '
+MOV %32 X
+OUT X PORT4
+; 'n'
+MOV %110 X
+OUT X PORT4
+; 'u'
+MOV %117 X
+OUT X PORT4
+; 'm'
+MOV %109 X
+OUT X PORT4
+; 'b'
+MOV %98 X
+OUT X PORT4
+; 'e'
+MOV %101 X
+OUT X PORT4
+; 'r'
+MOV %114 X
+OUT X PORT4
+; ' '
+MOV %32 X
+OUT X PORT4
+; 'p'
+MOV %112 X
+OUT X PORT4
+; 'l'
+MOV %108 X
+OUT X PORT4
+; 'u'
+MOV %117 X
+OUT X PORT4
+; 's'
+MOV %115 X
+OUT X PORT4
+; ' '
+MOV %32 X
+OUT X PORT4
+; 'o'
+MOV %111 X
+OUT X PORT4
+; 'n'
+MOV %110 X
+OUT X PORT4
+; 'e'
+MOV %101 X
+OUT X PORT4
+; newline
+MOV %10 X
+OUT X PORT4
+
+; Increment Y and save to flash
+; Y = Y + 1, then write to address 0
+; Using ADD from V1.6: ADD %1 Y (add 1 to Y, store in Y)
+ADD %1 Y
+
+; Write to flash
+; Command: (0 << 1) | 1 = 1 (write to address 0)
+MOV %1 X
+OUT X PORT5    ; Issue write command
+OUT Y PORT5    ; Write Y (now Y+1) to flash
+
+; Done
+HLT

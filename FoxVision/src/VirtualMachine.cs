@@ -24,6 +24,8 @@ namespace FoxVision
 
             // Create the CPU
             _processor = new(_unprotectedMemory, _options.ExecutionSpeedHz, _options.LogInstruction, _currentRom.StartAddress, _options.PortDevices);
+            _processor.SetFlashSavePaths(_options.FlashSavePaths);
+
             if (loadedRom)
             {
                 StartCpuThread();
@@ -52,6 +54,13 @@ namespace FoxVision
                 portConfig =>
                 {
                     _processor.SetPortConfiguration(portConfig.PortDevices);
+                    // Propagate any flash save path changes as well
+                    if (portConfig.FlashSavePaths is not null && portConfig.FlashSavePaths.Length == EmulatorOptions.PortCount)
+                    {
+                        _processor.SetFlashSavePaths(portConfig.FlashSavePaths);
+                        _options.FlashSavePaths = portConfig.FlashSavePaths.ToArray();
+                    }
+
                     _options.PortDevices = portConfig.PortDevices.ToArray();
                     return true;
                 },
@@ -112,6 +121,11 @@ namespace FoxVision
 
                 _processor = new Processor(_unprotectedMemory, updated.ExecutionSpeedHz, updated.LogInstruction, romImage.StartAddress);
                 _processor.SetPortConfiguration(updated.PortDevices);
+                if (updated.FlashSavePaths is not null && updated.FlashSavePaths.Length == EmulatorOptions.PortCount)
+                {
+                    _processor.SetFlashSavePaths(updated.FlashSavePaths);
+                    _options.FlashSavePaths = updated.FlashSavePaths.ToArray();
+                }
                 StartCpuThread();
                 _currentRom = romImage;
                 _options.RomPath = updated.RomPath;

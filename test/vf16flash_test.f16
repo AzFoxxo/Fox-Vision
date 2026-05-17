@@ -1,0 +1,36 @@
+:main
+
+; VF16Flash Storage Test
+; Tests basic read/write operations to persistent flash storage
+; Assemble with: fox16asm -i test/vf16flash_test.f16 --mode extended
+
+; Enable extended mode
+MOV %1 EM
+
+; Test 1: Write 0xABCD to address 0x0100
+; Command word: (address << 1) | write_bit = (256 << 1) | 1 = 513
+MOV %513 X
+OUT X PORT5        ; Issue write command
+MOV %43981 Y
+OUT Y PORT5        ; Write the value (0xABCD)
+
+; Test 2: Read back from address 0x0100
+; Command word: (address << 1) | read_bit = (256 << 1) | 0 = 512
+MOV %512 X
+OUT X PORT5        ; Issue read command
+IN PORT5 Y         ; Read the value back
+
+; Test 3: Write 0x1234 to address 0x0200
+MOV %1025 X        ; (512 << 1) | 1
+OUT X PORT5
+MOV %4660 Y
+OUT Y PORT5
+
+; Test 4: Read back from address 0x0200
+MOV %1024 X        ; (512 << 1) | 0
+OUT X PORT5
+IN PORT5 Y         ; Should get 0x1234 (4660)
+
+; Test complete, halt
+HLT
+

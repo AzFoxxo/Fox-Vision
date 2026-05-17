@@ -28,6 +28,16 @@ namespace FoxVision
         private readonly Queue<ushort> _ttyInputBuffer = new();
         private readonly object _ttyLock = new();
 
+        // VF16Flash storage (32K words)
+        private readonly ushort[] _flashStorage = new ushort[0x8000];
+        private readonly ushort[] _flashPendingCommand = new ushort[PortCount]; // Track command word for each port
+        private readonly bool[] _flashCommandReady = new bool[PortCount];       // Track if command is actually pending
+        private readonly object _flashLock = new();
+
+        // Flash save paths and background save management
+        private readonly string[] _flashSavePaths;
+        private readonly Task[] _flashSaveTasks = new Task[PortCount];
+        private readonly object[] _flashSaveTaskLocks = new object[PortCount];
         private const byte StatusPredicateMask = 1 << 0;
         private const byte StatusLessThanMask = 1 << 1;
         private const byte StatusGreaterThanMask = 1 << 2;
@@ -63,6 +73,7 @@ namespace FoxVision
         {
         }
 
+
         internal Processor(ContiguousMemory RAM, int executionSpeedHz, bool logInstruction, ushort initialPC, PortDeviceKind[]? portDevices = null)
         {
             this.RAM = RAM;
@@ -83,6 +94,16 @@ namespace FoxVision
             _vblankWaitSequence = 0;
             _controllerState = 0;
             _portDevices = ClonePortDevices(portDevices);
+            // Initialize flash save task locks
+            for (int i = 0; i < PortCount; i++)
+            {
+                _flashSaveTaskLocks[i] = new object();
+            }
+
+            // Set flash save paths and load from disk
+            _flashSavePaths = new string[PortCount];
+            LoadFlashFromDisk();
+
 
             timer = new Stopwatch();
             SetExecutionSpeedHz(executionSpeedHz);
@@ -194,6 +215,11 @@ namespace FoxVision
             {
                 _ttyInputBuffer.Clear();
             }
+            lock (_flashLock)
+            {
+                Array.Clear(_flashPendingCommand, 0, _flashPendingCommand.Length);
+                Array.Clear(_flashCommandReady, 0, _flashCommandReady.Length);
+            }
         }
 
         internal void LatchControllerButton(byte buttonMask)
@@ -234,7 +260,6 @@ namespace FoxVision
                     break;
 
                 case 0x1:
-                    LogInstructionExecuting("LFM", first_operand);
                     SetValueOfTheActiveRegister(RAM.ReadUnchecked(first_operand));
                     return 2;
 
@@ -1014,6 +1039,38 @@ namespace FoxVision
 
                     return true;
                 }
+
+                if (kind == PortDeviceKind.VF16Flash)
+                {
+                    lock (_flashLock)
+                    {
+                        if (_flashCommandReady[port])
+                        {
+                            // There's a pending command from a previous OUT
+                            ushort command = _flashPendingCommand[port];
+                            ushort address = (ushort)((command >> 1) & 0x7FFF); // Bits 1-15
+                            byte operation = (byte)(command & 0x0001);          // Bit 0
+
+                            if (operation == 0) // Read operation
+                            {
+                                value = _flashStorage[address];
+                            }
+                            else
+                            {
+                                // Attempted read after write command - return 0
+                                value = 0;
+                            }
+
+                            _flashCommandReady[port] = false; // Clear pending command
+                        }
+                        else
+                        {
+                            // No pending command - return 0
+                            value = 0;
+                        }
+                    }
+                    return true;
+                }
             }
 
             value = 0;
@@ -1102,6 +1159,39 @@ namespace FoxVision
 
                     return true;
                 }
+
+                if (kind == PortDeviceKind.VF16Flash)
+                {
+                    lock (_flashLock)
+                    {
+                        if (!_flashCommandReady[port]) // No pending command, this is a new command word
+                        {
+                            // Store the command word for the next operation
+                            _flashPendingCommand[port] = value;
+                            _flashCommandReady[port] = true;
+                        }
+                        else // There's a pending command, this is the data word
+                        {
+                            ushort command = _flashPendingCommand[port];
+                            ushort address = (ushort)((command >> 1) & 0x7FFF); // Bits 1-15
+                            byte operation = (byte)(command & 0x0001);           // Bit 0
+
+                            if (operation == 1) // Write operation
+                            {
+                                if (address < _flashStorage.Length)
+                                {
+                                    _flashStorage[address] = value;
+                                    SaveFlashToDisk(port);
+                                }
+                                // If address is beyond storage, silently ignore (per spec)
+                            }
+                            // If operation == 0 (read), this OUT is unexpected; just clear pending command
+
+                            _flashCommandReady[port] = false; // Clear pending command
+                        }
+                    }
+                    return true;
+                }
             }
 
             return true;
@@ -1145,5 +1235,81 @@ namespace FoxVision
                 Console.WriteLine();
             }
         }
+        internal void SetFlashSavePaths(string[]? paths)
+        {
+            if (paths is not null && paths.Length == PortCount)
+            {
+                Array.Copy(paths, _flashSavePaths, PortCount);
+                LoadFlashFromDisk();
+            }
+        }
+
+        private void LoadFlashFromDisk()
+        {
+            lock (_flashLock)
+            {
+                for (int port = 0; port < PortCount; port++)
+                {
+                    string path = _flashSavePaths[port];
+                    if (string.IsNullOrWhiteSpace(path))
+                        continue;
+
+                    try
+                    {
+                        if (File.Exists(path))
+                        {
+                            byte[] buffer = File.ReadAllBytes(path);
+                            int wordsToRead = System.Math.Min(buffer.Length / 2, _flashStorage.Length);
+                            for (int i = 0; i < wordsToRead; i++)
+                            {
+                                _flashStorage[i] = (ushort)(buffer[i * 2] | (buffer[i * 2 + 1] << 8));
+                            }
+                        }
+                    }
+                    catch
+                    {
+                    }
+                }
+            }
+        }
+
+        private void SaveFlashToDisk(int port)
+        {
+            if (port < 0 || port >= PortCount)
+                return;
+
+            string path = _flashSavePaths[port];
+            if (string.IsNullOrWhiteSpace(path))
+                return;
+
+            lock (_flashSaveTaskLocks[port])
+            {
+                _flashSaveTasks[port] = Task.Run(() =>
+                {
+                    try
+                    {
+                        byte[] buffer = new byte[_flashStorage.Length * 2];
+                        lock (_flashLock)
+                        {
+                            for (int i = 0; i < _flashStorage.Length; i++)
+                            {
+                                buffer[i * 2] = (byte)(_flashStorage[i] & 0xFF);
+                                buffer[i * 2 + 1] = (byte)((_flashStorage[i] >> 8) & 0xFF);
+                            }
+                        }
+
+                        var dir = System.IO.Path.GetDirectoryName(path);
+                        if (!string.IsNullOrWhiteSpace(dir))
+                            System.IO.Directory.CreateDirectory(dir);
+
+                        System.IO.File.WriteAllBytes(path, buffer);
+                    }
+                    catch
+                    {
+                    }
+                });
+            }
+        }
+
     }
 }

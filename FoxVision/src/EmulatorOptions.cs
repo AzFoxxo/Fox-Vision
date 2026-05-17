@@ -6,10 +6,10 @@ namespace FoxVision
     {
         None = 0,
         VF16Pad = 1,
-        VF16Keyboard = 2
-        ,
+        VF16Keyboard = 2,
         VF16Mouse = 3,
-        VF16TTY = 4
+        VF16TTY = 4,
+        VF16Flash = 5
     }
 
     internal sealed class EmulatorOptions
@@ -51,6 +51,8 @@ namespace FoxVision
         internal bool BuildExtended { get; set; } = false;
         internal string KeyboardLayout { get; set; } = Environment.GetEnvironmentVariable("FOXVISION_KEYBOARD_LAYOUT") ?? string.Empty;
 
+        internal string[] FlashSavePaths { get; set; } = CreateDefaultFlashSavePaths();
+
         internal EmulatorOptions()
         {
             ApplyPortDeviceEnvironmentOverrides();
@@ -72,6 +74,8 @@ namespace FoxVision
                 FixedTtyPortIndex = FixedTtyPortIndex,
                 PortDevices = ClonePortDevices(PortDevices)
             };
+            // include flash save paths
+            payload.FlashSavePaths = FlashSavePaths;
             // include keyboard layout
             payload.KeyboardLayout = KeyboardLayout;
 
@@ -131,6 +135,12 @@ namespace FoxVision
                     }
                 }
 
+                var savedFlashPaths = saved.FlashSavePaths;
+                if (savedFlashPaths is not null && savedFlashPaths.Length == PortCount)
+                {
+                    FlashSavePaths = savedFlashPaths;
+                }
+
                 NormalizeFixedPortDevices();
             }
             catch
@@ -146,6 +156,7 @@ namespace FoxVision
             portDevices[1] = PortDeviceKind.VF16Pad;
             portDevices[2] = PortDeviceKind.VF16Keyboard;
             portDevices[3] = PortDeviceKind.VF16Mouse;
+            portDevices[5] = PortDeviceKind.VF16Flash;
             return portDevices;
         }
 
@@ -221,6 +232,7 @@ namespace FoxVision
             public int FixedTtyPortIndex { get; set; } = 4;
             public PortDeviceKind[] PortDevices { get; set; } = CreateDefaultPortDevices();
             public string KeyboardLayout { get; set; } = string.Empty;
+            public string[] FlashSavePaths { get; set; } = CreateDefaultFlashSavePaths();
         }
 
         private static int ParseEnvInt(string name, int fallback)
@@ -259,6 +271,20 @@ namespace FoxVision
                 return parsed;
 
             return fallback;
+        }
+
+        internal static string[] CreateDefaultFlashSavePaths()
+        {
+            var paths = new string[PortCount];
+            var baseDir = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+                "vf16", "ports", "vf16flash");
+
+            for (int i = 0; i < PortCount; i++)
+            {
+                paths[i] = Path.Combine(baseDir, $"port{i}.bin");
+            }
+            return paths;
         }
     }
 }

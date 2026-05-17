@@ -1325,6 +1325,17 @@ namespace FoxVision.Components
             };
             menu.Append(vf16TtyItem);
 
+            var vf16FlashItem = new RadioMenuItem(noneItem.Group, "VF16Flash");
+            vf16FlashItem.Active = _currentOptions.PortDevices[portIndex] == PortDeviceKind.VF16Flash;
+            vf16FlashItem.Activated += (_, _) =>
+            {
+                if (vf16FlashItem.Active)
+                {
+                    ApplyPortDeviceSelection(portIndex, PortDeviceKind.VF16Flash);
+                }
+            };
+            menu.Append(vf16FlashItem);
+
             menu.ShowAll();
             return menu;
         }
@@ -1356,6 +1367,52 @@ namespace FoxVision.Components
                         var saveInputItem = new Gtk.MenuItem("Save input configuration");
                         saveInputItem.Activated += (_, _) => SaveInputConfiguration();
                         menu.Append(saveInputItem);
+                        break;
+                    }
+                case PortDeviceKind.VF16Flash:
+                    {
+                        var setPathItem = new Gtk.MenuItem("Set flash save path");
+                        setPathItem.Activated += (_, _) =>
+                        {
+                            var dialog = new FileChooserDialog(
+                                "Set Flash Save Path",
+                                _window,
+                                FileChooserAction.Save,
+                                "Cancel",
+                                ResponseType.Cancel,
+                                "Select",
+                                ResponseType.Accept);
+
+                            // Do not pre-set dialog filename (read-only in this GTK# binding)
+
+                            var response = (ResponseType)dialog.Run();
+                            if (response == ResponseType.Accept)
+                            {
+                                var selectedPath = dialog.Filename;
+                                if (!string.IsNullOrWhiteSpace(selectedPath))
+                                {
+                                    var updatedOptions = CloneOptions(_currentOptions);
+                                    if (updatedOptions.FlashSavePaths is null || updatedOptions.FlashSavePaths.Length != EmulatorOptions.PortCount)
+                                        updatedOptions.FlashSavePaths = EmulatorOptions.CreateDefaultFlashSavePaths();
+
+                                    updatedOptions.FlashSavePaths[portIndex] = selectedPath;
+                                    if (_setPortConfigurationRequested(updatedOptions))
+                                    {
+                                        _currentOptions.FlashSavePaths = updatedOptions.FlashSavePaths;
+                                        SaveInputConfiguration();
+                                        RefreshPortDevicesMenu();
+                                    }
+                                }
+                            }
+
+                            dialog.Destroy();
+                        };
+
+                        menu.Append(setPathItem);
+
+                        var saveInputItem2 = new Gtk.MenuItem("Save input configuration");
+                        saveInputItem2.Activated += (_, _) => SaveInputConfiguration();
+                        menu.Append(saveInputItem2);
                         break;
                     }
             }
@@ -1406,6 +1463,7 @@ namespace FoxVision.Components
                 PortDeviceKind.VF16Keyboard => "VF16Keyboard",
                 PortDeviceKind.VF16Mouse => "VF16Mouse",
                 PortDeviceKind.VF16TTY => "VF16TTY",
+                PortDeviceKind.VF16Flash => "VF16Flash",
                 _ => deviceKind.ToString()
             };
         }
@@ -1734,6 +1792,7 @@ namespace FoxVision.Components
                 ControllerSelectKey = options.ControllerSelectKey,
                 FixedTtyPortIndex = options.FixedTtyPortIndex,
                 PortDevices = options.PortDevices.ToArray(),
+                FlashSavePaths = options.FlashSavePaths?.ToArray() ?? new string[EmulatorOptions.PortCount],
                 BuildExtended = options.BuildExtended
             };
         }
