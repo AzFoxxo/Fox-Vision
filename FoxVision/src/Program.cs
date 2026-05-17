@@ -614,18 +614,76 @@ namespace FoxVision
 
         internal static void DebugLogROMAsData(ushort[] ROM)
         {
-            Console.WriteLine("ROM contents: ");
-            for (var i = 0; i < ROM.Length; i++)
+            // Invoke external decompiler tool to print ROM disassembly.
+            try
             {
-                int consumedWords = WriteInstructionLineColored(
-                    (ushort)i,
-                    offset =>
+                var decompilerProj = FindFileUpwards("VF16Decompiler/VF16Decompiler.csproj", Environment.CurrentDirectory);
+                if (string.IsNullOrWhiteSpace(decompilerProj))
+                {
+                    // Fallback to internal printing if decompiler project not found
+                    Console.WriteLine("ROM contents: ");
+                    for (var i = 0; i < ROM.Length; i++)
                     {
-                        int index = i + offset;
-                        return index < ROM.Length ? ROM[index] : (ushort?)null;
-                    });
+                        int consumedWords = WriteInstructionLineColored(
+                            (ushort)i,
+                            offset =>
+                            {
+                                int index = i + offset;
+                                return index < ROM.Length ? ROM[index] : (ushort?)null;
+                            });
 
-                i += consumedWords;
+                        i += consumedWords;
+                    }
+                    return;
+                }
+
+                var temp = Path.Combine(Path.GetTempPath(), $"vf16_decomp_{Guid.NewGuid():N}.bin");
+                using (var fs = File.Create(temp))
+                {
+                    // write legacy header
+                    var hdr = System.Text.Encoding.ASCII.GetBytes(".VISOFOX16");
+                    fs.Write(hdr, 0, hdr.Length);
+                    // write payload as big-endian words
+                    foreach (var w in ROM)
+                    {
+                        fs.WriteByte((byte)(w >> 8));
+                        fs.WriteByte((byte)(w & 0xFF));
+                    }
+                }
+
+                var psi = new System.Diagnostics.ProcessStartInfo
+                {
+                    FileName = "dotnet",
+                    UseShellExecute = false,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    WorkingDirectory = Path.GetDirectoryName(decompilerProj) ?? Environment.CurrentDirectory
+                };
+                psi.ArgumentList.Add("run");
+                psi.ArgumentList.Add("--project");
+                psi.ArgumentList.Add(decompilerProj);
+                psi.ArgumentList.Add("--");
+                psi.ArgumentList.Add(temp);
+
+                using var proc = System.Diagnostics.Process.Start(psi);
+                if (proc is null)
+                {
+                    Console.WriteLine("Failed to start decompiler process.");
+                    return;
+                }
+
+                var stdout = proc.StandardOutput.ReadToEnd();
+                var stderr = proc.StandardError.ReadToEnd();
+                proc.WaitForExit();
+
+                if (!string.IsNullOrWhiteSpace(stdout)) Console.WriteLine(stdout);
+                if (!string.IsNullOrWhiteSpace(stderr)) Console.Error.WriteLine(stderr);
+
+                try { File.Delete(temp); } catch { }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine("Decompiler invocation failed: " + ex.Message);
             }
         }
 

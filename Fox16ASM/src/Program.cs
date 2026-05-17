@@ -55,6 +55,9 @@ namespace Fox16ASM
                     case "--tokens":
                         debugFlags.ShowTokens = true;
                         break;
+                    case "--obj":
+                        // recognized here; actual handling occurs after generation
+                        break;
                     case "--labels":
                         debugFlags.ShowLabels = true;
                         break;
@@ -145,12 +148,44 @@ namespace Fox16ASM
                 return 1;
             }
 
+            bool emitObj = false;
+            // detect --obj presence by scanning args (cheap)
+            for (int i = 0; i < args.Length; i++)
+            {
+                if (args[i] == "--obj") { emitObj = true; break; }
+            }
+
             var generationResult = Generator.Generate(irResult.Value, outputFile, inputFile, mode, debugFlags, strictFormat);
             if (!generationResult.Success)
             {
                 DiagnosticPrinter.Print(generationResult.Diagnostics);
                 return 1;
             }
+
+            var genOut = generationResult.Value;
+
+            if (emitObj)
+            {
+                // emit a VF16Obj file directly
+                VF16ObjWriter.WriteObject(outputFile, genOut.Bytes, genOut.Labels);
+                Console.WriteLine($"Object file written to {outputFile}");
+                return 0;
+            }
+
+            // Otherwise, create an in-memory VF16Object and call the linker
+            var vfObj = new VF16Linker.VF16Object();
+            vfObj.Version = 1;
+            var textSection = new VF16Linker.Section { Name = ".text", Flags = 1, Size = (uint)genOut.Bytes.Length, Data = genOut.Bytes };
+            vfObj.Sections.Add(textSection);
+            // add symbols from labels
+            foreach (var kv in genOut.Labels)
+            {
+                var sym = new VF16Linker.Symbol { Name = kv.Key, Flags = 1, SectionIndex = 0, Offset = kv.Value };
+                vfObj.Symbols.Add(sym);
+            }
+            // no relocations for flat output
+            VF16Linker.Linker.Link(new System.Collections.Generic.List<VF16Linker.VF16Object> { vfObj }, outputFile);
+            Console.WriteLine($"Wrote linked binary to {outputFile}");
 
             return 0;
         }

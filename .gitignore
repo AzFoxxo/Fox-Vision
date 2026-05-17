@@ -1,5 +1,7 @@
 bin/
 obj/
 *.bin
+*.map
+*.vf16obj
 FoxC/**/*f16
 .vscode/

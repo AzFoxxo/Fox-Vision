@@ -17,7 +17,13 @@ class Generator
 
     private readonly record struct ResolvedOperand(ushort Value, IROperandKind Kind);
 
-    public static CompilationResult<byte[]> Generate(
+    public class GenerationOutput
+    {
+        public byte[] Bytes = Array.Empty<byte>();
+        public Dictionary<string, ushort> Labels = new();
+    }
+
+    public static CompilationResult<GenerationOutput> Generate(
         AssemblerIR ir,
         string outputFile,
         string sourceFile,
@@ -28,7 +34,7 @@ class Generator
         var diagnostics = new List<Diagnostic>();
         var labelTable = ResolveLabelAddresses(ir, sourceFile, debugFlags, diagnostics);
         if (diagnostics.Any(d => d.Severity == DiagnosticSeverity.Error))
-            return CompilationResult<byte[]>.Failed(diagnostics);
+            return CompilationResult<GenerationOutput>.Failed(diagnostics);
 
         var payloadWordCount = GetPayloadWordCount(ir);
         if (strictFormat)
@@ -39,7 +45,7 @@ class Generator
                 diagnostics.Add(Diagnostic.Error(
                     $"ROM payload size is {payloadWordCount} words, which exceeds strict format limit of {maximumPayloadWords} words for {mode.ToString().ToLowerInvariant()} mode.",
                     sourceFile));
-                return CompilationResult<byte[]>.Failed(diagnostics);
+                return CompilationResult<GenerationOutput>.Failed(diagnostics);
             }
         }
 
@@ -89,16 +95,15 @@ class Generator
         WriteFooter(writer);
 
         if (diagnostics.Any(d => d.Severity == DiagnosticSeverity.Error))
-            return CompilationResult<byte[]>.Failed(diagnostics);
+            return CompilationResult<GenerationOutput>.Failed(diagnostics);
 
         var bytes = memory.ToArray();
-        File.WriteAllBytes(outputFile, bytes);
 
         Console.ForegroundColor = ConsoleColor.White;
         Console.WriteLine("Code generation complete!");
-        Console.WriteLine($"ROM file written to {outputFile}");
 
-        return new CompilationResult<byte[]>(bytes, diagnostics);
+        var outp = new GenerationOutput { Bytes = bytes, Labels = new Dictionary<string, ushort>(labelTable) };
+        return new CompilationResult<GenerationOutput>(outp, diagnostics);
     }
 
     private static int GetPayloadWordCount(AssemblerIR ir)
