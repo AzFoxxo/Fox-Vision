@@ -1,18 +1,30 @@
-# Fox Vision (Viso Fox)
-Fox vision (FoxVision16) is a 16 bit RISC system designed to be simple to write code for and easy to implement.
+# Fox Vision (FoxVision16)
 
-This project is based on the failures and what worked from both SEBIS and QKVT. Unlike those projects, this project is a pure 16 bit machine with 16 bit only addressing to simplify the machine and overcome some of the technical limitations of those.
+FoxVision16 is a 16-bit RISC architecture designed to be simple to program and straightforward to implement.
 
-## Project
-The project is composed of three different parts:
-- `Fox16ASM` - An assembler which converts .f16 assembly files into machine code
-- `FoxVision` - A virtual machine that executes ROM files 
-- `Fox16Shared` - Shared code between the assembler and virtual machine
+This project was inspired by lessons learned from SEBIS and QKVT. Unlike those systems, FoxVision16 is a pure 16-bit machine with 16-bit addressing only, simplifying the architecture and avoiding several limitations encountered in those earlier designs.
+
+## Project Overview
+
+The project is composed of four main components:
+
+- `Fox16ASM` — An assembler that converts `.f16` assembly files into machine code
+- `FoxC` — A compiler that translates FoxC source code into FoxVision16 assembly or machine code
+- `FoxLink` — A linker that combines compiled objects into executable ROM images
+- `FoxDecompiler` — A tool for analyzing and decompiling FoxVision16 ROMs back into a readable form
+- `FoxVision` — A virtual machine that executes compiled ROM files
+- `Fox16Shared` — Shared code used across the toolchain (assembler, compiler, linker, and VM)
 
 ## Features
-- [X] Custom assembly language
+
+- [X] Custom 16-bit assembly language
 - [X] Assembler
+- [X] C-like high-level language (FoxC)
+- [X] Compiler toolchain
+- [X] Linker
+- [X] Decompiler
 - [X] Virtual machine
 
-## Technical specification
-For a full list of technical speciations, see [Spec](docs/spec.md).
+## Technical Specification
+
+For a full list of technical specifications, see [ISA](docs/isa.md).
