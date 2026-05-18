@@ -8,6 +8,7 @@ namespace FoxVision
     internal class Processor
     {
         private ushort regX, regY, regSP, regPC, regCYC;
+        private ushort[] regR;
         private ushort regEM;
         private ulong _totalCycleCount;
         private byte regStatus;
@@ -53,6 +54,14 @@ namespace FoxVision
 
         private const ushort RegisterIdX = 0x0000;
         private const ushort RegisterIdY = 0x0001;
+        private const ushort RegisterIdR0 = 0x0007;
+        private const ushort RegisterIdR1 = 0x0008;
+        private const ushort RegisterIdR2 = 0x0009;
+        private const ushort RegisterIdR3 = 0x000A;
+        private const ushort RegisterIdR4 = 0x000B;
+        private const ushort RegisterIdR5 = 0x000C;
+        private const ushort RegisterIdR6 = 0x000D;
+        private const ushort RegisterIdR7 = 0x000E;
         private const ushort RegisterIdStatus = 0x0003;
         private const ushort RegisterIdSP = 0x0004;
         private const ushort RegisterIdCYC = 0x0005;
@@ -80,6 +89,7 @@ namespace FoxVision
 
             regX = 0;
             regY = 0;
+            regR = new ushort[8];
             regSP = StackStartAddress;
             regPC = initialPC;
             regCYC = 0;
@@ -202,6 +212,8 @@ namespace FoxVision
             regPC = 0;
             regCYC = 0;
             regEM = 0;
+            if (regR is not null)
+                Array.Clear(regR, 0, regR.Length);
             _totalCycleCount = 0;
             regStatus = 0;
             _waitActive = false;
@@ -478,10 +490,26 @@ namespace FoxVision
                 case 0x1C:
                     LogInstructionExecuting("CMP", first_operand);
                     {
-                        bool equal = regX == regY;
-                        bool lessThan = regX < regY;
-                        bool greaterThan = regX > regY;
-                        SetComparisonFlags(equal, lessThan, greaterThan, !equal);
+                        // Operand count is encoded in low two bits of the opcode word.
+                        var operandCount = (byte)(opcode & 0b11);
+                        if (operandCount == 2)
+                        {
+                            // V1.11: CMP SRC DST - compare two supplied operands (register/immediate/memory)
+                            ushort a = ResolveOperandValue(first_operand, firstOperandType);
+                            ushort b = ResolveOperandValue(second_operand, secondOperandType);
+                            bool equal = a == b;
+                            bool lessThan = a < b;
+                            bool greaterThan = a > b;
+                            SetComparisonFlags(equal, lessThan, greaterThan, !equal);
+                        }
+                        else
+                        {
+                            // Legacy behaviour: compare X and Y
+                            bool equal = regX == regY;
+                            bool lessThan = regX < regY;
+                            bool greaterThan = regX > regY;
+                            SetComparisonFlags(equal, lessThan, greaterThan, !equal);
+                        }
                     }
                     break;
 
@@ -871,10 +899,22 @@ namespace FoxVision
             if (!IsRegisterOperand(operandType, operand))
                 return false;
 
+            // R0-R7 are only available in extension mode
+            if (operand >= RegisterIdR0 && operand <= RegisterIdR7 && !IsExtendedModeEnabled)
+                return false;
+
             return operand switch
             {
                 RegisterIdX => SetOutValue(regX, out value),
                 RegisterIdY => SetOutValue(regY, out value),
+                RegisterIdR0 => SetOutValue(regR[0], out value),
+                RegisterIdR1 => SetOutValue(regR[1], out value),
+                RegisterIdR2 => SetOutValue(regR[2], out value),
+                RegisterIdR3 => SetOutValue(regR[3], out value),
+                RegisterIdR4 => SetOutValue(regR[4], out value),
+                RegisterIdR5 => SetOutValue(regR[5], out value),
+                RegisterIdR6 => SetOutValue(regR[6], out value),
+                RegisterIdR7 => SetOutValue(regR[7], out value),
                 RegisterIdStatus when allowStatus => SetOutValue(regStatus, out value),
                 RegisterIdSP => SetOutValue(regSP, out value),
                 RegisterIdCYC => SetOutValue(regCYC, out value),
@@ -888,6 +928,10 @@ namespace FoxVision
             if (!IsRegisterOperand(operandType, operand))
                 return false;
 
+            // R0-R7 are only writable in extension mode
+            if (operand >= RegisterIdR0 && operand <= RegisterIdR7 && !IsExtendedModeEnabled)
+                return false;
+
             if (operand == RegisterIdX)
             {
                 regX = value;
@@ -897,6 +941,54 @@ namespace FoxVision
             if (operand == RegisterIdY)
             {
                 regY = value;
+                return true;
+            }
+
+            if (operand == RegisterIdR0)
+            {
+                regR[0] = value;
+                return true;
+            }
+
+            if (operand == RegisterIdR1)
+            {
+                regR[1] = value;
+                return true;
+            }
+
+            if (operand == RegisterIdR2)
+            {
+                regR[2] = value;
+                return true;
+            }
+
+            if (operand == RegisterIdR3)
+            {
+                regR[3] = value;
+                return true;
+            }
+
+            if (operand == RegisterIdR4)
+            {
+                regR[4] = value;
+                return true;
+            }
+
+            if (operand == RegisterIdR5)
+            {
+                regR[5] = value;
+                return true;
+            }
+
+            if (operand == RegisterIdR6)
+            {
+                regR[6] = value;
+                return true;
+            }
+
+            if (operand == RegisterIdR7)
+            {
+                regR[7] = value;
                 return true;
             }
 
@@ -977,7 +1069,7 @@ namespace FoxVision
             if (operandType != OperandTypeRegister && operandType != OperandTypeIndirectMemory)
                 return false;
 
-            return operand == RegisterIdX || operand == RegisterIdY || operand == RegisterIdStatus || operand == RegisterIdSP || operand == RegisterIdCYC || operand == RegisterIdEM;
+            return operand == RegisterIdX || operand == RegisterIdY || (operand >= RegisterIdR0 && operand <= RegisterIdR7) || operand == RegisterIdStatus || operand == RegisterIdSP || operand == RegisterIdCYC || operand == RegisterIdEM;
         }
 
         private bool TryReadPort(ushort port, out ushort value)
