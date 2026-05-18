@@ -34,7 +34,7 @@ comparison     = shift { ("<" | ">" | "<=" | ">=") shift } ;
 shift          = additive { ("<<" | ">>") additive } ;
 additive       = multiplicative { ("+" | "-") multiplicative } ;
 multiplicative = unary { ("*" | "/" | "&") unary } ;
-unary          = [ "-" | "~" ] primary ;
+unary          = [ "-" | "~" | "&" | "*" ] primary ;
 
 primary        = number
                | identifier
@@ -44,7 +44,8 @@ primary        = number
 call           = identifier "(" [ argumentList ] ")" ;
 argumentList   = expression { "," expression } ;
 
-type           = "u8" | "u16" | "void" ;
+type           = baseType { "*" } ;
+baseType       = "u8" | "u16" | "void" ;
 identifier     = letter { letter | digit | "_" } ;
 number         = digit { digit } ;
 

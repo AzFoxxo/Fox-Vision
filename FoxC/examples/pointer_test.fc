@@ -1,0 +1,74 @@
+// Pointer semantics test - u16 pointers
+// Prints PASS or FAIL to port 4 (TTY)
+// Note: u8 array pointers require proper byte-packing encoding
+
+void main()
+{
+    u16 result = 0;
+
+    // Test 1: u16 variable pointer
+    u16 v = 4660;
+    u16 *pv = &v;
+    if (*pv == 4660)
+    {
+        result = 1;
+    }
+    else
+    {
+        out_port(4, 49); // '1'
+    }
+
+    // Test 2: u16 array pointer to first element
+    u16 arr[3];
+    arr[0] = 100;
+    arr[1] = 200;
+    arr[2] = 300;
+
+    u16 *pa = &arr[0];
+    if (*pa == 100)
+    {
+        result = 2;
+    }
+    else
+    {
+        out_port(4, 50); // '2'
+    }
+
+    // Test 3: pointer to array element [1]
+    u16 *pa1 = &arr[1];
+    if (*pa1 == 200)
+    {
+        result = 3;
+    }
+    else
+    {
+        out_port(4, 51); // '3'
+    }
+
+    // Test 4: dereference assignment through pointer
+    *pa1 = 999;
+    if (arr[1] == 999)
+    {
+        result = 4;
+    }
+    else
+    {
+        out_port(4, 52); // '4'
+    }
+
+    // Print result to TTY port (port 4)
+    if (result == 4)
+    {
+        out_port(4, 80); // 'P'
+        out_port(4, 65); // 'A'
+        out_port(4, 83); // 'S'
+        out_port(4, 83); // 'S'
+    }
+    else
+    {
+        out_port(4, 70); // 'F'
+        out_port(4, 65); // 'A'
+        out_port(4, 73); // 'I'
+        out_port(4, 76); // 'L'
+    }
+}

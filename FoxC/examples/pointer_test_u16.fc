@@ -1,0 +1,21 @@
+// Test only u16 pointers (skip u8 complexity)
+void main()
+{
+    u16 x = 100;
+    u16 *px = &x;
+    
+    if (*px == 100)
+    {
+        out_port(4, 80); // 'P' - PASS
+        out_port(4, 65); // 'A'
+        out_port(4, 83); // 'S'
+        out_port(4, 83); // 'S'
+    }
+    else
+    {
+        out_port(4, 70); // 'F' - FAIL
+        out_port(4, 65); // 'A'
+        out_port(4, 73); // 'I'
+        out_port(4, 76); // 'L'
+    }
+}

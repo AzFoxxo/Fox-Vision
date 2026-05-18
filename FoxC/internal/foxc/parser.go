@@ -14,14 +14,22 @@ func parse(tokens []token) (*Program, error) {
 	p := &parser{tokens: tokens}
 	prog := &Program{}
 	for !p.at(tokEOF) {
-		typ, err := p.parseType()
+		base, err := p.parseType()
 		if err != nil {
 			return nil, err
+		}
+		// allow pointer declarators: '*' between type and identifier
+		ptr := 0
+		for p.at(tokStar) {
+			p.next()
+			ptr++
 		}
 		nameTok, err := p.expect(tokIdent, "expected identifier")
 		if err != nil {
 			return nil, err
 		}
+		// build Type
+		typ := Type{Base: base, Ptr: ptr}
 		if p.at(tokLParen) {
 			fn, err := p.parseFunction(typ, nameTok.text)
 			if err != nil {
@@ -39,22 +47,28 @@ func parse(tokens []token) (*Program, error) {
 	return prog, nil
 }
 
-func (p *parser) parseFunction(ret TypeKind, name string) (*FuncDecl, error) {
+func (p *parser) parseFunction(ret Type, name string) (*FuncDecl, error) {
 	if _, err := p.expect(tokLParen, "expected '('"); err != nil {
 		return nil, err
 	}
 	var params []Param
 	if !p.at(tokRParen) {
 		for {
-			typ, err := p.parseType()
+			base, err := p.parseType()
 			if err != nil {
 				return nil, err
+			}
+			// allow pointer declarator in parameter
+			ptr := 0
+			for p.at(tokStar) {
+				p.next()
+				ptr++
 			}
 			paramName, err := p.expect(tokIdent, "expected parameter name")
 			if err != nil {
 				return nil, err
 			}
-			params = append(params, Param{Name: paramName.text, Type: typ})
+			params = append(params, Param{Name: paramName.text, Type: Type{Base: base, Ptr: ptr}})
 			if p.at(tokComma) {
 				p.next()
 				continue
@@ -92,14 +106,21 @@ func (p *parser) parseBlock() ([]Stmt, error) {
 
 func (p *parser) parseStmt() (Stmt, error) {
 	if p.at(tokType) {
-		typ, err := p.parseType()
+		base, err := p.parseType()
 		if err != nil {
 			return nil, err
+		}
+		// allow pointer declarators on local vars too: '*' between type and identifier
+		ptr := 0
+		for p.at(tokStar) {
+			p.next()
+			ptr++
 		}
 		nameTok, err := p.expect(tokIdent, "expected variable name")
 		if err != nil {
 			return nil, err
 		}
+		typ := Type{Base: base, Ptr: ptr}
 		decl, err := p.parseVarDeclTail(typ, nameTok.text)
 		if err != nil {
 			return nil, err
@@ -169,29 +190,10 @@ func (p *parser) parseStmt() (Stmt, error) {
 		return &ReturnStmt{Value: expr}, nil
 	}
 
-	if p.at(tokIdent) && p.peek(1).kind == tokAssign {
-		name := p.next().text
-		p.next()
-		value, err := p.parseExpr()
+	// Support assignment to lvalues: identifiers, indexed elements, and dereferenced pointers
+	if p.startsAssignment() {
+		lval, err := p.parseLValue()
 		if err != nil {
-			return nil, err
-		}
-		if _, err := p.expect(tokSemi, "expected ';'"); err != nil {
-			return nil, err
-		}
-		return &AssignStmt{Name: name, Value: value}, nil
-	}
-
-	if p.at(tokIdent) && p.startsIndexedAssignment() {
-		name := p.next().text
-		if _, err := p.expect(tokLBracket, "expected '['"); err != nil {
-			return nil, err
-		}
-		index, err := p.parseExpr()
-		if err != nil {
-			return nil, err
-		}
-		if _, err := p.expect(tokRBracket, "expected ']'"); err != nil {
 			return nil, err
 		}
 		if _, err := p.expect(tokAssign, "expected '='"); err != nil {
@@ -204,7 +206,7 @@ func (p *parser) parseStmt() (Stmt, error) {
 		if _, err := p.expect(tokSemi, "expected ';'"); err != nil {
 			return nil, err
 		}
-		return &AssignIndexStmt{Name: name, Index: index, Value: value}, nil
+		return &AssignStmt{LHS: lval, Value: value}, nil
 	}
 
 	expr, err := p.parseExpr()
@@ -217,7 +219,98 @@ func (p *parser) parseStmt() (Stmt, error) {
 	return &ExprStmt{Value: expr}, nil
 }
 
-func (p *parser) parseVarDeclTail(typ TypeKind, name string) (*VarDecl, error) {
+func (p *parser) parseLValue() (Expr, error) {
+	// support unary '*' chains
+	if p.at(tokStar) {
+		p.next()
+		x, err := p.parseLValue()
+		if err != nil {
+			return nil, err
+		}
+		return &UnaryExpr{Op: "*", X: x}, nil
+	}
+	// support parenthesized expressions like *(expr)
+	if p.at(tokLParen) {
+		p.next()
+		x, err := p.parseExpr()
+		if err != nil {
+			return nil, err
+		}
+		if _, err := p.expect(tokRParen, "expected ')'"); err != nil {
+			return nil, err
+		}
+		return x, nil
+	}
+	if p.at(tokIdent) {
+		name := p.next().text
+		if p.at(tokLBracket) {
+			p.next()
+			index, err := p.parseExpr()
+			if err != nil {
+				return nil, err
+			}
+			if _, err := p.expect(tokRBracket, "expected ']'"); err != nil {
+				return nil, err
+			}
+			return &IndexExpr{Name: name, Index: index}, nil
+		}
+		return &IdentExpr{Name: name}, nil
+	}
+	return nil, fmt.Errorf("expected lvalue")
+}
+
+func (p *parser) startsAssignment() bool {
+	// lookahead to see if tokens form an lvalue followed by '='
+	i := 0
+	// consume leading '*'
+	for p.peek(i).kind == tokStar {
+		i++
+	}
+	// handle parenthesized expressions
+	if p.peek(i).kind == tokLParen {
+		depth := 1
+		i++
+		for depth > 0 {
+			k := p.peek(i)
+			if k.kind == tokEOF {
+				return false
+			}
+			if k.kind == tokLParen {
+				depth++
+			} else if k.kind == tokRParen {
+				depth--
+			}
+			i++
+		}
+		return p.peek(i).kind == tokAssign
+	}
+	if p.peek(i).kind != tokIdent {
+		return false
+	}
+	i++
+	// optional indexing
+	if p.peek(i).kind == tokLBracket {
+		depth := 0
+		for {
+			k := p.peek(i)
+			if k.kind == tokLBracket {
+				depth++
+			} else if k.kind == tokRBracket {
+				depth--
+				if depth == 0 {
+					i++
+					break
+				}
+			} else if k.kind == tokEOF {
+				return false
+			}
+			i++
+		}
+	}
+	return p.peek(i).kind == tokAssign
+}
+
+func (p *parser) parseVarDeclTail(typ Type, name string) (*VarDecl, error) {
 	decl := &VarDecl{Name: name, Type: typ}
 	if p.at(tokLBracket) {
 		p.next()
@@ -433,6 +526,22 @@ func (p *parser) parseUnary() (Expr, error) {
 			return nil, err
 		}
 		return &UnaryExpr{Op: "~", X: x}, nil
+	}
+	if p.at(tokStar) {
+		p.next()
+		x, err := p.parseUnary()
+		if err != nil {
+			return nil, err
+		}
+		return &UnaryExpr{Op: "*", X: x}, nil
+	}
+	if p.at(tokAmp) {
+		p.next()
+		x, err := p.parseUnary()
+		if err != nil {
+			return nil, err
+		}
+		return &UnaryExpr{Op: "&", X: x}, nil
 	}
 	return p.parsePrimary()
 }

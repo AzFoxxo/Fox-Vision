@@ -1,0 +1,25 @@
+// Test u16 arrays with pointers
+void main()
+{
+    u16 arr[3];
+    arr[0] = 10;
+    arr[1] = 20;
+    arr[2] = 30;
+    
+    u16 *pa = &arr[0];
+    
+    if (*pa == 10)
+    {
+        out_port(4, 80); // 'P'
+        out_port(4, 65); // 'A'
+        out_port(4, 83); // 'S'
+        out_port(4, 83); // 'S'
+    }
+    else
+    {
+        out_port(4, 70); // 'F'
+        out_port(4, 65); // 'A'
+        out_port(4, 73); // 'I'
+        out_port(4, 76); // 'L'
+    }
+}

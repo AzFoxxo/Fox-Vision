@@ -9,17 +9,26 @@ const (
 	TypeVoid
 )
 
-func (t TypeKind) String() string {
-	switch t {
+// Type represents a possibly-pointer type. Ptr==0 means non-pointer.
+type Type struct {
+	Base TypeKind
+	Ptr  int
+}
+
+func (t Type) String() string {
+	s := "<invalid>"
+	switch t.Base {
 	case TypeU8:
-		return "u8"
+		s = "u8"
 	case TypeU16:
-		return "u16"
+		s = "u16"
 	case TypeVoid:
-		return "void"
-	default:
-		return "<invalid>"
+		s = "void"
 	}
+	for i := 0; i < t.Ptr; i++ {
+		s += "*"
+	}
+	return s
 }
 
 type Program struct {
@@ -29,12 +38,12 @@ type Program struct {
 
 type Param struct {
 	Name string
-	Type TypeKind
+	Type Type
 }
 
 type VarDecl struct {
 	Name     string
-	Type     TypeKind
+	Type     Type
 	IsArray  bool
 	ArrayLen int
 	Init     Expr
@@ -42,7 +51,7 @@ type VarDecl struct {
 
 type FuncDecl struct {
 	Name   string
-	Ret    TypeKind
+	Ret    Type
 	Params []Param
 	Body   []Stmt
 }
@@ -62,7 +71,7 @@ type VarDeclStmt struct {
 func (*VarDeclStmt) stmtNode() {}
 
 type AssignStmt struct {
-	Name  string
+	LHS   Expr
 	Value Expr
 }
 

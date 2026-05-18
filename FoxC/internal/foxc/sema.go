@@ -3,12 +3,12 @@ package foxc
 import "fmt"
 
 type funcSig struct {
-	ret    TypeKind
-	params []TypeKind
+	ret    Type
+	params []Type
 }
 
 type symbolInfo struct {
-	typ      TypeKind
+	typ      Type
 	isArray  bool
 	arrayLen int
 }
@@ -28,16 +28,16 @@ func check(prog *Program, opts CompileOptions) error {
 		extendedMode: isExtendedMode(opts.Mode),
 	}
 
-	s.funcs["poke"] = funcSig{ret: TypeVoid, params: []TypeKind{TypeU16, TypeU16}}
-	s.funcs["peek"] = funcSig{ret: TypeU16, params: []TypeKind{TypeU16}}
-	s.funcs["wait"] = funcSig{ret: TypeVoid, params: []TypeKind{TypeU16}}
-	s.funcs["cyc"] = funcSig{ret: TypeU16, params: []TypeKind{}}
-	s.funcs["vblank"] = funcSig{ret: TypeVoid, params: []TypeKind{}}
-	s.funcs["in_port"] = funcSig{ret: TypeU16, params: []TypeKind{TypeU16}}
-	s.funcs["out_port"] = funcSig{ret: TypeVoid, params: []TypeKind{TypeU16, TypeU16}}
+	s.funcs["poke"] = funcSig{ret: Type{Base: TypeVoid}, params: []Type{{Base: TypeU16}, {Base: TypeU16}}}
+	s.funcs["peek"] = funcSig{ret: Type{Base: TypeU16}, params: []Type{{Base: TypeU16}}}
+	s.funcs["wait"] = funcSig{ret: Type{Base: TypeVoid}, params: []Type{{Base: TypeU16}}}
+	s.funcs["cyc"] = funcSig{ret: Type{Base: TypeU16}, params: []Type{}}
+	s.funcs["vblank"] = funcSig{ret: Type{Base: TypeVoid}, params: []Type{}}
+	s.funcs["in_port"] = funcSig{ret: Type{Base: TypeU16}, params: []Type{{Base: TypeU16}}}
+	s.funcs["out_port"] = funcSig{ret: Type{Base: TypeVoid}, params: []Type{{Base: TypeU16}, {Base: TypeU16}}}
 
 	for _, g := range prog.Globals {
-		if g.Type == TypeVoid {
+		if g.Type.Base == TypeVoid && g.Type.Ptr == 0 {
 			return fmt.Errorf("global %q cannot be void", g.Name)
 		}
 		if _, exists := s.globals[g.Name]; exists {
@@ -46,6 +46,9 @@ func check(prog *Program, opts CompileOptions) error {
 		if g.IsArray && g.ArrayLen <= 0 {
 			return fmt.Errorf("global array %q must have positive length", g.Name)
 		}
+		if g.IsArray && g.Type.Ptr != 0 {
+			return fmt.Errorf("array %q cannot have pointer element type", g.Name)
+		}
 		s.globals[g.Name] = symbolInfo{typ: g.Type, isArray: g.IsArray, arrayLen: g.ArrayLen}
 	}
 
@@ -53,9 +56,9 @@ func check(prog *Program, opts CompileOptions) error {
 		if _, exists := s.funcs[fn.Name]; exists {
 			return fmt.Errorf("duplicate function %q", fn.Name)
 		}
-		params := make([]TypeKind, 0, len(fn.Params))
+		params := make([]Type, 0, len(fn.Params))
 		for _, p := range fn.Params {
-			if p.Type == TypeVoid {
+			if p.Type.Base == TypeVoid && p.Type.Ptr == 0 {
 				return fmt.Errorf("parameter %q in %q cannot be void", p.Name, fn.Name)
 			}
 			params = append(params, p.Type)
@@ -67,7 +70,7 @@ func check(prog *Program, opts CompileOptions) error {
 	if !ok {
 		return fmt.Errorf("missing required function main")
 	}
-	if mainSig.ret != TypeVoid || len(mainSig.params) != 0 {
+	if mainSig.ret.Base != TypeVoid || mainSig.ret.Ptr != 0 || len(mainSig.params) != 0 {
 		return fmt.Errorf("main must have signature void main()")
 	}
 
@@ -99,8 +102,10 @@ func check(prog *Program, opts CompileOptions) error {
 				return fmt.Errorf("function %s: %w", fn.Name, err)
 			}
 		}
-		if fn.Ret != TypeVoid && !stmtListAlwaysReturns(fn.Body) {
-			return fmt.Errorf("function %s: non-void function must return on all paths", fn.Name)
+		if fn.Ret.Base != TypeVoid || fn.Ret.Ptr != 0 {
+			if !stmtListAlwaysReturns(fn.Body) {
+				return fmt.Errorf("function %s: non-void function must return on all paths", fn.Name)
+			}
 		}
 		s.popScope()
 	}
@@ -111,7 +116,7 @@ func check(prog *Program, opts CompileOptions) error {
 func (s *semantic) checkStmt(st Stmt) error {
 	switch n := st.(type) {
 	case *VarDeclStmt:
-		if n.Decl.Type == TypeVoid {
+		if n.Decl.Type.Base == TypeVoid && n.Decl.Type.Ptr == 0 {
 			return fmt.Errorf("variable %q cannot be void", n.Decl.Name)
 		}
 		if n.Decl.IsArray && n.Decl.ArrayLen <= 0 {
@@ -133,19 +138,66 @@ func (s *semantic) checkStmt(st Stmt) error {
 			}
 		}
 	case *AssignStmt:
-		lhs, ok := s.lookupVar(n.Name)
-		if !ok {
-			return fmt.Errorf("unknown variable %q", n.Name)
-		}
-		if lhs.isArray {
-			return fmt.Errorf("cannot assign to array %q without an index", n.Name)
-		}
-		rhs, err := s.exprType(n.Value)
-		if err != nil {
-			return err
-		}
-		if !assignable(lhs.typ, rhs) {
-			return fmt.Errorf("cannot assign %s to %s of type %s", rhs, n.Name, lhs.typ)
+		// LHS can be IdentExpr, IndexExpr, or UnaryExpr('*')
+		switch l := n.LHS.(type) {
+		case *IdentExpr:
+			lhs, ok := s.lookupVar(l.Name)
+			if !ok {
+				return fmt.Errorf("unknown variable %q", l.Name)
+			}
+			if lhs.isArray {
+				return fmt.Errorf("cannot assign to array %q without an index", l.Name)
+			}
+			rhs, err := s.exprType(n.Value)
+			if err != nil {
+				return err
+			}
+			if !assignable(lhs.typ, rhs) {
+				return fmt.Errorf("cannot assign %s to %s of type %s", rhs, l.Name, lhs.typ)
+			}
+		case *IndexExpr:
+			lhs, ok := s.lookupVar(l.Name)
+			if !ok {
+				return fmt.Errorf("unknown variable %q", l.Name)
+			}
+			if !lhs.isArray {
+				return fmt.Errorf("%q is not an array", l.Name)
+			}
+			idxType, err := s.exprType(l.Index)
+			if err != nil {
+				return err
+			}
+			if idxType.Base == TypeVoid && idxType.Ptr == 0 {
+				return fmt.Errorf("array index cannot be void")
+			}
+			rhs, err := s.exprType(n.Value)
+			if err != nil {
+				return err
+			}
+			if !assignable(lhs.typ, rhs) {
+				return fmt.Errorf("cannot assign %s to %s element of type %s", rhs, l.Name, lhs.typ)
+			}
+		case *UnaryExpr:
+			if l.Op != "*" {
+				return fmt.Errorf("invalid assignment target")
+			}
+			t, err := s.exprType(l.X)
+			if err != nil {
+				return err
+			}
+			if t.Ptr == 0 {
+				return fmt.Errorf("cannot dereference non-pointer in assignment")
+			}
+			pointee := Type{Base: t.Base, Ptr: t.Ptr - 1}
+			rhs, err := s.exprType(n.Value)
+			if err != nil {
+				return err
+			}
+			if !assignable(pointee, rhs) {
+				return fmt.Errorf("cannot assign %s to dereferenced %s", rhs, pointee)
+			}
+		default:
+			return fmt.Errorf("unsupported assignment target")
 		}
 	case *AssignIndexStmt:
 		lhs, ok := s.lookupVar(n.Name)
@@ -159,7 +211,7 @@ func (s *semantic) checkStmt(st Stmt) error {
 		if err != nil {
 			return err
 		}
-		if idxType == TypeVoid {
+		if idxType.Base == TypeVoid && idxType.Ptr == 0 {
 			return fmt.Errorf("array index cannot be void")
 		}
 		rhs, err := s.exprType(n.Value)
@@ -199,7 +251,7 @@ func (s *semantic) checkStmt(st Stmt) error {
 		}
 		s.popScope()
 	case *ReturnStmt:
-		if s.currFn.Ret == TypeVoid {
+		if s.currFn.Ret.Base == TypeVoid && s.currFn.Ret.Ptr == 0 {
 			if n.Value != nil {
 				return fmt.Errorf("void function cannot return a value")
 			}
@@ -225,109 +277,178 @@ func (s *semantic) checkStmt(st Stmt) error {
 	return nil
 }
 
-func (s *semantic) exprType(e Expr) (TypeKind, error) {
+func (s *semantic) exprType(e Expr) (Type, error) {
 	switch n := e.(type) {
 	case *IntLit:
 		if n.Value < 0 || n.Value > 0xFFFF {
-			return TypeInvalid, fmt.Errorf("literal %d out of 16-bit range", n.Value)
+			return Type{Base: TypeInvalid}, fmt.Errorf("literal %d out of 16-bit range", n.Value)
 		}
 		if n.Value <= 0xFF {
-			return TypeU8, nil
+			return Type{Base: TypeU8}, nil
 		}
-		return TypeU16, nil
+		return Type{Base: TypeU16}, nil
 	case *IdentExpr:
 		t, ok := s.lookupVar(n.Name)
 		if !ok {
-			return TypeInvalid, fmt.Errorf("unknown variable %q", n.Name)
+			return Type{Base: TypeInvalid}, fmt.Errorf("unknown variable %q", n.Name)
 		}
 		if t.isArray {
-			return TypeInvalid, fmt.Errorf("array %q requires an index", n.Name)
+			return Type{Base: TypeInvalid}, fmt.Errorf("array %q requires an index", n.Name)
 		}
 		return t.typ, nil
 	case *IndexExpr:
 		t, ok := s.lookupVar(n.Name)
 		if !ok {
-			return TypeInvalid, fmt.Errorf("unknown variable %q", n.Name)
+			return Type{Base: TypeInvalid}, fmt.Errorf("unknown variable %q", n.Name)
 		}
 		if !t.isArray {
-			return TypeInvalid, fmt.Errorf("%q is not an array", n.Name)
+			return Type{Base: TypeInvalid}, fmt.Errorf("%q is not an array", n.Name)
 		}
 		idxType, err := s.exprType(n.Index)
 		if err != nil {
-			return TypeInvalid, err
+			return Type{Base: TypeInvalid}, err
 		}
-		if idxType == TypeVoid {
-			return TypeInvalid, fmt.Errorf("array index cannot be void")
+		if idxType.Base == TypeVoid && idxType.Ptr == 0 {
+			return Type{Base: TypeInvalid}, fmt.Errorf("array index cannot be void")
 		}
-		return t.typ, nil
+		return Type{Base: t.typ.Base}, nil
 	case *UnaryExpr:
-		t, err := s.exprType(n.X)
-		if err != nil {
-			return TypeInvalid, err
-		}
-		if t == TypeVoid {
-			return TypeInvalid, fmt.Errorf("unary operator on void")
-		}
 		if n.Op == "~" {
+			t, err := s.exprType(n.X)
+			if err != nil {
+				return Type{Base: TypeInvalid}, err
+			}
+			if t.Base == TypeVoid && t.Ptr == 0 {
+				return Type{Base: TypeInvalid}, fmt.Errorf("unary operator on void")
+			}
 			return t, nil
 		}
-		return TypeU16, nil
+		if n.Op == "-" {
+			// numeric negation -> u16
+			_, err := s.exprType(n.X)
+			if err != nil {
+				return Type{Base: TypeInvalid}, err
+			}
+			return Type{Base: TypeU16}, nil
+		}
+		if n.Op == "*" {
+			tx, err := s.exprType(n.X)
+			if err != nil {
+				return Type{Base: TypeInvalid}, err
+			}
+			if tx.Ptr == 0 {
+				return Type{Base: TypeInvalid}, fmt.Errorf("cannot dereference non-pointer type %s", tx)
+			}
+			return Type{Base: tx.Base, Ptr: tx.Ptr - 1}, nil
+		}
+		if n.Op == "&" {
+			// address-of: operand must be lvalue (IdentExpr or IndexExpr)
+			switch a := n.X.(type) {
+			case *IdentExpr:
+				t, ok := s.lookupVar(a.Name)
+				if !ok {
+					return Type{Base: TypeInvalid}, fmt.Errorf("unknown variable %q", a.Name)
+				}
+				// address of array yields pointer to element
+				if t.isArray {
+					return Type{Base: t.typ.Base, Ptr: 1}, nil
+				}
+				return Type{Base: t.typ.Base, Ptr: t.typ.Ptr + 1}, nil
+			case *IndexExpr:
+				t, ok := s.lookupVar(a.Name)
+				if !ok {
+					return Type{Base: TypeInvalid}, fmt.Errorf("unknown variable %q", a.Name)
+				}
+				if !t.isArray {
+					return Type{Base: TypeInvalid}, fmt.Errorf("%q is not an array", a.Name)
+				}
+				return Type{Base: t.typ.Base, Ptr: 1}, nil
+			default:
+				return Type{Base: TypeInvalid}, fmt.Errorf("address-of requires an lvalue")
+			}
+		}
+		return Type{Base: TypeInvalid}, fmt.Errorf("unsupported unary operator %q", n.Op)
 	case *BinaryExpr:
+		// pointer arithmetic and comparisons
 		lt, err := s.exprType(n.Left)
 		if err != nil {
-			return TypeInvalid, err
+			return Type{Base: TypeInvalid}, err
 		}
 		rt, err := s.exprType(n.Right)
 		if err != nil {
-			return TypeInvalid, err
+			return Type{Base: TypeInvalid}, err
 		}
-		if lt == TypeVoid || rt == TypeVoid {
-			return TypeInvalid, fmt.Errorf("binary operator on void")
+		if (lt.Base == TypeVoid && lt.Ptr == 0) || (rt.Base == TypeVoid && rt.Ptr == 0) {
+			return Type{Base: TypeInvalid}, fmt.Errorf("binary operator on void")
 		}
 		switch n.Op {
 		case "&&", "||":
-			return TypeU8, nil
+			return Type{Base: TypeU8}, nil
 		case "==", "!=", "<", ">", "<=", ">=":
-			return TypeU8, nil
-		case "+", "-", "*", "/", "&", "|", "^", "<<", ">>":
-			if lt == TypeU16 || rt == TypeU16 {
-				return TypeU16, nil
+			return Type{Base: TypeU8}, nil
+		case "+":
+			// pointer + int or int + pointer
+			if lt.Ptr > 0 && rt.Ptr == 0 {
+				return lt, nil
 			}
-			return TypeU8, nil
-		default:
-			return TypeInvalid, fmt.Errorf("unsupported operator %q", n.Op)
+			if rt.Ptr > 0 && lt.Ptr == 0 {
+				return rt, nil
+			}
+			fallthrough
+		case "-":
+			// pointer - int -> pointer; int - pointer invalid; pointer - pointer -> integer (u16)
+			if n.Op == "-" && lt.Ptr > 0 && rt.Ptr > 0 {
+				// pointer subtraction yields integer
+				return Type{Base: TypeU16}, nil
+			}
+			if (lt.Ptr > 0 && rt.Ptr == 0) || (rt.Ptr > 0 && lt.Ptr == 0 && n.Op == "+") {
+				if lt.Ptr > 0 {
+					return lt, nil
+				}
+				return rt, nil
+			}
+			// otherwise numeric binary op
+		case "*", "/", "&", "|", "^", "<<", ">>":
+			// fall through to numeric rules
 		}
+		// numeric result type: u16 if either operand is u16
+		if lt.Base == TypeU16 || rt.Base == TypeU16 {
+			return Type{Base: TypeU16}, nil
+		}
+		return Type{Base: TypeU8}, nil
 	case *CallExpr:
 		if !s.extendedMode && (n.Callee == "in_port" || n.Callee == "out_port") {
-			return TypeInvalid, fmt.Errorf("%s requires extended mode", n.Callee)
+			return Type{Base: TypeInvalid}, fmt.Errorf("%s requires extended mode", n.Callee)
 		}
 		sig, ok := s.funcs[n.Callee]
 		if !ok {
-			return TypeInvalid, fmt.Errorf("unknown function %q", n.Callee)
+			return Type{Base: TypeInvalid}, fmt.Errorf("unknown function %q", n.Callee)
 		}
 		if len(sig.params) != len(n.Args) {
-			return TypeInvalid, fmt.Errorf("%s expects %d arguments, got %d", n.Callee, len(sig.params), len(n.Args))
+			return Type{Base: TypeInvalid}, fmt.Errorf("%s expects %d arguments, got %d", n.Callee, len(sig.params), len(n.Args))
 		}
 		for i, arg := range n.Args {
 			at, err := s.exprType(arg)
 			if err != nil {
-				return TypeInvalid, err
+				return Type{Base: TypeInvalid}, err
 			}
 			if !assignable(sig.params[i], at) {
-				return TypeInvalid, fmt.Errorf("argument %d for %s: cannot assign %s to %s", i+1, n.Callee, at, sig.params[i])
+				return Type{Base: TypeInvalid}, fmt.Errorf("argument %d for %s: cannot assign %s to %s", i+1, n.Callee, at, sig.params[i])
 			}
 		}
 		return sig.ret, nil
 	default:
-		return TypeInvalid, fmt.Errorf("unsupported expression")
+		return Type{Base: TypeInvalid}, fmt.Errorf("unsupported expression")
 	}
 }
 
-func assignable(dst, src TypeKind) bool {
-	if dst == src {
+func assignable(dst, src Type) bool {
+	// exact match including pointer level
+	if dst.Base == src.Base && dst.Ptr == src.Ptr {
 		return true
 	}
-	if dst == TypeU16 && src == TypeU8 {
+	// allow widening u8 -> u16 for non-pointer values
+	if dst.Ptr == 0 && src.Ptr == 0 && dst.Base == TypeU16 && src.Base == TypeU8 {
 		return true
 	}
 	return false

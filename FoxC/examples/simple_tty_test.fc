@@ -1,0 +1,8 @@
+// Simple TTY test - just print PASS
+void main()
+{
+    out_port(1, 80); // 'P'
+    out_port(1, 65); // 'A'
+    out_port(1, 83); // 'S'
+    out_port(1, 83); // 'S'
+}
