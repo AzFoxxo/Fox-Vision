@@ -76,7 +76,7 @@ class Generator
                 resolvedOperands.Add(resolvedOperand);
             }
 
-            if (!ValidateInstructionOperands(instruction, resolvedOperands, sourceFile, diagnostics))
+            if (!ValidateInstructionOperands(instruction, resolvedOperands, mode, sourceFile, diagnostics))
                 continue;
 
             var encodedOpcode = EncodeOpcode(instruction, opcodeValue, resolvedOperands);
@@ -115,9 +115,29 @@ class Generator
     private static bool ValidateInstructionOperands(
         IRInstruction instruction,
         IReadOnlyList<ResolvedOperand> resolvedOperands,
+        AssemblerMode mode,
         string sourceFile,
         List<Diagnostic> diagnostics)
     {
+        // In legacy mode, R0-R7 registers are not available.
+        if (mode == AssemblerMode.Legacy)
+        {
+            for (int i = 0; i < resolvedOperands.Count; i++)
+            {
+                var ro = resolvedOperands[i];
+                if (ro.Kind == IROperandKind.Register && ro.Value >= 0x0007 && ro.Value <= 0x000E)
+                {
+                    diagnostics.Add(Diagnostic.Error(
+                        $"Register operand 'R{ro.Value - 0x0007}' is only available in extended mode.",
+                        sourceFile,
+                        instruction.Line,
+                        instruction.Column,
+                        instruction.SourceLine));
+                    return false;
+                }
+            }
+        }
+
         return instruction.Opcode switch
         {
             "IN" => ValidatePortTransfer(instruction, resolvedOperands, sourceFile, diagnostics, portOperandIndex: 0, registerOperandIndex: 1),

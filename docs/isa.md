@@ -13,6 +13,16 @@ The CPU is a single threaded 8MHz RISC chip. It uses the FoxVision16 architectur
 | 0x4 | SP       | 16-bit | Yes        | Stack Pointer. Points to the top of the stack in memory. Modified by PUSH/POP instructions and may be read/written directly for low-level control.                                                                  |
 | 0x5 | CYC      | 16-bit | Read-only  | Global cycle counter. Increments by 1 every CPU cycle (wrapping at 0xFFFF → 0x0000). Represents elapsed CPU cycles since reset and is used for timing and synchronisation.                                          |
 | 0x6 | EM       | 16-bit | Yes        | Extension Mode control register. Defaults to `0x0000`. Writing `0x0001` enables extension mode; writing `0x0000` disables it. Used to toggle extended CPU features and unlock up to 32K words of ROM address space. |
+| 0x7 | R0       | 16-bit | Yes        | General-purpose register (Introduced with ISA V1.11)                                                                                                                                                                |
+| 0x8 | R1       | 16-bit | Yes        | General-purpose register (Introduced with ISA V1.11)                                                                                                                                                                |
+| 0x9 | R2       | 16-bit | Yes        | General-purpose register (Introduced with ISA V1.11)                                                                                                                                                                |
+| 0xA | R3       | 16-bit | Yes        | General-purpose register (Introduced with ISA V1.11)                                                                                                                                                                |
+| 0xB | R4       | 16-bit | Yes        | General-purpose register (Introduced with ISA V1.11)                                                                                                                                                                |
+| 0xC | R5       | 16-bit | Yes        | General-purpose register (Introduced with ISA V1.11)                                                                                                                                                                |
+| 0xD | R6       | 16-bit | Yes        | General-purpose register (Introduced with ISA V1.11)                                                                                                                                                                |
+| 0xE | R7       | 16-bit | Yes        | General-purpose register (Introduced with ISA V1.11)                                                                                                                                                                |
+
+
 
 | Bit | Name                   | Meaning                                              |
 | --- | ---------------------- | ---------------------------------------------------- |
@@ -28,7 +38,7 @@ The CPU is a single threaded 8MHz RISC chip. It uses the FoxVision16 architectur
 
 `JPZ` and `JNZ` evaluate bit 0. `EQU` writes bit 0 using equality. `LEQ` preserves legacy flow by writing bit 0 using the less-than result while also updating less-than/greater-than/not-equal bits.
 
-`CMP` (V1.5) writes all comparison bits using `X` vs `Y` and writes bit 0 using equality.
+`CMP` (V1.5) writes all comparison bits using `X` vs `Y` and writes bit 0 using equality. Or general registers R0-R7 in V1.11 using operand supplied registers.
 
 ## Instruction Encoding
 
@@ -118,11 +128,11 @@ MOI register operands support `X`, `Y`, and `STATUS` (source-only for status rea
 - `0000 0000` `0001 1010` - `STR` `SRC` `DST`
 - `0000 0000` `0001 1011` - `LOD` `SRC` `DST`
 
-### Extended comparison and jump instructions (V1.5)
+### Extended comparison and jump instructions (V1.5 and V1.11 revision)
 
 Extended comparison and jump instructions (ECJI) are instructions which modernise comparison and jump logic to reduce assembly instructions and make better use of redundant space in the status register.
 
-- `0000 0000` `0001 1100` - `CMP` - Compare `X` and `Y`, update Status comparison bits
+- `0000 0000` `0001 1100` - `CMP` - Compare `X` and `Y`, update Status comparison bits/Compare a given register to a second given register, update Status comparison bits (same opcode but with operand count set to 2)
 - `0000 0000` `0001 1101` - `JEQ` - Jump if equal (Status bit 0)
 - `0000 0000` `0001 1110` - `JNE` - Jump if not equal (Status bit 3)
 - `0000 0000` `0001 1111` - `JLT` - Jump if less-than (Status bit 1)

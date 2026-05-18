@@ -1,0 +1,5 @@
+MOV %1 EM
+MOV %5 R0
+MOV %10 R1
+CMP R0 R1
+NOP
