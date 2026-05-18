@@ -5,3 +5,4 @@ obj/
 *.vf16obj
 FoxC/**/*f16
 .vscode/
+*foxc*
