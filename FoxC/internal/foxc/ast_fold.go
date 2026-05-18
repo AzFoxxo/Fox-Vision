@@ -21,6 +21,9 @@ func foldStmt(st Stmt) Stmt {
 		}
 	case *AssignStmt:
 		n.Value = foldExpr(n.Value)
+	case *AssignIndexStmt:
+		n.Index = foldExpr(n.Index)
+		n.Value = foldExpr(n.Value)
 	case *ExprStmt:
 		n.Value = foldExpr(n.Value)
 	case *ReturnStmt:
@@ -53,6 +56,9 @@ func foldExpr(e Expr) Expr {
 				return &IntLit{Value: normalize16(-lit.Value)}
 			}
 		}
+		return n
+	case *IndexExpr:
+		n.Index = foldExpr(n.Index)
 		return n
 	case *BinaryExpr:
 		n.Left = foldExpr(n.Left)

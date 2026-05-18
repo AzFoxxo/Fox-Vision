@@ -33,9 +33,11 @@ type Param struct {
 }
 
 type VarDecl struct {
-	Name string
-	Type TypeKind
-	Init Expr
+	Name     string
+	Type     TypeKind
+	IsArray  bool
+	ArrayLen int
+	Init     Expr
 }
 
 type FuncDecl struct {
@@ -65,6 +67,14 @@ type AssignStmt struct {
 }
 
 func (*AssignStmt) stmtNode() {}
+
+type AssignIndexStmt struct {
+	Name  string
+	Index Expr
+	Value Expr
+}
+
+func (*AssignIndexStmt) stmtNode() {}
 
 type IfStmt struct {
 	Cond Expr
@@ -104,6 +114,13 @@ type IdentExpr struct {
 }
 
 func (*IdentExpr) exprNode() {}
+
+type IndexExpr struct {
+	Name  string
+	Index Expr
+}
+
+func (*IndexExpr) exprNode() {}
 
 type UnaryExpr struct {
 	Op string

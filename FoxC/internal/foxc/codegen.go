@@ -24,6 +24,8 @@ type storage struct {
 	operand string
 	offset  int
 	typ     TypeKind
+	isArray bool
+	length  int
 }
 
 type returnTarget struct {
@@ -73,6 +75,8 @@ type gen struct {
 
 	stackTopSlot  storage
 	frameBaseSlot storage
+	arrayTemp0    storage
+	arrayTemp1    storage
 
 	currentFrame *funcFrame
 	inlineDepth  map[string]int
@@ -110,7 +114,15 @@ func generate(prog *Program, opts CompileOptions) (string, error) {
 	}
 
 	for _, gl := range prog.Globals {
-		slot, err := g.allocGlobal(gl.Type)
+		var (
+			slot storage
+			err  error
+		)
+		if gl.IsArray {
+			slot, err = g.allocGlobalArray(gl.Type, gl.ArrayLen)
+		} else {
+			slot, err = g.allocGlobal(gl.Type)
+		}
 		if err != nil {
 			return "", err
 		}
@@ -123,6 +135,14 @@ func generate(prog *Program, opts CompileOptions) (string, error) {
 		return "", err
 	}
 	g.frameBaseSlot, err = g.allocGlobal(TypeU16)
+	if err != nil {
+		return "", err
+	}
+	g.arrayTemp0, err = g.allocGlobal(TypeU16)
+	if err != nil {
+		return "", err
+	}
+	g.arrayTemp1, err = g.allocGlobal(TypeU16)
 	if err != nil {
 		return "", err
 	}
@@ -141,6 +161,9 @@ func generate(prog *Program, opts CompileOptions) (string, error) {
 	g.storeToGlobal(g.frameBaseSlot)
 
 	for _, gl := range prog.Globals {
+		if gl.IsArray {
+			continue
+		}
 		if gl.Init == nil {
 			continue
 		}
@@ -360,7 +383,15 @@ func (g *gen) emitStmtList(stmts []Stmt) error {
 func (g *gen) emitStmt(st Stmt) error {
 	switch n := st.(type) {
 	case *VarDeclStmt:
-		slot, err := g.allocLocal(n.Decl.Type)
+		var (
+			slot storage
+			err  error
+		)
+		if n.Decl.IsArray {
+			slot, err = g.allocLocalArray(n.Decl.Type, n.Decl.ArrayLen)
+		} else {
+			slot, err = g.allocLocal(n.Decl.Type)
+		}
 		if err != nil {
 			return err
 		}
@@ -378,10 +409,24 @@ func (g *gen) emitStmt(st Stmt) error {
 		if !ok {
 			return fmt.Errorf("unknown variable %q", n.Name)
 		}
+		if slot.isArray {
+			return fmt.Errorf("cannot assign to array %q without an index", n.Name)
+		}
 		if err := g.emitExpr(n.Value); err != nil {
 			return err
 		}
 		g.storeToStorage(slot)
+	case *AssignIndexStmt:
+		slot, ok := g.lookup(n.Name)
+		if !ok {
+			return fmt.Errorf("unknown variable %q", n.Name)
+		}
+		if !slot.isArray {
+			return fmt.Errorf("%q is not an array", n.Name)
+		}
+		if err := g.emitArrayStore(slot, n.Index, n.Value); err != nil {
+			return err
+		}
 	case *ExprStmt:
 		if err := g.emitExpr(n.Value); err != nil {
 			return err
@@ -460,7 +505,21 @@ func (g *gen) emitExpr(e Expr) error {
 		if !ok {
 			return fmt.Errorf("unknown variable %q", n.Name)
 		}
+		if slot.isArray {
+			return fmt.Errorf("array %q requires an index", n.Name)
+		}
 		g.loadFromStorage(slot)
+	case *IndexExpr:
+		slot, ok := g.lookup(n.Name)
+		if !ok {
+			return fmt.Errorf("unknown variable %q", n.Name)
+		}
+		if !slot.isArray {
+			return fmt.Errorf("%q is not an array", n.Name)
+		}
+		if err := g.emitArrayLoad(slot, n.Index); err != nil {
+			return err
+		}
 	case *UnaryExpr:
 		if n.Op != "-" && n.Op != "~" {
 			return fmt.Errorf("unsupported unary operator %q", n.Op)
@@ -941,6 +1000,20 @@ func (g *gen) allocGlobal(t TypeKind) (storage, error) {
 	return storage{kind: storageGlobal, operand: "<" + name + ">", typ: t}, nil
 }
 
+func (g *gen) allocGlobalArray(elem TypeKind, length int) (storage, error) {
+	words := arrayWordCount(elem, length)
+	if words <= 0 {
+		return storage{}, fmt.Errorf("invalid array length %d", length)
+	}
+	if int(g.nextAddr)+words > runtimeStackTop {
+		return storage{}, fmt.Errorf("global array storage overflow")
+	}
+	name := "V_" + alphaName(int(g.nextAddr))
+	g.consts = append(g.consts, fmt.Sprintf("@const %s $%04X", name, g.nextAddr))
+	g.nextAddr += uint16(words)
+	return storage{kind: storageGlobal, operand: "<" + name + ">", typ: elem, isArray: true, length: length}, nil
+}
+
 func (g *gen) allocLocal(t TypeKind) (storage, error) {
 	if g.currentFrame == nil {
 		// main has no software frame, so its locals use compiler-managed global slots.
@@ -953,6 +1026,33 @@ func (g *gen) allocLocal(t TypeKind) (storage, error) {
 	s := storage{kind: storageFrame, offset: g.currentFrame.localNextOffset, typ: t}
 	g.currentFrame.localNextOffset++
 	return s, nil
+}
+
+func (g *gen) allocLocalArray(elem TypeKind, length int) (storage, error) {
+	if g.currentFrame == nil {
+		return g.allocGlobalArray(elem, length)
+	}
+	words := arrayWordCount(elem, length)
+	if words <= 0 {
+		return storage{}, fmt.Errorf("invalid array length %d", length)
+	}
+	maxLocal := g.currentFrame.localStart + g.currentFrame.localSlotCount
+	if g.currentFrame.localNextOffset+words > maxLocal {
+		return storage{}, fmt.Errorf("local slot overflow in function %q", g.currentFrame.decl.Name)
+	}
+	s := storage{kind: storageFrame, offset: g.currentFrame.localNextOffset, typ: elem, isArray: true, length: length}
+	g.currentFrame.localNextOffset += words
+	return s, nil
+}
+
+func arrayWordCount(elem TypeKind, length int) int {
+	if length <= 0 {
+		return 0
+	}
+	if elem == TypeU8 {
+		return (length + 1) / 2
+	}
+	return length
 }
 
 func alphaName(n int) string {
@@ -974,6 +1074,9 @@ func alphaName(n int) string {
 }
 
 func (g *gen) storeToStorage(slot storage) {
+	if slot.isArray {
+		panic("internal error: storeToStorage called on array")
+	}
 	if slot.typ == TypeU8 {
 		g.emit("AND %255 X")
 	}
@@ -989,12 +1092,140 @@ func (g *gen) storeToStorage(slot storage) {
 }
 
 func (g *gen) loadFromStorage(slot storage) {
+	if slot.isArray {
+		panic("internal error: loadFromStorage called on array")
+	}
 	if slot.kind == storageGlobal {
 		g.emit("LOD X " + slot.operand)
 		return
 	}
 	g.loadFrameAddress(slot.offset)
 	g.emit("LOD X X")
+}
+
+func (g *gen) emitArrayStore(slot storage, index Expr, value Expr) error {
+	if err := g.emitExpr(value); err != nil {
+		return err
+	}
+	if slot.typ == TypeU8 {
+		g.emit("AND %255 X")
+	}
+	g.storeToGlobal(g.arrayTemp0)
+
+	if err := g.emitArrayAddress(slot, index); err != nil {
+		return err
+	}
+
+	if slot.typ != TypeU8 {
+		g.emit("MOV X Y")
+		g.loadFromGlobal(g.arrayTemp0)
+		g.emit("STR X Y")
+		return nil
+	}
+
+	// u8 arrays are packed: two bytes per 16-bit word.
+	g.storeToGlobal(g.arrayTemp1)
+
+	g.emit("MOV Y X")
+	g.emit("MOV %0 Y")
+	g.emit("CMP")
+	evenLabel := g.label("arr_u8_even_store")
+	endLabel := g.label("arr_u8_store_end")
+	g.emit("JEQ " + evenLabel)
+
+	// odd index: update high byte, preserve low byte.
+	g.loadFromGlobal(g.arrayTemp1)
+	g.emit("LOD X X")
+	g.emit("AND %255 X")
+	g.emit("MOV X Y")
+	g.loadFromGlobal(g.arrayTemp0)
+	g.emit("SHL %8 X")
+	g.emit("OR Y X")
+	g.emit("MOV X Y")
+	g.loadFromGlobal(g.arrayTemp1)
+	g.emit("STR Y X")
+	g.emit("MOV %0 X")
+	g.emit("JMP " + endLabel)
+
+	// even index: update low byte, preserve high byte.
+	g.emit(":" + evenLabel)
+	g.loadFromGlobal(g.arrayTemp1)
+	g.emit("LOD X X")
+	g.emit("AND %65280 X")
+	g.emit("MOV X Y")
+	g.loadFromGlobal(g.arrayTemp0)
+	g.emit("OR Y X")
+	g.emit("MOV X Y")
+	g.loadFromGlobal(g.arrayTemp1)
+	g.emit("STR Y X")
+	g.emit("MOV %0 X")
+
+	g.emit(":" + endLabel)
+	return nil
+}
+
+func (g *gen) emitArrayLoad(slot storage, index Expr) error {
+	if err := g.emitArrayAddress(slot, index); err != nil {
+		return err
+	}
+	if slot.typ != TypeU8 {
+		g.emit("LOD X X")
+		return nil
+	}
+
+	// u8 arrays are packed: choose high/low byte based on odd/even index.
+	g.storeToGlobal(g.arrayTemp1)
+	g.emit("MOV Y X")
+	g.emit("MOV %0 Y")
+	g.emit("CMP")
+	evenLabel := g.label("arr_u8_even_load")
+	endLabel := g.label("arr_u8_load_end")
+	g.emit("JEQ " + evenLabel)
+	g.loadFromGlobal(g.arrayTemp1)
+	g.emit("LOD X X")
+	g.emit("SHR %8 X")
+	g.emit("AND %255 X")
+	g.emit("JMP " + endLabel)
+	g.emit(":" + evenLabel)
+	g.loadFromGlobal(g.arrayTemp1)
+	g.emit("LOD X X")
+	g.emit("AND %255 X")
+	g.emit(":" + endLabel)
+	return nil
+}
+
+func (g *gen) emitArrayAddress(slot storage, index Expr) error {
+	if err := g.emitExpr(index); err != nil {
+		return err
+	}
+	if slot.typ == TypeU8 {
+		g.emit("PUSH X")
+		g.emit("SHR %1 X")
+		g.emit("PUSH X")
+		g.loadArrayBaseAddress(slot)
+		g.emit("MOV X Y")
+		g.emit("POP X")
+		g.emit("ADD Y X")
+		g.emit("POP Y")
+		g.emit("AND %1 Y")
+		return nil
+	}
+
+	g.emit("PUSH X")
+	g.loadArrayBaseAddress(slot)
+	g.emit("MOV X Y")
+	g.emit("POP X")
+	g.emit("ADD Y X")
+	g.emit("MOV %0 Y")
+	return nil
+}
+
+func (g *gen) loadArrayBaseAddress(slot storage) {
+	if slot.kind == storageGlobal {
+		g.emit("MOV " + slot.operand + " X")
+		return
+	}
+	g.loadFrameAddress(slot.offset)
 }
 
 func (g *gen) loadFrameAddress(offset int) {
@@ -1062,6 +1293,9 @@ func countLocalsInStmtList(stmts []Stmt) int {
 func countLocalsInStmt(st Stmt) int {
 	switch n := st.(type) {
 	case *VarDeclStmt:
+		if n.Decl.IsArray {
+			return arrayWordCount(n.Decl.Type, n.Decl.ArrayLen)
+		}
 		return 1
 	case *IfStmt:
 		return countLocalsInStmtList(n.Then) + countLocalsInStmtList(n.Else)

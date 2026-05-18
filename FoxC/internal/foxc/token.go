@@ -8,6 +8,8 @@ const (
 	tokNumber
 	tokLParen
 	tokRParen
+	tokLBracket
+	tokRBracket
 	tokLBrace
 	tokRBrace
 	tokComma

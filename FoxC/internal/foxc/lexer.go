@@ -69,6 +69,10 @@ func (l *lexer) nextToken() (token, error) {
 		return token{kind: tokLParen, text: "(", line: line, col: col}, nil
 	case ')':
 		return token{kind: tokRParen, text: ")", line: line, col: col}, nil
+	case '[':
+		return token{kind: tokLBracket, text: "[", line: line, col: col}, nil
+	case ']':
+		return token{kind: tokRBracket, text: "]", line: line, col: col}, nil
 	case '{':
 		return token{kind: tokLBrace, text: "{", line: line, col: col}, nil
 	case '}':

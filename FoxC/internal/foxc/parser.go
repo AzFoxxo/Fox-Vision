@@ -182,6 +182,31 @@ func (p *parser) parseStmt() (Stmt, error) {
 		return &AssignStmt{Name: name, Value: value}, nil
 	}
 
+	if p.at(tokIdent) && p.startsIndexedAssignment() {
+		name := p.next().text
+		if _, err := p.expect(tokLBracket, "expected '['"); err != nil {
+			return nil, err
+		}
+		index, err := p.parseExpr()
+		if err != nil {
+			return nil, err
+		}
+		if _, err := p.expect(tokRBracket, "expected ']'"); err != nil {
+			return nil, err
+		}
+		if _, err := p.expect(tokAssign, "expected '='"); err != nil {
+			return nil, err
+		}
+		value, err := p.parseExpr()
+		if err != nil {
+			return nil, err
+		}
+		if _, err := p.expect(tokSemi, "expected ';'"); err != nil {
+			return nil, err
+		}
+		return &AssignIndexStmt{Name: name, Index: index, Value: value}, nil
+	}
+
 	expr, err := p.parseExpr()
 	if err != nil {
 		return nil, err
@@ -194,7 +219,27 @@ func (p *parser) parseStmt() (Stmt, error) {
 
 func (p *parser) parseVarDeclTail(typ TypeKind, name string) (*VarDecl, error) {
 	decl := &VarDecl{Name: name, Type: typ}
+	if p.at(tokLBracket) {
+		p.next()
+		lenTok, err := p.expect(tokNumber, "expected array length")
+		if err != nil {
+			return nil, err
+		}
+		arrLen, err := strconv.Atoi(lenTok.text)
+		if err != nil || arrLen <= 0 {
+			return nil, fmt.Errorf("invalid array length %q at %d:%d", lenTok.text, lenTok.line, lenTok.col)
+		}
+		if _, err := p.expect(tokRBracket, "expected ']'"); err != nil {
+			return nil, err
+		}
+		decl.IsArray = true
+		decl.ArrayLen = arrLen
+	}
 	if p.at(tokAssign) {
+		if decl.IsArray {
+			curr := p.curr()
+			return nil, fmt.Errorf("array initializer is not supported at %d:%d", curr.line, curr.col)
+		}
 		p.next()
 		expr, err := p.parseExpr()
 		if err != nil {
@@ -422,6 +467,17 @@ func (p *parser) parsePrimary() (Expr, error) {
 			}
 			return &CallExpr{Callee: name, Args: args}, nil
 		}
+		if p.at(tokLBracket) {
+			p.next()
+			index, err := p.parseExpr()
+			if err != nil {
+				return nil, err
+			}
+			if _, err := p.expect(tokRBracket, "expected ']'"); err != nil {
+				return nil, err
+			}
+			return &IndexExpr{Name: name, Index: index}, nil
+		}
 		return &IdentExpr{Name: name}, nil
 	}
 	if p.at(tokLParen) {
@@ -490,4 +546,26 @@ func (p *parser) expect(k tokenKind, msg string) (token, error) {
 	}
 	p.pos++
 	return t, nil
+}
+
+func (p *parser) startsIndexedAssignment() bool {
+	if !p.at(tokIdent) || p.peek(1).kind != tokLBracket {
+		return false
+	}
+	depth := 0
+	for i := 1; ; i++ {
+		t := p.peek(i)
+		if t.kind == tokEOF {
+			return false
+		}
+		switch t.kind {
+		case tokLBracket:
+			depth++
+		case tokRBracket:
+			depth--
+			if depth == 0 {
+				return p.peek(i+1).kind == tokAssign
+			}
+		}
+	}
 }

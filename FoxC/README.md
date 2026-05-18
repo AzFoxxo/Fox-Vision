@@ -5,7 +5,7 @@ FoxC is a compiler written in Go for a practical C-like subset that targets Fox1
 ## Implemented language subset
 
 - Types: `u8`, `u16`, `void`
-- Variables: global and local declarations with optional initialization
+- Variables: global and local declarations with optional initialization, including fixed-size arrays
 - Functions: user-defined functions, parameters, `return`
 - Control flow: `if`/`else`, `while`
 - Expressions: `+`, `-`, `*`, `/`, `&`, `|`, `^`, `<<`, `>>`, unary `~`, logical short-circuit (`&&`, `||`), comparisons (`==`, `!=`, `<`, `>`, `<=`, `>=`)
@@ -62,6 +62,46 @@ void main() {
 Note: FoxC currently accepts decimal integer literals in source. Address constants can be represented as decimal values.
 
 Type note: implicit widening (`u8 -> u16`) is allowed; implicit narrowing (`u16 -> u8`) is rejected to avoid unintended truncation.
+
+## Fixed arrays
+
+FoxC supports fixed-size arrays for `u8` and `u16` element types.
+
+`u8` arrays are packed into 16-bit words in generated memory layout (two `u8` elements per word).
+
+### Declaration syntax
+
+```c
+u16 samples[16];
+u8 flags[8];
+```
+
+### Supported operations
+
+- Indexing for read/write: `samples[i]`, `samples[i] = value`
+- Constant and variable indices are both supported
+- Arrays can be declared globally or locally
+
+### Constraints
+
+- Array length must be a compile-time constant
+- Array length is fixed (no resize)
+- Array assignment/copy is not supported (`a = b` for arrays)
+- Passing arrays by value is not supported
+- For `u8` arrays, storage is packed into 16-bit words; codegen handles byte selection/masking for indexed access
+
+### Example
+
+```c
+u16 table[4];
+
+void main() {
+    table[0] = 10;
+    table[1] = 20;
+    u16 x = table[0] + table[1];
+    poke(4096, x);
+}
+```
 
 ## Codegen notes
 

@@ -7,10 +7,16 @@ type funcSig struct {
 	params []TypeKind
 }
 
+type symbolInfo struct {
+	typ      TypeKind
+	isArray  bool
+	arrayLen int
+}
+
 type semantic struct {
 	funcs        map[string]funcSig
-	globals      map[string]TypeKind
-	scopes       []map[string]TypeKind
+	globals      map[string]symbolInfo
+	scopes       []map[string]symbolInfo
 	currFn       *FuncDecl
 	extendedMode bool
 }
@@ -18,7 +24,7 @@ type semantic struct {
 func check(prog *Program, opts CompileOptions) error {
 	s := &semantic{
 		funcs:        map[string]funcSig{},
-		globals:      map[string]TypeKind{},
+		globals:      map[string]symbolInfo{},
 		extendedMode: isExtendedMode(opts.Mode),
 	}
 
@@ -37,7 +43,10 @@ func check(prog *Program, opts CompileOptions) error {
 		if _, exists := s.globals[g.Name]; exists {
 			return fmt.Errorf("duplicate global %q", g.Name)
 		}
-		s.globals[g.Name] = g.Type
+		if g.IsArray && g.ArrayLen <= 0 {
+			return fmt.Errorf("global array %q must have positive length", g.Name)
+		}
+		s.globals[g.Name] = symbolInfo{typ: g.Type, isArray: g.IsArray, arrayLen: g.ArrayLen}
 	}
 
 	for _, fn := range prog.Funcs {
@@ -64,6 +73,9 @@ func check(prog *Program, opts CompileOptions) error {
 
 	for _, g := range prog.Globals {
 		if g.Init != nil {
+			if g.IsArray {
+				return fmt.Errorf("global array %q cannot have initializer", g.Name)
+			}
 			t, err := s.exprType(g.Init)
 			if err != nil {
 				return fmt.Errorf("global %s init: %w", g.Name, err)
@@ -78,7 +90,7 @@ func check(prog *Program, opts CompileOptions) error {
 		s.currFn = fn
 		s.pushScope()
 		for _, p := range fn.Params {
-			if err := s.declare(p.Name, p.Type); err != nil {
+			if err := s.declare(p.Name, symbolInfo{typ: p.Type}); err != nil {
 				return fmt.Errorf("function %s: %w", fn.Name, err)
 			}
 		}
@@ -102,10 +114,16 @@ func (s *semantic) checkStmt(st Stmt) error {
 		if n.Decl.Type == TypeVoid {
 			return fmt.Errorf("variable %q cannot be void", n.Decl.Name)
 		}
-		if err := s.declare(n.Decl.Name, n.Decl.Type); err != nil {
+		if n.Decl.IsArray && n.Decl.ArrayLen <= 0 {
+			return fmt.Errorf("array %q must have positive length", n.Decl.Name)
+		}
+		if err := s.declare(n.Decl.Name, symbolInfo{typ: n.Decl.Type, isArray: n.Decl.IsArray, arrayLen: n.Decl.ArrayLen}); err != nil {
 			return err
 		}
 		if n.Decl.Init != nil {
+			if n.Decl.IsArray {
+				return fmt.Errorf("array %q cannot have initializer", n.Decl.Name)
+			}
 			t, err := s.exprType(n.Decl.Init)
 			if err != nil {
 				return err
@@ -119,12 +137,37 @@ func (s *semantic) checkStmt(st Stmt) error {
 		if !ok {
 			return fmt.Errorf("unknown variable %q", n.Name)
 		}
+		if lhs.isArray {
+			return fmt.Errorf("cannot assign to array %q without an index", n.Name)
+		}
 		rhs, err := s.exprType(n.Value)
 		if err != nil {
 			return err
 		}
-		if !assignable(lhs, rhs) {
-			return fmt.Errorf("cannot assign %s to %s of type %s", rhs, n.Name, lhs)
+		if !assignable(lhs.typ, rhs) {
+			return fmt.Errorf("cannot assign %s to %s of type %s", rhs, n.Name, lhs.typ)
+		}
+	case *AssignIndexStmt:
+		lhs, ok := s.lookupVar(n.Name)
+		if !ok {
+			return fmt.Errorf("unknown variable %q", n.Name)
+		}
+		if !lhs.isArray {
+			return fmt.Errorf("%q is not an array", n.Name)
+		}
+		idxType, err := s.exprType(n.Index)
+		if err != nil {
+			return err
+		}
+		if idxType == TypeVoid {
+			return fmt.Errorf("array index cannot be void")
+		}
+		rhs, err := s.exprType(n.Value)
+		if err != nil {
+			return err
+		}
+		if !assignable(lhs.typ, rhs) {
+			return fmt.Errorf("cannot assign %s to %s element of type %s", rhs, n.Name, lhs.typ)
 		}
 	case *IfStmt:
 		if _, err := s.exprType(n.Cond); err != nil {
@@ -197,7 +240,26 @@ func (s *semantic) exprType(e Expr) (TypeKind, error) {
 		if !ok {
 			return TypeInvalid, fmt.Errorf("unknown variable %q", n.Name)
 		}
-		return t, nil
+		if t.isArray {
+			return TypeInvalid, fmt.Errorf("array %q requires an index", n.Name)
+		}
+		return t.typ, nil
+	case *IndexExpr:
+		t, ok := s.lookupVar(n.Name)
+		if !ok {
+			return TypeInvalid, fmt.Errorf("unknown variable %q", n.Name)
+		}
+		if !t.isArray {
+			return TypeInvalid, fmt.Errorf("%q is not an array", n.Name)
+		}
+		idxType, err := s.exprType(n.Index)
+		if err != nil {
+			return TypeInvalid, err
+		}
+		if idxType == TypeVoid {
+			return TypeInvalid, fmt.Errorf("array index cannot be void")
+		}
+		return t.typ, nil
 	case *UnaryExpr:
 		t, err := s.exprType(n.X)
 		if err != nil {
@@ -295,23 +357,23 @@ func stmtAlwaysReturns(st Stmt) bool {
 }
 
 func (s *semantic) pushScope() {
-	s.scopes = append(s.scopes, map[string]TypeKind{})
+	s.scopes = append(s.scopes, map[string]symbolInfo{})
 }
 
 func (s *semantic) popScope() {
 	s.scopes = s.scopes[:len(s.scopes)-1]
 }
 
-func (s *semantic) declare(name string, t TypeKind) error {
+func (s *semantic) declare(name string, sym symbolInfo) error {
 	top := s.scopes[len(s.scopes)-1]
 	if _, exists := top[name]; exists {
 		return fmt.Errorf("duplicate symbol %q", name)
 	}
-	top[name] = t
+	top[name] = sym
 	return nil
 }
 
-func (s *semantic) lookupVar(name string) (TypeKind, bool) {
+func (s *semantic) lookupVar(name string) (symbolInfo, bool) {
 	for i := len(s.scopes) - 1; i >= 0; i-- {
 		if t, ok := s.scopes[i][name]; ok {
 			return t, true

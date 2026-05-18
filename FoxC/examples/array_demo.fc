@@ -1,0 +1,140 @@
+// FoxC Array Demonstration
+// Tests global u16 arrays, local u16 arrays, global u8 arrays with packing,
+// constant/variable indexing, reads/writes, and computations
+
+// Global u16 array - simple case
+u16 scores[8];
+
+// Global u16 array - will be used for temperature readings
+u16 temps[12];
+
+// Global u8 array - demonstrates byte packing (2 per u16 word)
+u8 flags[8];
+
+// Global u8 array - pixel data simulation
+u8 bitmap[16];
+
+// Utility function to compute array sum (u16 variant)
+u16 sum_array_u16(u16 count) {
+    u16 sum = 0;
+    u16 i = 0;
+    while (i < count) {
+        sum = sum + scores[i];
+        i = i + 1;
+    }
+    return sum;
+}
+
+// Utility function to find maximum value in array
+u16 find_max_u16(u16 count) {
+    u16 max = 0;
+    u16 i = 0;
+    while (i < count) {
+        u16 val = scores[i];
+        if (val > max) {
+            max = val;
+        }
+        i = i + 1;
+    }
+    return max;
+}
+
+// Utility function to set a block of u8 values
+void fill_flags(u8 start_idx, u8 end_idx, u8 value) {
+    u8 i = start_idx;
+    while (i < end_idx) {
+        flags[i] = value;
+        i = i + 1;
+    }
+}
+
+// Utility function to toggle a flag in the u8 bitmap array
+void toggle_bitmap(u8 idx) {
+    u8 current = bitmap[idx];
+    u8 inverted = 255 - current;
+    bitmap[idx] = inverted;
+}
+
+// Main demonstration function
+void main() {
+    // Test 1: Initialize u16 scores array with constant indices
+    scores[0] = 100;
+    scores[1] = 200;
+    scores[2] = 150;
+    scores[3] = 300;
+    scores[4] = 50;
+    scores[5] = 250;
+    scores[6] = 175;
+    scores[7] = 225;
+
+    // Test 2: Initialize u16 temps array with variable indices
+    u16 j = 0;
+    while (j < 12) {
+        u16 temp_val = 70 + j;
+        temps[j] = temp_val;
+        j = j + 1;
+    }
+
+    // Test 3: Read from u16 array with constant index
+    u16 first_score = scores[0];
+    u16 middle_score = scores[3];
+
+    // Test 4: Read from u16 array with variable index
+    u16 idx = 5;
+    u16 indexed_score = scores[idx];
+
+    // Test 5: Initialize u8 flags array
+    // flags uses byte packing: indices 0,1 in word 0; 2,3 in word 1, etc.
+    u8 k = 0;
+    while (k < 8) {
+        flags[k] = k + 1;  // Store values 1-8
+        k = k + 1;
+    }
+
+    // Test 6: Initialize u8 bitmap array
+    u8 m = 0;
+    while (m < 16) {
+        bitmap[m] = 128;  // Mid-gray value
+        m = m + 1;
+    }
+
+    // Test 7: Modify bitmap with even indices to different value
+    u8 n = 0;
+    while (n < 16) {
+        if (n > 7) {
+            bitmap[n] = 64;  // Darken second half
+        }
+        n = n + 1;
+    }
+
+    // Test 8: Call fill_flags to batch-initialize u8 values
+    fill_flags(0, 4, 42);    // Set indices 0-3 to 42
+    fill_flags(4, 8, 99);    // Set indices 4-7 to 99
+
+    // Test 9: Read from u8 flag array
+    u8 flag_zero = flags[0];
+    u8 flag_three = flags[3];
+    u8 flag_seven = flags[7];
+
+    // Test 10: Compute sum of scores
+    u16 total = sum_array_u16(8);
+
+    // Test 11: Find maximum score
+    u16 max_score = find_max_u16(8);
+
+    // Test 12: Complex indexing with expression
+    u16 complex_idx = 2;
+    u16 complex_val = scores[complex_idx + 1];  // Should get scores[3] = 300
+
+    // Test 13: Toggle some bitmap pixels
+    toggle_bitmap(0);
+    toggle_bitmap(7);
+    toggle_bitmap(15);
+
+    // Test 14: Verify u16 array access after modifications
+    u16 temps_first = temps[0];
+    u16 temps_mid = temps[6];
+    u16 temps_last = temps[11];
+
+    // End of demo - all array operations completed successfully
+}
