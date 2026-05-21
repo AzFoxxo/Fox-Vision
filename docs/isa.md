@@ -277,11 +277,6 @@ Port I/O instructions use an immediate operand for the port number:
 - `1100 0000` `0000 0001` - `DBG_MEM` - Log the memory in hex to the console
 - `1100 0000` `0000 0010` - `DBG_INP` - Prompt the user for input which is then converted to an unsigned uint16
 
-Compatibility aliases for older sources are also accepted by the assembler:
-
-- `DGB_MEM` maps to `DBG_MEM`
-- `DGB_INP` maps to `DBG_INP`
-
 ## Extension debug character encoding
 
 **Note:** Unknown displays `?` when outputting and unknown reading in is converted to `40`

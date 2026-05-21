@@ -1,6 +1,6 @@
 ; Fox Assembly 16 bit
-; Address denotion $HEX(16 bit only)
-; constant denotion %DEC(16 bit only)
+; Address denoting $HEX(16 bit only)
+; constant denoting %DEC(16 bit only)
 
 :main
 NOP ; Nothing
@@ -41,9 +41,9 @@ HLT ; HALT machine
 
 ; Debug extension stuff
 :debug
-DGB_MEM
+DBG_MEM
 DBG_LGC %1
 DBG_LGC %2
 DBG_LGC %38
-DGB_INP
+DBG_INP
 JMP halt

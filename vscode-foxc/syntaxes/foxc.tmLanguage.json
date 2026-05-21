@@ -56,7 +56,7 @@
             "patterns": [
                 {
                     "name": "support.function.builtin.foxc",
-                    "match": "\\b(?:poke|peek|wait|cyc|vblank)\\b"
+                    "match": "\\b(?:poke|peek|wait|cyc|vblank|in_port|out_port)\\b"
                 }
             ]
         },
@@ -89,6 +89,10 @@
                 {
                     "name": "punctuation.section.group.foxc",
                     "match": "[()]"
+                },
+                {
+                    "name": "punctuation.section.brackets.foxc",
+                    "match": "[\\[\\]]"
                 },
                 {
                     "name": "punctuation.separator.comma.foxc",

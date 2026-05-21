@@ -4,14 +4,16 @@ const vscode = require("vscode");
 
 const TYPES = ["u8", "u16", "void"];
 const KEYWORDS = ["if", "else", "while", "return"];
-const BUILTINS = ["poke", "peek", "wait", "cyc", "vblank"];
+const BUILTINS = ["poke", "peek", "wait", "cyc", "vblank", "in_port", "out_port"];
 
 const BUILTIN_SIGNATURES = new Map([
     ["poke", { ret: "void", params: 2 }],
     ["peek", { ret: "u16", params: 1 }],
     ["wait", { ret: "void", params: 1 }],
     ["cyc", { ret: "u16", params: 0 }],
-    ["vblank", { ret: "void", params: 0 }]
+    ["vblank", { ret: "void", params: 0 }],
+    ["in_port", { ret: "u16", params: 1 }],
+    ["out_port", { ret: "void", params: 2 }]
 ]);
 
 function createCompletionItem(label, kind, detail, documentation, insertText) {
@@ -88,7 +90,7 @@ function createSnippetItems() {
 
 function collectDocumentSymbols(document) {
     const names = new Set();
-    const declarationPattern = /\b(?:u8|u16|void)\s+([A-Za-z_][A-Za-z0-9_]*)\b/g;
+    const declarationPattern = /\b(?:u8|u16|void)\s+\**\s*([A-Za-z_][A-Za-z0-9_]*)\b/g;
 
     for (let line = 0; line < document.lineCount; line += 1) {
         const text = document.lineAt(line).text;
@@ -227,6 +229,14 @@ function isCloseParen(token) {
     return token.kind === "op" && token.value === ")";
 }
 
+function isOpenBracket(token) {
+    return token.kind === "op" && token.value === "[";
+}
+
+function isCloseBracket(token) {
+    return token.kind === "op" && token.value === "]";
+}
+
 function isComma(token) {
     return token.kind === "op" && token.value === ",";
 }
@@ -240,7 +250,7 @@ function isAssign(token) {
 }
 
 function isUnaryOperator(token) {
-    return token.kind === "op" && ["-", "~"].includes(token.value);
+    return token.kind === "op" && ["-", "~", "*", "&"].includes(token.value);
 }
 
 function makeRange(token, endColumnOffset = 1) {
@@ -320,6 +330,9 @@ function collectTopLevelSymbols(tokens) {
                 sawType = true;
                 continue;
             }
+            if (sawType && token.kind === "op" && token.value === "*") {
+                continue;
+            }
             if (sawType && isIdentifierToken(token)) {
                 count += 1;
                 sawType = false;
@@ -344,6 +357,9 @@ function collectTopLevelSymbols(tokens) {
         }
 
         const typeToken = advance();
+        while (peek().kind === "op" && peek().value === "*") {
+            advance();
+        }
         const nameToken = peek();
         if (!isIdentifierToken(nameToken)) {
             advance();
@@ -480,6 +496,9 @@ class FoxCValidator {
             }
 
             const typeToken = this.advance();
+            while (this.match("op", "*")) {
+                // pointer declarator markers are allowed between type and name
+            }
             const nameToken = this.expect("ident", undefined, "expected an identifier after the type");
             if (!nameToken) {
                 this.synchronizeTopLevel();
@@ -522,6 +541,11 @@ class FoxCValidator {
             this.addError(typeToken, `global ${nameToken.value} cannot be void`);
         }
 
+        while (this.match("op", "[")) {
+            this.parseExpression();
+            this.expect("op", "]", "expected ']' after array size");
+        }
+
         if (this.match("op", "=")) {
             this.parseExpression();
         }
@@ -538,6 +562,9 @@ class FoxCValidator {
         if (!this.check("op", ")")) {
             while (!this.check("eof") && !this.check("op", ")")) {
                 const paramType = this.expect("type", undefined, "expected a parameter type");
+                while (this.match("op", "*")) {
+                    // pointer declarator markers are allowed between parameter type and name
+                }
                 const paramName = this.expect("ident", undefined, "expected a parameter name");
                 if (paramType && paramName) {
                     params.push({ type: paramType.value, name: paramName.value });
@@ -573,6 +600,9 @@ class FoxCValidator {
     parseStatement() {
         if (this.check("type")) {
             const typeToken = this.advance();
+            while (this.match("op", "*")) {
+                // pointer declarator markers are allowed between type and name
+            }
             const nameToken = this.expect("ident", undefined, "expected a variable name");
             if (!nameToken) {
                 this.synchronizeToStatementEnd();
@@ -582,6 +612,12 @@ class FoxCValidator {
                 this.addError(typeToken, `variable ${nameToken.value} cannot be void`);
             }
             this.declare(nameToken, typeToken.value);
+
+            while (this.match("op", "[")) {
+                this.parseExpression();
+                this.expect("op", "]", "expected ']' after array size");
+            }
+
             if (this.match("op", "=")) {
                 this.parseExpression();
             }
@@ -627,17 +663,39 @@ class FoxCValidator {
             return;
         }
 
-        if (this.check("ident") && this.tokens[this.index + 1] && isAssign(this.tokens[this.index + 1])) {
+        if (this.check("op", "*")) {
+            const startIndex = this.index;
+            this.parseUnary();
+            if (this.match("op", "=")) {
+                this.parseExpression();
+                if (!this.expect("op", ";", "expected ';' after assignment")) {
+                    this.synchronizeToStatementEnd();
+                }
+                return;
+            }
+            this.index = startIndex;
+        }
+
+        if (this.check("ident")) {
+            const startIndex = this.index;
             const nameToken = this.advance();
-            this.advance();
-            if (!this.resolveVariable(nameToken.value)) {
-                this.addError(nameToken, `unknown variable ${nameToken.value}`);
+            while (this.match("op", "[")) {
+                this.parseExpression();
+                this.expect("op", "]", "expected ']' after index expression");
             }
-            this.parseExpression();
-            if (!this.expect("op", ";", "expected ';' after assignment")) {
-                this.synchronizeToStatementEnd();
+
+            if (this.match("op", "=")) {
+                if (!this.resolveVariable(nameToken.value)) {
+                    this.addError(nameToken, `unknown variable ${nameToken.value}`);
+                }
+                this.parseExpression();
+                if (!this.expect("op", ";", "expected ';' after assignment")) {
+                    this.synchronizeToStatementEnd();
+                }
+                return;
             }
-            return;
+
+            this.index = startIndex;
         }
 
         this.parseExpression();
@@ -775,6 +833,11 @@ class FoxCValidator {
             if (!this.resolveVariable(nameToken.value)) {
                 this.addError(nameToken, `unknown variable ${nameToken.value}`);
             }
+
+            while (this.match("op", "[")) {
+                this.parseExpression();
+                this.expect("op", "]", "expected ']' after index expression");
+            }
             return;
         }
 
@@ -865,9 +928,38 @@ function activate(context) {
     for (const document of vscode.workspace.textDocuments) {
         scheduleValidation(document);
     }
+
+    const hoverProvider = vscode.languages.registerHoverProvider(
+        { language: "foxc", scheme: "file" },
+        {
+            provideHover(document, position) {
+                const wordRange = document.getWordRangeAtPosition(position, /[A-Za-z_][A-Za-z0-9_]*/);
+                if (!wordRange) return null;
+                const word = document.getText(wordRange);
+
+                if (BUILTIN_SIGNATURES.has(word)) {
+                    const sig = BUILTIN_SIGNATURES.get(word);
+                    const params = new Array(sig.params).fill("u16").join(", ");
+                    return new vscode.Hover(`**${word}(${params}) -> ${sig.ret}**`);
+                }
+
+                // collect functions from document
+                const tokens = tokenize(document.getText());
+                const symbols = collectTopLevelSymbols(tokens);
+                if (symbols.functions.has(word)) {
+                    const f = symbols.functions.get(word);
+                    return new vscode.Hover(`**${word}(${new Array(f.params).fill("u16").join(", ")}) -> ${f.ret}**`);
+                }
+
+                return null;
+            }
+        }
+    );
+
+    context.subscriptions.push(hoverProvider);
 }
 
-function deactivate() {}
+function deactivate() { }
 
 module.exports = {
     activate,

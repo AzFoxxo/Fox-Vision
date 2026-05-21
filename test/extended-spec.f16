@@ -95,9 +95,9 @@ HLT ; HALT machine
 
 ; Debug extension stuff
 :debug
-DGB_MEM
+DBG_MEM
 DBG_LGC %1
 DBG_LGC %2
 DBG_LGC %38
-DGB_INP
+DBG_INP
 JMP halt

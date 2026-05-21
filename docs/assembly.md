@@ -58,8 +58,6 @@ are both valid comments
 ### Instructions
 Instructions (opcodes) are always spelt in capitals. Basic instructions use three character codes such as `NOP` and `AXY`. These instructions can take a singular operand or no operand like `HLT`.
 
-For debug extension instructions, the canonical names are `DBG_LGC`, `DBG_MEM`, and `DBG_INP`. The assembler also accepts legacy aliases `DGB_MEM` and `DGB_INP` for backward compatibility.
-
 Frame pacing instructions include `WAIT` for cycle-based delays and `VBLANK` for waiting until the next rendered frame refresh. The assembler also accepts the shorter alias `VBL`.
 
 Extension mode adds the `EM` machine register and the `IN`/`OUT` port I/O instructions in the machine spec. When writing assembly that targets V1.10-capable ROMs, use `EM` to switch between modes:

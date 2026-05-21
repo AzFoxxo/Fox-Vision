@@ -19,6 +19,9 @@
             "include": "#registers"
         },
         {
+            "include": "#machineSymbols"
+        },
+        {
             "include": "#numbers"
         },
         {
@@ -37,7 +40,7 @@
         "labels": {
             "patterns": [
                 {
-                    "name": "entity.name.label.fox16asm",
+                    "name": "entity.name.label",
                     "match": "^\\s*:[A-Za-z_][A-Za-z0-9_]*"
                 }
             ]
@@ -53,16 +56,24 @@
         "keywords": {
             "patterns": [
                 {
-                    "name": "keyword.instruction.fox16asm",
-                    "match": "\\b(?:NOP|LFM|WTM|SRA|AXY|SXY|MXY|DXY|EQU|LEQ|JPZ|JNZ|JMP|CLR|HLT|BSL|BSR|AND|ORA|OR|XOR|DWR|ILM|IWR|INC|DEC|MOV|STR|LOD|CMP|JEQ|JNE|JLT|JGT|JLE|JGE|ADD|SUB|MUL|DIV|SHL|SHR|DBG_LGC|DBG_MEM|DBG_INP|DGB_MEM|DGB_INP)\\b"
+                    "name": "keyword.control",
+                    "match": "(?i)\\b(?:NOP|LFM|WTM|SRA|AXY|SXY|MXY|DXY|EQU|LEQ|JPZ|JNZ|JMP|CLR|HLT|BSL|BSR|AND|ORA|OR|XOR|DWR|ILM|IWR|INC|DEC|MOV|STR|LOD|CMP|JEQ|JNE|JLT|JGT|JLE|JGE|ADD|SUB|MUL|DIV|SHL|SHR|IN|OUT|DBG_LGC|DBG_MEM|DBG_INP)\\b"
                 }
             ]
         },
         "registers": {
             "patterns": [
                 {
-                    "name": "variable.language.register.fox16asm",
-                    "match": "\\b(?:X|Y|STATUS)\\b"
+                    "name": "variable.language",
+                    "match": "(?i)\\b(?:X|Y|STATUS)\\b"
+                }
+            ]
+        },
+        "machineSymbols": {
+            "patterns": [
+                {
+                    "name": "variable.language",
+                    "match": "(?i)\\b(?:PC|SP|CYC|EM|R[0-7]|PORT[0-7])\\b"
                 }
             ]
         },
@@ -81,7 +92,7 @@
         "constants": {
             "patterns": [
                 {
-                    "name": "constant.other.named.fox16asm",
+                    "name": "constant.other.symbol",
                     "match": "<[A-Za-z_][A-Za-z0-9_]*>"
                 }
             ]

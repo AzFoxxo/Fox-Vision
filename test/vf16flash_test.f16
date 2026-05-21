@@ -33,4 +33,3 @@ IN PORT5 Y         ; Should get 0x1234 (4660)
 
 ; Test complete, halt
 HLT
-

@@ -303,7 +303,7 @@ class IRBuilder
         if (opcode is "IN" or "OUT")
             return true;
 
-        if (opcode is "DBG_LGC" or "DBG_MEM" or "DBG_INP" or "DGB_MEM" or "DGB_INP")
+        if (opcode is "DBG_LGC" or "DBG_MEM" or "DBG_INP")
         {
             diagnostics.Add(Diagnostic.Error(
                 $"Opcode '{opcode}' is only available in legacy mode.",
