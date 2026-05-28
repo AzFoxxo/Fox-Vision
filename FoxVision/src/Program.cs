@@ -47,7 +47,7 @@ namespace FoxVision
                 initialImage = new RomImage(new ushort[] { 0x0000, 0x000E }, 0, 0, LegacyRomLimitWords);
             }
 
-            DebugLogROMAsData(initialImage.Words);
+            DebugLogROMAsData(initialImage);
 
             vm = new VirtualMachine(initialImage, options);
         }
@@ -633,7 +633,7 @@ namespace FoxVision
 
 
 
-        internal static void DebugLogROMAsData(ushort[] ROM)
+        internal static void DebugLogROMAsData(RomImage rom)
         {
             // Invoke external decompiler tool to print ROM disassembly.
             try
@@ -642,15 +642,19 @@ namespace FoxVision
                 if (string.IsNullOrWhiteSpace(decompilerProj))
                 {
                     // Fallback to internal printing if decompiler project not found
-                    Console.WriteLine("ROM contents: ");
-                    for (var i = 0; i < ROM.Length; i++)
+                    Console.WriteLine($"ROM contents: start=${rom.StartAddress:X4} reset=${rom.ResetAddress:X4} words={rom.Words.Length}");
+                    var codeStartIndex = rom.ResetAddress >= rom.StartAddress
+                        ? rom.ResetAddress - rom.StartAddress
+                        : 0;
+
+                    for (var i = codeStartIndex; i < rom.Words.Length; i++)
                     {
                         int consumedWords = WriteInstructionLineColored(
-                            (ushort)i,
+                            (ushort)(rom.StartAddress + i),
                             offset =>
                             {
                                 int index = i + offset;
-                                return index < ROM.Length ? ROM[index] : (ushort?)null;
+                                return index < rom.Words.Length ? rom.Words[index] : (ushort?)null;
                             });
 
                         i += consumedWords;
@@ -661,11 +665,17 @@ namespace FoxVision
                 var temp = Path.Combine(Path.GetTempPath(), $"vf16_decomp_{Guid.NewGuid():N}.bin");
                 using (var fs = File.Create(temp))
                 {
-                    // write legacy header
-                    var hdr = System.Text.Encoding.ASCII.GetBytes(".VISOFOX16");
+                    // write extended v2 header so the decompiler can show ROM start/reset metadata
+                    var hdr = System.Text.Encoding.ASCII.GetBytes(".VFOX16EXT");
                     fs.Write(hdr, 0, hdr.Length);
+                    fs.WriteByte(2);
+                    WriteBigEndianUInt16(fs, 1);
+                    WriteBigEndianUInt16(fs, rom.StartAddress);
+                    WriteBigEndianUInt16(fs, rom.ResetAddress);
+                    WriteBigEndianUInt16(fs, (ushort)rom.Words.Length);
+
                     // write payload as big-endian words
-                    foreach (var w in ROM)
+                    foreach (var w in rom.Words)
                     {
                         fs.WriteByte((byte)(w >> 8));
                         fs.WriteByte((byte)(w & 0xFF));
@@ -706,6 +716,12 @@ namespace FoxVision
             {
                 Console.WriteLine("Decompiler invocation failed: " + ex.Message);
             }
+        }
+
+        private static void WriteBigEndianUInt16(Stream stream, ushort value)
+        {
+            stream.WriteByte((byte)(value >> 8));
+            stream.WriteByte((byte)(value & 0xFF));
         }
 
         internal static void DebugLogInstructionFromMemory(ContiguousMemory ram, ushort address)

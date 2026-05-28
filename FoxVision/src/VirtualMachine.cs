@@ -86,7 +86,7 @@ namespace FoxVision
                 },
                 () =>
                 {
-                    Program.DebugLogROMAsData(_currentRom.Words);
+                    Program.DebugLogROMAsData(_currentRom);
                     return true;
                 }))
             {
