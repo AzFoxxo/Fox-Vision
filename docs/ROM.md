@@ -13,21 +13,27 @@ Extended-mode ROM images are containers that include additional metadata immedia
 | Field              | Size (bytes) | Meaning                                                                       |
 | ------------------ | -----------: | ----------------------------------------------------------------------------- |
 | Magic              |           10 | Container magic (`.VFOX16EXT`)                                                |
-| ROM format version |            1 | Format/version byte (major version number)                                    |
-| Mapper             |            2 | ROM container mapping selector (0 = ROM4K, 1 = ROM32K)                        |
+| ROM format version |            1 | Format/version byte (major version number; version 2 adds a reset vector)     |
+| Mapper             |            2 | ROM container mapping selector (0 = ROM4K, 1 = ROM32K) and layout policy      |
 | ROM start          |            2 | 16-bit load address (big-endian) where the payload should be placed in memory |
+| Reset vector       |            2 | 16-bit execution address (big-endian) used after reset                        |
 | ROM size           |            2 | 16-bit payload length in words (big-endian)                                   |
 
-Total extended header length: 16 bytes. After these fields the payload follows (the ROM words in big-endian file order). The emulator and other loaders SHOULD validate `ROM size` against the actual payload length and may reject mismatches.
+Total extended header length: 17 bytes for version 1 and 19 bytes for version 2. After these fields the payload follows (the ROM words in big-endian file order). The emulator and other loaders SHOULD validate `ROM size` against the actual payload length and may reject mismatches.
 
 ### Semantics
 
-- `ROM format version`: allows future changes to the container structure. Tools SHOULD support version 1 and may reject unknown higher versions unless explicitly configured to be permissive.
-- `Mapping`: selects the ROM container size policy only. `0` means ROM4K and `1` means ROM32K. This field does not replace the runtime `EM` register.
-- `ROM start`: allows images to specify a non-zero load address (useful for relocation or alternative memory layouts). Loaders MAY ignore this field and place the payload at address 0, but SHOULD respect it when present and supported.
+- `ROM format version`: allows future changes to the container structure. Tools SHOULD support version 1 and version 2; version 2 introduces the `Reset vector` field. Tools may reject unknown higher versions unless explicitly configured to be permissive.
+- `Mapping`: selects the ROM container size policy and the layout policy for ROM-resident data. `0` means ROM4K and `1` means ROM32K. This field does not replace the runtime `EM` register.
+- `ROM start`: allows images to specify a non-zero load address (useful for relocation or alternative memory layouts). When a data segment is present, loaders SHOULD treat this field as the base offset for that segment so literal constants can be written directly into ROM.
+- `Reset vector`: provides the address the CPU SHOULD jump to immediately after a hardware or power-on reset. If present, the machine starts execution at this address instead of assuming the payload begins at address zero.
 - `ROM size`: the number of 16-bit words in the payload. Loaders SHOULD use this to avoid reading beyond the expected payload and to pre-allocate memory structures.
 
-Compatibility note: existing tools in this repository currently write a 10-byte magic only. Adopting the extended container header is a backwards-compatible evolution: legacy loaders expecting only the 10-byte magic should continue to work with legacy images, while updated loaders that inspect the post-magic bytes can enable the extended file-size limit when the `.VFOX16EXT` magic is present and the extended header parses successfully.
+### ROM-resident constant layout
+
+Extended-mode images MAY reserve a ROM-resident constant window for assembler-emitted literal data. In that case, the mapper value selects the ROM layout and the `ROM start` field identifies the base address where the constant window is written. The `Reset vector` field can point at a bootstrap or entry routine that transfers control into the program or data layout chosen by the image. This allows tools to place immutable words directly into the ROM image without requiring a runtime copy step.
+
+Compatibility note: existing tools in this repository currently write a 10-byte magic only. Adopting the extended container header is a backwards-compatible evolution: legacy loaders expecting only the 10-byte magic should continue to work with legacy images, while updated loaders that inspect the post-magic bytes can enable the extended file-size limit when the `.VFOX16EXT` magic is present and the extended header parses successfully. Version 2 containers additionally provide a reset vector for reset-time execution.
 
 ### Payload structure
 

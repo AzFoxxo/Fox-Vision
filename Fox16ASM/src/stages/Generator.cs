@@ -52,43 +52,59 @@ class Generator
         using var memory = new MemoryStream();
         using var writer = new EndianBinaryWriter(EndianBitConverter.Big, memory);
 
-        WriteHeader(memory, mode, payloadWordCount);
+        var resetVector = ResolveResetVectorAddress(ir);
+        WriteHeader(memory, mode, payloadWordCount, resetVector);
 
-        foreach (var instruction in ir.Instructions)
+        foreach (var item in ir.Items)
         {
-            if (!Opcodes.instructions.TryGetValue(instruction.Opcode, out var opcodeValue))
+            if (item.Kind == IRProgramItemKind.Instruction)
             {
-                diagnostics.Add(Diagnostic.Error(
-                    $"Unknown opcode '{instruction.Opcode}'.",
-                    sourceFile,
-                    instruction.Line,
-                    instruction.Column,
-                    instruction.SourceLine));
-                continue;
-            }
+                var instruction = item.Instruction;
+                if (!Opcodes.instructions.TryGetValue(instruction.Opcode, out var opcodeValue))
+                {
+                    diagnostics.Add(Diagnostic.Error(
+                        $"Unknown opcode '{instruction.Opcode}'.",
+                        sourceFile,
+                        instruction.Line,
+                        instruction.Column,
+                        instruction.SourceLine));
+                    continue;
+                }
 
-            var resolvedOperands = new List<ResolvedOperand>(instruction.Operands.Count);
-            foreach (var operand in instruction.Operands)
-            {
-                if (!TryResolveOperand(operand, labelTable, ir.Constants, sourceFile, instruction, diagnostics, out var resolvedOperand))
+                var resolvedOperands = new List<ResolvedOperand>(instruction.Operands.Count);
+                foreach (var operand in instruction.Operands)
+                {
+                    if (!TryResolveOperand(operand, labelTable, ir.Constants, sourceFile, instruction, diagnostics, out var resolvedOperand))
+                        continue;
+
+                    resolvedOperands.Add(resolvedOperand);
+                }
+
+                if (!ValidateInstructionOperands(instruction, resolvedOperands, mode, sourceFile, diagnostics))
                     continue;
 
-                resolvedOperands.Add(resolvedOperand);
-            }
-
-            if (!ValidateInstructionOperands(instruction, resolvedOperands, mode, sourceFile, diagnostics))
-                continue;
-
-            var encodedOpcode = EncodeOpcode(instruction, opcodeValue, resolvedOperands);
-            writer.Write(encodedOpcode);
-            if (debugFlags.ShowTokens)
-                Console.WriteLine($"OPCODE: {instruction.Opcode} => {encodedOpcode:X4}");
-
-            foreach (var operand in resolvedOperands)
-            {
-                writer.Write(operand.Value);
+                var encodedOpcode = EncodeOpcode(instruction, opcodeValue, resolvedOperands);
+                writer.Write(encodedOpcode);
                 if (debugFlags.ShowTokens)
-                    Console.WriteLine($"OPERAND: {operand.Value:X4}");
+                    Console.WriteLine($"OPCODE: {instruction.Opcode} => {encodedOpcode:X4}");
+
+                foreach (var operand in resolvedOperands)
+                {
+                    writer.Write(operand.Value);
+                    if (debugFlags.ShowTokens)
+                        Console.WriteLine($"OPERAND: {operand.Value:X4}");
+                }
+            }
+            else
+            {
+                var dataWord = item.DataWord;
+                var contextInstruction = new IRInstruction("@word", Array.Empty<IROperand>(), dataWord.Line, dataWord.Column, dataWord.SourceLine);
+                if (!TryResolveOperand(dataWord.Operand, labelTable, ir.Constants, sourceFile, contextInstruction, diagnostics, out var resolvedWord))
+                    continue;
+
+                writer.Write(resolvedWord.Value);
+                if (debugFlags.ShowTokens)
+                    Console.WriteLine($"DATA: {resolvedWord.Value:X4}");
             }
         }
 
@@ -107,7 +123,21 @@ class Generator
     }
 
     private static int GetPayloadWordCount(AssemblerIR ir)
-        => ir.Instructions.Sum(instruction => 1 + instruction.Operands.Count) + 2;
+        => ir.Items.Sum(item => item.WordCount) + 2;
+
+    private static ushort ResolveResetVectorAddress(AssemblerIR ir)
+    {
+        int address = 0;
+        foreach (var item in ir.Items)
+        {
+            if (item.SegmentKind == IRSegmentKind.Code)
+                return (ushort)address;
+
+            address += item.WordCount;
+        }
+
+        return 0;
+    }
 
     private static int GetStrictFormatMaxPayloadWords(AssemblerMode mode)
         => mode == AssemblerMode.Extended ? ExtendedStrictFormatMaxPayloadWords : LegacyStrictFormatMaxPayloadWords;
@@ -209,21 +239,21 @@ class Generator
         List<Diagnostic> diagnostics)
     {
         var labelsByName = new Dictionary<string, ushort>(StringComparer.OrdinalIgnoreCase);
-        var instructionAddresses = new int[ir.Instructions.Count];
+        var itemAddresses = new int[ir.Items.Count];
         var eofAddress = 0;
 
-        for (var i = 0; i < ir.Instructions.Count; i++)
+        for (var i = 0; i < ir.Items.Count; i++)
         {
-            instructionAddresses[i] = eofAddress;
-            eofAddress += 1 + ir.Instructions[i].Operands.Count;
+            itemAddresses[i] = eofAddress;
+            eofAddress += ir.Items[i].WordCount;
             if (eofAddress > ushort.MaxValue)
             {
                 diagnostics.Add(Diagnostic.Error(
                     "Program exceeds addressable 16-bit ROM space.",
                     sourceFile,
-                    ir.Instructions[i].Line,
-                    ir.Instructions[i].Column,
-                    ir.Instructions[i].SourceLine));
+                    ir.Items[i].Line,
+                    ir.Items[i].Column,
+                    ir.Items[i].SourceLine));
                 break;
             }
         }
@@ -231,12 +261,12 @@ class Generator
         foreach (var label in ir.Labels.OrderBy(l => l.Line))
         {
             var targetAddress = eofAddress;
-            for (var i = 0; i < ir.Instructions.Count; i++)
+            for (var i = 0; i < ir.Items.Count; i++)
             {
-                if (ir.Instructions[i].Line < label.Line)
+                if (ir.Items[i].Line < label.Line)
                     continue;
 
-                targetAddress = instructionAddresses[i];
+                targetAddress = itemAddresses[i];
                 break;
             }
 
@@ -391,15 +421,16 @@ class Generator
         };
     }
 
-    private static void WriteHeader(Stream stream, AssemblerMode mode, int payloadWordCount)
+    private static void WriteHeader(Stream stream, AssemblerMode mode, int payloadWordCount, ushort resetVector)
     {
         if (mode == AssemblerMode.Extended)
         {
             var magicBytes = System.Text.Encoding.ASCII.GetBytes(".VFOX16EXT");
             stream.Write(magicBytes, 0, magicBytes.Length);
-            stream.WriteByte(1);
+            stream.WriteByte(2);
             WriteBigEndianUInt16(stream, 1);
             WriteBigEndianUInt16(stream, 0);
+            WriteBigEndianUInt16(stream, resetVector);
             WriteBigEndianUInt16(stream, (ushort)payloadWordCount);
             return;
         }

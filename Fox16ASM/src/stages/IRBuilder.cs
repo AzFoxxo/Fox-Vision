@@ -8,12 +8,18 @@ class IRBuilder
     private static readonly Regex LabelIdentifier = new("^[A-Za-z_][A-Za-z0-9_]*$", RegexOptions.Compiled);
     private static readonly Regex ConstantReference = new("^<([^<>]+)>$", RegexOptions.Compiled);
 
+    private enum SegmentKind
+    {
+        Code,
+        Data,
+    }
+
     public CompilationResult<AssemblerIR> Build(SourceLine[] lines, string sourceFile, AssemblerMode mode, DebugFlags? debugFlags = null)
     {
         debugFlags ??= new DebugFlags();
         var diagnostics = new List<Diagnostic>();
         var labels = new List<IRLabel>();
-        var instructions = new List<IRInstruction>();
+        var items = new List<IRProgramItem>();
         var constants = new Dictionary<string, IROperand>(StringComparer.OrdinalIgnoreCase);
 
         foreach (var sourceLine in lines)
@@ -22,17 +28,8 @@ class IRBuilder
             if (parts.Length == 0 || !parts[0].StartsWith('@'))
                 continue;
 
-            var directive = parts[0];
-            if (!directive.Equals("@const", StringComparison.OrdinalIgnoreCase))
-            {
-                diagnostics.Add(Diagnostic.Error(
-                    $"Unknown directive '{directive}'.",
-                    sourceFile,
-                    sourceLine.LineNumber,
-                    1,
-                    sourceLine.Text));
+            if (!parts[0].Equals("@const", StringComparison.OrdinalIgnoreCase))
                 continue;
-            }
 
             if (parts.Length != 3)
             {
@@ -64,6 +61,7 @@ class IRBuilder
             constants[name] = constantValue;
         }
 
+        var currentSegment = SegmentKind.Code;
         foreach (var sourceLine in lines)
         {
             var parts = sourceLine.Text.Replace(",", " ").Split(' ', StringSplitOptions.RemoveEmptyEntries);
@@ -71,56 +69,86 @@ class IRBuilder
                 continue;
 
             if (parts[0].StartsWith('@'))
-                continue;
-
-            var cursor = 0;
-            if (parts[cursor].StartsWith(':'))
             {
-                var name = parts[cursor][1..];
-                if (string.IsNullOrWhiteSpace(name) || !LabelIdentifier.IsMatch(name))
+                if (parts[0].Equals("@const", StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                if (parts[0].Equals("@segment", StringComparison.OrdinalIgnoreCase))
                 {
+                    if (parts.Length != 2)
+                    {
+                        diagnostics.Add(Diagnostic.Error(
+                            "Invalid @segment directive. Expected '@segment <code|data>'.",
+                            sourceFile,
+                            sourceLine.LineNumber,
+                            1,
+                            sourceLine.Text));
+                        continue;
+                    }
+
+                    if (parts[1].Equals("code", StringComparison.OrdinalIgnoreCase))
+                    {
+                        currentSegment = SegmentKind.Code;
+                        continue;
+                    }
+
+                    if (parts[1].Equals("data", StringComparison.OrdinalIgnoreCase))
+                    {
+                        currentSegment = SegmentKind.Data;
+                        continue;
+                    }
+
                     diagnostics.Add(Diagnostic.Error(
-                        "Invalid label declaration.",
+                        "Invalid @segment directive. Expected 'code' or 'data'.",
                         sourceFile,
                         sourceLine.LineNumber,
-                        1,
+                        sourceLine.Text.IndexOf(parts[1], StringComparison.Ordinal) + 1,
                         sourceLine.Text));
                     continue;
                 }
 
-                labels.Add(new IRLabel(name, sourceLine.LineNumber, 1, sourceLine.Text));
-                cursor++;
-                if (cursor >= parts.Length)
-                    continue;
-            }
+                if (parts[0].Equals("@word", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (currentSegment != SegmentKind.Data)
+                    {
+                        diagnostics.Add(Diagnostic.Error(
+                            "@word may only be used inside a data segment.",
+                            sourceFile,
+                            sourceLine.LineNumber,
+                            1,
+                            sourceLine.Text));
+                        continue;
+                    }
 
-            var opcodeToken = parts[cursor];
-            if (!char.IsLetter(opcodeToken[0]))
-            {
+                    if (parts.Length != 2)
+                    {
+                        diagnostics.Add(Diagnostic.Error(
+                            "Invalid @word directive. Expected '@word <value>'.",
+                            sourceFile,
+                            sourceLine.LineNumber,
+                            1,
+                            sourceLine.Text));
+                        continue;
+                    }
+
+                    if (!TryParseDataOperandToken(parts[1], sourceLine, sourceFile, mode, diagnostics, out var dataOperand))
+                        continue;
+
+                    items.Add(IRProgramItem.DataWordItem(new IRDataWord(dataOperand, sourceLine.LineNumber, 1, sourceLine.Text), IRSegmentKind.Data));
+                    continue;
+                }
+
                 diagnostics.Add(Diagnostic.Error(
-                    $"Expected opcode but found '{opcodeToken}'.",
+                    $"Unknown directive '{parts[0]}'.",
                     sourceFile,
                     sourceLine.LineNumber,
-                    sourceLine.Text.IndexOf(opcodeToken, StringComparison.Ordinal) + 1,
+                    1,
                     sourceLine.Text));
                 continue;
             }
 
-            var opcode = opcodeToken.ToUpperInvariant();
-            var operands = new List<IROperand>();
-            for (var i = cursor + 1; i < parts.Length; i++)
-            {
-                if (!TryParseOperandToken(parts[i], sourceLine, sourceFile, mode, diagnostics, out var operand))
-                    continue;
-
-                operands.Add(operand);
-            }
-
-            if (!ValidateOpcodeMode(opcode, operands.Count, mode, sourceLine, sourceFile, diagnostics))
+            if (!TryParseProgramLine(sourceLine, parts, sourceFile, mode, currentSegment, diagnostics, labels, items))
                 continue;
-
-            RewriteOverloadedOpcode(opcode, operands, out var rewrittenOpcode);
-            instructions.Add(new IRInstruction(rewrittenOpcode, operands, sourceLine.LineNumber, 1, sourceLine.Text));
         }
 
         if (debugFlags.ShowTokens)
@@ -132,10 +160,18 @@ class IRBuilder
             foreach (var constant in constants)
                 Console.WriteLine($"IR CONST: <{constant.Key}> = {RenderOperand(constant.Value)}");
 
-            foreach (var instruction in instructions)
+            foreach (var item in items)
             {
-                var renderedOperands = string.Join(' ', instruction.Operands.Select(RenderOperand));
-                Console.WriteLine($"IR INST: {instruction.Opcode}{(renderedOperands.Length > 0 ? " " + renderedOperands : string.Empty)}");
+                if (item.Kind == IRProgramItemKind.Instruction)
+                {
+                    var instruction = item.Instruction!;
+                    var renderedOperands = string.Join(' ', instruction.Operands.Select(RenderOperand));
+                    Console.WriteLine($"IR INST: {instruction.Opcode}{(renderedOperands.Length > 0 ? " " + renderedOperands : string.Empty)}");
+                }
+                else
+                {
+                    Console.WriteLine($"IR DATA: {RenderOperand(item.DataWord!.Operand)}");
+                }
             }
 
             Console.ForegroundColor = ConsoleColor.White;
@@ -143,7 +179,126 @@ class IRBuilder
 
         return diagnostics.Any(d => d.Severity == DiagnosticSeverity.Error)
             ? CompilationResult<AssemblerIR>.Failed(diagnostics)
-            : new CompilationResult<AssemblerIR>(new AssemblerIR(labels, instructions, constants), diagnostics);
+            : new CompilationResult<AssemblerIR>(new AssemblerIR(labels, items, constants), diagnostics);
+    }
+
+    private static bool TryParseProgramLine(
+        SourceLine sourceLine,
+        string[] parts,
+        string sourceFile,
+        AssemblerMode mode,
+        SegmentKind currentSegment,
+        List<Diagnostic> diagnostics,
+        List<IRLabel> labels,
+        List<IRProgramItem> items)
+    {
+        var cursor = 0;
+        if (parts[cursor].StartsWith(':'))
+        {
+            var name = parts[cursor][1..];
+            if (string.IsNullOrWhiteSpace(name) || !LabelIdentifier.IsMatch(name))
+            {
+                diagnostics.Add(Diagnostic.Error(
+                    "Invalid label declaration.",
+                    sourceFile,
+                    sourceLine.LineNumber,
+                    1,
+                    sourceLine.Text));
+                return true;
+            }
+
+            labels.Add(new IRLabel(name, sourceLine.LineNumber, 1, sourceLine.Text));
+            cursor++;
+            if (cursor >= parts.Length)
+                return true;
+        }
+
+        if (currentSegment == SegmentKind.Data)
+        {
+            var dataDirectiveToken = parts[cursor];
+            if (!dataDirectiveToken.Equals("@word", StringComparison.OrdinalIgnoreCase))
+            {
+                diagnostics.Add(Diagnostic.Error(
+                    $"Expected '@word' in data segment but found '{dataDirectiveToken}'.",
+                    sourceFile,
+                    sourceLine.LineNumber,
+                    sourceLine.Text.IndexOf(dataDirectiveToken, StringComparison.Ordinal) + 1,
+                    sourceLine.Text));
+                return true;
+            }
+
+            if (parts.Length != cursor + 2)
+            {
+                diagnostics.Add(Diagnostic.Error(
+                    "Invalid @word directive. Expected '@word <value>'.",
+                    sourceFile,
+                    sourceLine.LineNumber,
+                    1,
+                    sourceLine.Text));
+                return true;
+            }
+
+            if (!TryParseDataOperandToken(parts[cursor + 1], sourceLine, sourceFile, mode, diagnostics, out var dataOperand))
+                return true;
+
+            items.Add(IRProgramItem.DataWordItem(new IRDataWord(dataOperand, sourceLine.LineNumber, 1, sourceLine.Text), IRSegmentKind.Data));
+            return true;
+        }
+
+        var opcodeToken = parts[cursor];
+        if (!char.IsLetter(opcodeToken[0]))
+        {
+            diagnostics.Add(Diagnostic.Error(
+                $"Expected opcode but found '{opcodeToken}'.",
+                sourceFile,
+                sourceLine.LineNumber,
+                sourceLine.Text.IndexOf(opcodeToken, StringComparison.Ordinal) + 1,
+                sourceLine.Text));
+            return true;
+        }
+
+        var opcode = opcodeToken.ToUpperInvariant();
+        var operands = new List<IROperand>();
+        for (var i = cursor + 1; i < parts.Length; i++)
+        {
+            if (!TryParseOperandToken(parts[i], sourceLine, sourceFile, mode, diagnostics, out var operand))
+                return true;
+
+            operands.Add(operand);
+        }
+
+        if (!ValidateOpcodeMode(opcode, operands.Count, mode, sourceLine, sourceFile, diagnostics))
+            return true;
+
+        RewriteOverloadedOpcode(opcode, operands, out var rewrittenOpcode);
+        items.Add(IRProgramItem.InstructionItem(new IRInstruction(rewrittenOpcode, operands, sourceLine.LineNumber, 1, sourceLine.Text), IRSegmentKind.Code));
+        return true;
+    }
+
+    private static bool TryParseDataOperandToken(
+        string part,
+        SourceLine sourceLine,
+        string sourceFile,
+        AssemblerMode mode,
+        List<Diagnostic> diagnostics,
+        out IROperand operand)
+    {
+        if (!TryParseOperandToken(part, sourceLine, sourceFile, mode, diagnostics, out operand))
+            return false;
+
+        if (operand.Kind == IROperandKind.Register)
+        {
+            diagnostics.Add(Diagnostic.Error(
+                "Data words cannot use register operands.",
+                sourceFile,
+                sourceLine.LineNumber,
+                sourceLine.Text.IndexOf(part, StringComparison.Ordinal) + 1,
+                sourceLine.Text));
+            operand = default;
+            return false;
+        }
+
+        return true;
     }
 
     private static bool TryParseOperandToken(

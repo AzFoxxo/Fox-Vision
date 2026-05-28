@@ -109,8 +109,29 @@ WTM $2005
 
 The preprocessor will replace all instances of `<WIDTH>` with `%50` and `<HEIGHT>` with `%100` before compilation.
 
+### Segment Directives (`@segment code|data`)
+The assembler spec defines explicit code and data segments. `@segment code` selects normal instruction parsing. `@segment data` selects a constant insertion data segment for ROM-resident literals that should be written straight into ROM, rather than encoded as executable instructions.
+
+```assembly
+@segment data
+table:
+@word %1234
+next_value:
+@word $ABCD
+width_value:
+@word <WIDTH>
+@segment code
+```
+
+Within a data segment, each data directive emits raw ROM words. A data item SHOULD be preceded by a label when later code needs to reference its address. The initial spec requires `@word <value>` for a single 16-bit word, and the label marks that word's ROM address. `<NAME>` constant references MAY be used where a word value is expected. In extended ROM images, the emitted words SHOULD be placed at the mapper-selected `ROM start` offset described in [ROM.md](ROM.md). Additional data directives MAY be added later for packed bytes, fills, or string emission.
+
 ### Preprocessor Directives
 - `@const <name> <value>` - Define a constant that can be used throughout the file
+- `@segment code` - Switch back to instruction parsing
+- `@segment data` - Begin a constant insertion data segment
+- `@word <value>` - Emit one 16-bit word while in data segment mode
+
+Data labels use the normal `:name` label syntax and may precede a data item directly. Use those labels in code to reference the emitted ROM address.
 
 All preprocessor directives (lines starting with `@`) are removed before compilation.
 

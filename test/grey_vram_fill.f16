@@ -1,0 +1,54 @@
+@segment data
+:grey_word
+@word $DDDD
+
+@segment code
+:main
+; Fill the entire VRAM with a packed grey color using modern instructions.
+LOD X grey_word
+STR X $2005
+
+MOV %0 X
+STR X $2000
+
+:row_loop
+LOD X $2000
+MOV %100 Y
+CMP
+JGE done
+
+MOV %0 X
+STR X $2001
+
+:col_loop
+LOD X $2001
+MOV %50 Y
+CMP
+JGE next_row
+
+LOD X $2000
+MUL %50 X
+LOD Y $2001
+ADD Y X
+
+MOV $FFFF Y
+SUB X Y
+STR Y $2002
+
+LOD Y $2005
+LOD X $2002
+STR Y X
+
+LOD X $2001
+ADD %1 X
+STR X $2001
+JMP col_loop
+
+:next_row
+LOD X $2000
+ADD %1 X
+STR X $2000
+JMP row_loop
+
+:done
+HLT

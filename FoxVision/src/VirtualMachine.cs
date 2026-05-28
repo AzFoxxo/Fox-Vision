@@ -23,7 +23,7 @@ namespace FoxVision
             bool loadedRom = LoadRomIntoMemory(_currentRom);
 
             // Create the CPU
-            _processor = new(_unprotectedMemory, _options.ExecutionSpeedHz, _options.LogInstruction, _currentRom.StartAddress, _options.PortDevices);
+            _processor = new(_unprotectedMemory, _options.ExecutionSpeedHz, _options.LogInstruction, _currentRom.ResetAddress, _options.PortDevices);
             _processor.SetFlashSavePaths(_options.FlashSavePaths);
 
             if (loadedRom)
@@ -119,7 +119,7 @@ namespace FoxVision
                     return false;
                 }
 
-                _processor = new Processor(_unprotectedMemory, updated.ExecutionSpeedHz, updated.LogInstruction, romImage.StartAddress);
+                _processor = new Processor(_unprotectedMemory, updated.ExecutionSpeedHz, updated.LogInstruction, romImage.ResetAddress);
                 _processor.SetPortConfiguration(updated.PortDevices);
                 if (updated.FlashSavePaths is not null && updated.FlashSavePaths.Length == EmulatorOptions.PortCount)
                 {

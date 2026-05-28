@@ -8,6 +8,7 @@ namespace FoxVision
     internal class Processor
     {
         private ushort regX, regY, regSP, regPC, regCYC;
+        private readonly ushort _resetPC;
         private ushort[] regR;
         private ushort regEM;
         private ulong _totalCycleCount;
@@ -86,6 +87,7 @@ namespace FoxVision
         internal Processor(ContiguousMemory RAM, int executionSpeedHz, bool logInstruction, ushort initialPC, PortDeviceKind[]? portDevices = null)
         {
             this.RAM = RAM;
+            _resetPC = initialPC;
 
             regX = 0;
             regY = 0;
@@ -209,7 +211,7 @@ namespace FoxVision
             regX = 0;
             regY = 0;
             regSP = StackStartAddress;
-            regPC = 0;
+            regPC = _resetPC;
             regCYC = 0;
             regEM = 0;
             if (regR is not null)

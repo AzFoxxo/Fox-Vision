@@ -9,7 +9,11 @@ namespace FoxVision
     public class Program
     {
         private const int LegacyRomHeaderLength = 10;
-        private const int ExtendedRomHeaderLength = 17;
+        private const int ExtendedRomVersionFieldLength = 1;
+        private const int ExtendedRomMapperFieldLength = 2;
+        private const int ExtendedRomStartFieldLength = 2;
+        private const int ExtendedRomResetVectorFieldLength = 2;
+        private const int ExtendedRomSizeFieldLength = 2;
         private const int LegacyRomLimitWords = 0x1000;
         private const int ExtendedRomLimitWords = 0x8000;
         private const string LegacyRomMagic = ".VISOFOX16";
@@ -40,7 +44,7 @@ namespace FoxVision
                 Console.ForegroundColor = ConsoleColor.Yellow;
                 Console.WriteLine("No ROM selected at startup. Use File -> Load ROM.");
                 Console.ForegroundColor = ConsoleColor.White;
-                initialImage = new RomImage(new ushort[] { 0x0000, 0x000E }, 0, LegacyRomLimitWords);
+                initialImage = new RomImage(new ushort[] { 0x0000, 0x000E }, 0, 0, LegacyRomLimitWords);
             }
 
             DebugLogROMAsData(initialImage.Words);
@@ -473,16 +477,8 @@ namespace FoxVision
             string magic = Encoding.ASCII.GetString(rawRom, 0, LegacyRomHeaderLength);
             if (magic == ExtendedRomMagic)
             {
-                if (rawRom.Length < ExtendedRomHeaderLength)
-                {
-                    Console.ForegroundColor = ConsoleColor.Red;
-                    Console.WriteLine($"Extended ROM header is too small. Expected at least {ExtendedRomHeaderLength} bytes, got {rawRom.Length}.");
-                    Console.ForegroundColor = ConsoleColor.White;
-                    return false;
-                }
-
                 byte version = rawRom[10];
-                if (version != 1)
+                if (version != 1 && version != 2)
                 {
                     Console.ForegroundColor = ConsoleColor.Red;
                     Console.WriteLine($"Unsupported extended ROM version: {version}");
@@ -490,9 +486,26 @@ namespace FoxVision
                     return false;
                 }
 
-                ushort mapper = BinaryPrimitives.ReadUInt16BigEndian(rawRom.AsSpan(11, 2));
-                ushort romStart = BinaryPrimitives.ReadUInt16BigEndian(rawRom.AsSpan(13, 2));
-                ushort expectedWords = BinaryPrimitives.ReadUInt16BigEndian(rawRom.AsSpan(15, 2));
+                int headerLength = GetExtendedRomHeaderLength(version);
+                if (rawRom.Length < headerLength)
+                {
+                    Console.ForegroundColor = ConsoleColor.Red;
+                    Console.WriteLine($"Extended ROM header is too small. Expected at least {headerLength} bytes, got {rawRom.Length}.");
+                    Console.ForegroundColor = ConsoleColor.White;
+                    return false;
+                }
+
+                int mapperOffset = LegacyRomHeaderLength + ExtendedRomVersionFieldLength;
+                int romStartOffset = mapperOffset + ExtendedRomMapperFieldLength;
+                int resetVectorOffset = romStartOffset + ExtendedRomStartFieldLength;
+                int romSizeOffset = resetVectorOffset + (version == 1 ? 0 : ExtendedRomResetVectorFieldLength);
+
+                ushort mapper = BinaryPrimitives.ReadUInt16BigEndian(rawRom.AsSpan(mapperOffset, ExtendedRomMapperFieldLength));
+                ushort romStart = BinaryPrimitives.ReadUInt16BigEndian(rawRom.AsSpan(romStartOffset, ExtendedRomStartFieldLength));
+                ushort resetVector = version == 1
+                    ? romStart
+                    : BinaryPrimitives.ReadUInt16BigEndian(rawRom.AsSpan(resetVectorOffset, ExtendedRomResetVectorFieldLength));
+                ushort expectedWords = BinaryPrimitives.ReadUInt16BigEndian(rawRom.AsSpan(romSizeOffset, ExtendedRomSizeFieldLength));
                 int romLimitWords = mapper switch
                 {
                     0 => LegacyRomLimitWords,
@@ -500,7 +513,7 @@ namespace FoxVision
                     _ => LegacyRomLimitWords
                 };
 
-                var payloadLengthBytes = rawRom.Length - ExtendedRomHeaderLength;
+                var payloadLengthBytes = rawRom.Length - headerLength;
                 if (payloadLengthBytes < 0)
                 {
                     Console.ForegroundColor = ConsoleColor.Red;
@@ -526,14 +539,14 @@ namespace FoxVision
                 }
 
                 var payload = new byte[payloadLengthBytes];
-                Array.Copy(rawRom, ExtendedRomHeaderLength, payload, 0, rawRom.Length - ExtendedRomHeaderLength);
+                Array.Copy(rawRom, headerLength, payload, 0, rawRom.Length - headerLength);
                 ushort[] rom = new ushort[payload.Length / 2];
                 for (int i = 0; i < rom.Length; i++)
                 {
                     rom[i] = BinaryPrimitives.ReadUInt16BigEndian(payload.AsSpan(i * 2, 2));
                 }
 
-                image = new RomImage(rom, romStart, romLimitWords);
+                image = new RomImage(rom, romStart, resetVector, romLimitWords);
                 return true;
             }
 
@@ -573,9 +586,17 @@ namespace FoxVision
                 legacyRom[i] = BitConverter.ToUInt16(rawRom, i * 2);
             }
 
-            image = new RomImage(legacyRom, 0, LegacyRomLimitWords);
+            image = new RomImage(legacyRom, 0, 0, LegacyRomLimitWords);
             return true;
         }
+
+        private static int GetExtendedRomHeaderLength(byte version)
+            => LegacyRomHeaderLength
+               + ExtendedRomVersionFieldLength
+               + ExtendedRomMapperFieldLength
+               + ExtendedRomStartFieldLength
+               + (version == 1 ? 0 : ExtendedRomResetVectorFieldLength)
+               + ExtendedRomSizeFieldLength;
 
         /// <summary>
         /// Load the ROM file
@@ -1063,4 +1084,4 @@ namespace FoxVision
     }
 }
 
-internal readonly record struct RomImage(ushort[] Words, ushort StartAddress, int MaximumWords);
+internal readonly record struct RomImage(ushort[] Words, ushort StartAddress, ushort ResetAddress, int MaximumWords);

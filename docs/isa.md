@@ -240,7 +240,7 @@ Fox Vision introduces a machine extension mode control register.
 
 - The default value is `0x0000` for legacy mode
 - Setting the register to `0x0001` enables extension mode and V1.10 features at runtime
-- The ROM container's `.VFOX16EXT` header does not by itself enable V1.10 features; it only selects the ROM4K/ROM32K mapping used for file-size handling
+- The ROM container's `.VFOX16EXT` header does not by itself enable V1.10 features; it selects the ROM4K/ROM32K mapping used for file-size handling, provides the reset vector used after reset, and defines the layout policy for any ROM-resident constant data segment
 
 When extension mode is enabled (`0x0001`):
 
