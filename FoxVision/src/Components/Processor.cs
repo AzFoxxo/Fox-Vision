@@ -745,6 +745,11 @@ namespace FoxVision
 
                     return 3;
 
+                case 0x32:
+                    LogInstructionExecuting("OSRET", first_operand);
+                    regPC = 0;
+                    return 2;
+
                 // Debug extension opcodes
                 case 0xC000:
                     if (IsExtendedModeEnabled)

@@ -29,6 +29,8 @@ FoxC is a compiler written in Go for a practical C-like subset that targets Fox1
     - `vblank()` block until the next frame VBlank
     - `in_port(port)` read from a port (V1.10 extended mode, port 0-7)
     - `out_port(port, value)` write to a port (V1.10 extended mode, port 0-7)
+    - `os_start(address)` start a FoxOS foreground program at a constant address
+    - `os_return()` emit the `OSRET` instruction to return to FoxOS
 
 ## Pointer syntax (spec)
 
@@ -83,6 +85,8 @@ go build ./cmd/foxc
 - `-i <file>` - Input FoxC source file (required)
 - `-o <file>` - Output path (default: `out.f16` for assembly, `out.bin` for ROM)
 - `--mode legacy|extended` - Target machine mode (default: `legacy`)
+- `--load-address <addr>` - Load the ROM at a non-zero address, such as
+  `0x4000` for a FoxOS foreground program
 - `--strict-format` - Enforce ROM size compliance for the selected mode
 - `-a, --asm` - Assemble only: output Fox16ASM instead of binary ROM (skips assembler invocation)
 

@@ -19,6 +19,8 @@ This will compile `file.f16` and produce `vfox16.bin` in the same directory.
 - `--labels` - Show label resolution debug output during compilation
 - `--mode <legacy|extended>` - Select the machine mode for this build (default: `legacy`). Use `--mode extended` to enable extension mode (`EM=0x0001`).
 - `--strict-format` - Enforce the ROM payload limit for the selected mode
+- `--load-address <addr>` - Load the ROM payload at a non-zero address, such
+  as `0x4000` for a FoxOS foreground program
 - `-h, --help` - Display help information
 
 ### Examples
@@ -37,7 +39,32 @@ fox16asm -i myprogram.f16 --strict-format
 
 # Compile with extension mode enabled and the larger ROM payload limit
 fox16asm -i myprogram.f16 --mode extended --strict-format
+
+# Build a program for FoxOS's user-program area
+fox16asm -i myprogram.f16 -o myprogram.bin --mode extended \
+  --load-address 0x4000 --strict-format
 ```
+
+FoxOS foreground programs can return to the resident shell with the
+zero-operand `OSRET` instruction:
+
+```assembly
+; ... foreground program ...
+OSRET
+```
+
+To start a foreground program from a resident OS image, jump to its loaded
+address. The assembler has no separate `OSSTART` opcode; use the normal
+absolute-address jump form:
+
+```assembly
+JMP $4000
+```
+
+The equivalent FoxC built-ins are `os_start(0x4000)` (the address must be a
+16-bit constant and is emitted as `JMP`) and `os_return()` (emitted as
+`OSRET`). A foreground program should be assembled or compiled with its load
+address and finish with `OSRET`.
 
 ## Basic structure
 Each program must start with a `:main` definition, this must be the first piece of code within the program as address zero is used as the start of execution.
@@ -57,6 +84,11 @@ are both valid comments
 
 ### Instructions
 Instructions (opcodes) are always spelt in capitals. Basic instructions use three character codes such as `NOP` and `AXY`. These instructions can take a singular operand or no operand like `HLT`.
+
+`OSRET` is the FoxOS process-control instruction. It takes no operands, is
+available in extended mode, and returns execution to the resident OS at
+address zero. `JMP` remains the assembler-level operation for transferring
+control to a foreground program address.
 
 Frame pacing instructions include `WAIT` for cycle-based delays and `VBLANK` for waiting until the next rendered frame refresh. The assembler also accepts the shorter alias `VBL`.
 

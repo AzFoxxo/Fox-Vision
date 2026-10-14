@@ -2,7 +2,7 @@
     "name": "foxc-tools",
     "displayName": "FoxC Tools",
     "description": "Syntax highlighting, completions, and basic validation for FoxC source files.",
-    "version": "0.0.1",
+    "version": "0.0.2",
     "publisher": "azfoxxo",
     "license": "MIT",
     "engines": {

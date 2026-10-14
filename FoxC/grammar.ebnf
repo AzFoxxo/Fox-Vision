@@ -47,6 +47,11 @@ primary        = number
 call           = identifier "(" [ argumentList ] ")" ;
 argumentList   = expression { "," expression } ;
 
+(* The standard library built-ins are recognized as calls by semantic analysis.
+   OS process-control built-ins are available in addition to the hardware
+   helpers below. *)
+osBuiltIn      = "os_start" "(" number ")" | "os_return" "(" ")" ;
+
 type           = baseType { "*" } ;
 baseType       = "u8" | "u16" | "void" ;
 identifier     = letter { letter | digit | "_" } ;

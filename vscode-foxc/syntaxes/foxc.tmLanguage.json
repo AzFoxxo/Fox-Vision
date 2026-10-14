@@ -59,7 +59,7 @@
             "patterns": [
                 {
                     "name": "support.function.builtin.foxc",
-                    "match": "\\b(?:poke|peek|wait|cyc|vblank|in_port|out_port)\\b"
+                    "match": "\\b(?:poke|peek|wait|cyc|vblank|in_port|out_port|os_start|os_return)\\b"
                 }
             ]
         },

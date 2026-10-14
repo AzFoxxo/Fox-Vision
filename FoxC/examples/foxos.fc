@@ -8,7 +8,7 @@
 //   66..97    entry name lengths
 //   98..129   parent slots (32 means root)
 //   130..385  entry names (8 words per slot)
-//   386..32767 file data, allocated in 16-word chunks per file
+//   386..32767 file data, allocated in 1000-word chunks per file
 //
 // Entry names are up to eight ASCII characters.
 
@@ -17,7 +17,10 @@ u16 ENTRY_COUNT = 32;
 u16 ROOT_SLOT = 32;
 u16 NOT_FOUND = 33;
 u16 METADATA_WORDS = 386;
-u16 FILE_CHUNK_WORDS = 16;
+u16 FILE_CHUNK_WORDS = 1000;
+u16 PROGRAM_BASE = 16384;
+u16 EMBED_BASE = 28672;
+u16 EMBED_MAGIC = 61527;
 
 u16 line[16];
 u16 line_len = 0;
@@ -46,7 +49,7 @@ void puts(u8 *text)
 
 void puts_help()
 {
-    puts("help clear format install ls df\r\ncd PATH\r\ntouch PATH\r\nmkdir PATH\r\nrm PATH\r\n");
+    puts("help clear format install ls df\r\ncd PATH\r\ntouch PATH\r\nmkdir PATH\r\nrm PATH\r\nrun PATH\r\n");
 }
 
 u16 command_matches(u8 *expected, u16 length)
@@ -105,11 +108,15 @@ u16 find_child(u16 parent, u16 start, u16 length)
     u16 slot = 0;
     u16 name_i = 0;
     u16 match = 0;
+    u16 type = 0;
+    u16 entry_parent = 0;
+    u16 name_length = 0;
     while (slot < 32)
     {
-        if (flash_read(slot + 34) != 0 &&
-            flash_read(slot + 98) == parent &&
-            flash_read(slot + 66) == length)
+        type = flash_read(slot + 34);
+        entry_parent = flash_read(slot + 98);
+        name_length = flash_read(slot + 66);
+        if (type != 0 && entry_parent == parent && name_length == length)
         {
             match = 1;
             name_i = 0;
@@ -423,6 +430,103 @@ void show_disk_space()
     puts("\r\n");
 }
 
+void run_program(u16 start)
+{
+    u16 slot = resolve_path(start, line_len);
+    u16 length = 0;
+    u16 i = 0;
+
+    if (slot == 32 || slot == 33)
+    {
+        puts("run: program not found\r\n");
+        return;
+    }
+    if (flash_read(slot + 34) != 1)
+    {
+        puts("run: path is not a program\r\n");
+        return;
+    }
+
+    length = flash_read(slot + 2);
+    if (length == 0)
+    {
+        puts("run: program is empty (run install first)\r\n");
+        return;
+    }
+    if (length > FILE_CHUNK_WORDS)
+    {
+        puts("run: program is too large\r\n");
+        return;
+    }
+
+    while (i < length)
+    {
+        // Program files contain raw 16-bit words and are loaded into the
+        // reserved user-program area. Programs must return with JMP $0000.
+        poke(PROGRAM_BASE + i, flash_read(METADATA_WORDS + slot * FILE_CHUNK_WORDS + i));
+        i = i + 1;
+    }
+    puts("starting\r\n");
+    os_start(16384);
+}
+
+void install_embedded_program()
+{
+    u16 bin_slot = 0;
+    u16 program_slot = 0;
+    u16 embedded_magic = 0;
+    u16 embedded_length = 0;
+    u16 i = 0;
+    embedded_magic = peek(EMBED_BASE);
+    embedded_length = peek(EMBED_BASE + 1);
+    if (embedded_magic != EMBED_MAGIC)
+    {
+        puts("install: embedded program header missing (magic=");
+        print_u16(embedded_magic);
+        puts(", expected=");
+        print_u16(EMBED_MAGIC);
+        puts(")\r\n");
+        return;
+    }
+    if (embedded_length == 0 || embedded_length > FILE_CHUNK_WORDS)
+    {
+        puts("install: embedded program length invalid (");
+        print_u16(embedded_length);
+        puts(" words)\r\n");
+        return;
+    }
+    // install_directory creates the standard directories in fixed slot order;
+    // bin is the first entry after format_disk.
+    bin_slot = 0;
+    current_directory = bin_slot;
+    line[0] = 'g';
+    line[1] = 'r';
+    line[2] = 'a';
+    line[3] = 'p';
+    line[4] = 'h';
+    line[5] = 'i';
+    line[6] = 'c';
+    line[7] = 's';
+    line_len = 8;
+    if (find_child(bin_slot, 0, 8) == 32)
+    {
+        create_entry(0, 1);
+    }
+    program_slot = find_child(bin_slot, 0, 8);
+    if (program_slot == 32)
+    {
+        puts("install: could not create /bin/graphics\r\n");
+        return;
+    }
+    flash_write(program_slot + 2, embedded_length);
+    while (i < embedded_length)
+    {
+        flash_write(METADATA_WORDS + program_slot * FILE_CHUNK_WORDS + i,
+            peek(EMBED_BASE + 2 + i));
+        i = i + 1;
+    }
+}
+
 void install_disk()
 {
     // Format disk
@@ -438,6 +542,8 @@ void install_disk()
     
     // Temporary files directory
     install_directory("tmp", 3);
+    install_embedded_program();
+    current_directory = 32;
 
     puts("installation complete\r\n");
 }
@@ -495,13 +601,20 @@ void change_directory(u16 start)
 
 void print_path(u16 directory)
 {
+    u16 name_i = 0;
+    u16 name_length = 0;
     if (directory == 32)
     {
         return;
     }
     print_path(flash_read(directory + 98));
     puts("/");
-    out_port(4, flash_read(130 + directory * 8));
+    name_length = flash_read(directory + 66);
+    while (name_i < name_length)
+    {
+        out_port(4, flash_read(130 + directory * 8 + name_i));
+        name_i = name_i + 1;
+    }
 }
 
 void print_logo()
@@ -595,6 +708,14 @@ void dispatch()
         }
         return;
     }
+    if (command_matches("run ", 4))
+    {
+        if (line_len > 4)
+        {
+            run_program(4);
+        }
+        return;
+    }
     if (command_matches("pwd", 3))
     {
         puts("/");
@@ -623,8 +744,14 @@ void main()
     puts_help();
     while (1)
     {
-        puts("/");
-        print_path(current_directory);
+        if (current_directory == 32)
+        {
+            puts("/");
+        }
+        else
+        {
+            print_path(current_directory);
+        }
         puts("$");
         read_line();
         dispatch();

@@ -6,7 +6,7 @@ const OPCODES = [
     "XOR", "DWR", "ILM", "IWR", "INC", "DEC", "MOV", "STR", "LOD", "CMP",
     "JEQ", "JNE", "JLT", "JGT", "JLE", "JGE", "ADD", "SUB", "MUL", "DIV",
     "SHL", "SHR", "PUSH", "POP", "WAIT", "VBLANK", "VBL", "IN", "OUT",
-    "DBG_LGC", "DBG_MEM", "DBG_INP"
+    "OSRET", "DBG_LGC", "DBG_MEM", "DBG_INP"
 ];
 
 const OPCODE_DOCS = {
@@ -59,6 +59,7 @@ const OPCODE_DOCS = {
     VBL: "Alias for VBLANK.",
     IN: "Read a 16-bit value from a port into a register.",
     OUT: "Write a 16-bit register value to a port.",
+    OSRET: "Return from a FoxOS foreground program to the resident OS.",
     DBG_LGC: "Debug extension: log code.",
     DBG_MEM: "Debug extension: dump memory.",
     DBG_INP: "Debug extension: input debug action.",
@@ -125,6 +126,7 @@ const OPCODE_OPERANDS = {
     VBL: 0,
     IN: 2,
     OUT: 2,
+    OSRET: 0,
     DBG_LGC: 1,
     DBG_MEM: 0,
     DBG_INP: 0

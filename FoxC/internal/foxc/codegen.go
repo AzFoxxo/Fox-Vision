@@ -10,7 +10,8 @@ import (
 const (
 	globalBaseAddr  = 0x8000
 	globalLimitAddr = 0xEC78
-	runtimeStackTop = 28672
+	// Keep the runtime stack above FoxOS's embedded-program area at $7000.
+	runtimeStackTop = 0x7800
 )
 
 type storageKind int
@@ -159,7 +160,7 @@ func generate(prog *Program, opts CompileOptions) (string, error) {
 	if g.extendedMode {
 		g.emit("MOV %1 EM")
 	}
-	g.emit("MOV %28672 X")
+	g.emit(fmt.Sprintf("MOV %%%d X", runtimeStackTop))
 	g.storeToGlobal(g.stackTopSlot)
 	g.emit("MOV %0 X")
 	g.storeToGlobal(g.frameBaseSlot)
@@ -665,6 +666,12 @@ func (g *gen) emitExpr(e Expr) error {
 		if n.Callee == "out_port" {
 			return g.emitBuiltinOutPort(n)
 		}
+		if n.Callee == "os_return" {
+			return g.emitBuiltinOSReturn(n)
+		}
+		if n.Callee == "os_start" {
+			return g.emitBuiltinOSStart(n)
+		}
 		return g.emitFunctionCall(n)
 	default:
 		return fmt.Errorf("unsupported expression")
@@ -834,6 +841,26 @@ func (g *gen) emitBuiltinOutPort(call *CallExpr) error {
 	g.emit("MOV X Y")
 	g.emit(fmt.Sprintf("OUT Y %%%d", port))
 	g.emit("MOV %0 X")
+	return nil
+}
+
+func (g *gen) emitBuiltinOSReturn(call *CallExpr) error {
+	if len(call.Args) != 0 {
+		return fmt.Errorf("os_return expects no arguments")
+	}
+	g.emit("OSRET")
+	return nil
+}
+
+func (g *gen) emitBuiltinOSStart(call *CallExpr) error {
+	if len(call.Args) != 1 {
+		return fmt.Errorf("os_start expects 1 argument")
+	}
+	target, ok := call.Args[0].(*IntLit)
+	if !ok || target.Value < 0 || target.Value > 0xFFFF {
+		return fmt.Errorf("os_start target must be a 16-bit constant")
+	}
+	g.emit(fmt.Sprintf("JMP $%04X", target.Value))
 	return nil
 }
 

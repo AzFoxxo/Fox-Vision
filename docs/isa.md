@@ -262,10 +262,16 @@ Ports are not memory-mapped.
 - Port numbers are encoded as 16-bit immediate values in the range `0x0000` to `0x0007`
 - Port `0x0000` through `0x0007` are the only valid IN/OUT targets
 
-Port I/O instructions use an immediate operand for the port number:
+Port I/O and FoxOS process-control instructions use the following encodings:
 
 - `0000 0000` `0011 0000` - `IN`  `PORT DST` - Read the 16-bit value from port `PORT` into register `DST`
+- `0000 0000` `0011 0010` - `OSRET` - Return from a FoxOS foreground program to the resident OS at address `0`
 - `0000 0000` `0011 0001` - `OUT` `SRC PORT` - Write the 16-bit value from register `SRC` to port `PORT`
+
+`OSRET` is the only FoxOS-specific CPU opcode. A resident OS starts a
+foreground image with an ordinary absolute `JMP` to that image's load address;
+there is no separate `OSSTART` opcode. The FoxC `os_start(address)` built-in
+emits this `JMP`, while `os_return()` emits `OSRET`.
 
 ### Extension debug opcodes (EDO) - Legacy mode only
 
@@ -326,4 +332,3 @@ This memory is broken up into several sections.
 - Remaining space available for RAM and VRAM
 
 See [port_devices.md](port_devices.md) for port device specifications and port mappings.
-

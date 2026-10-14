@@ -4,7 +4,10 @@ const vscode = require("vscode");
 
 const TYPES = ["u8", "u16", "void"];
 const KEYWORDS = ["if", "else", "while", "return"];
-const BUILTINS = ["poke", "peek", "wait", "cyc", "vblank", "in_port", "out_port"];
+const BUILTINS = [
+    "poke", "peek", "wait", "cyc", "vblank", "in_port", "out_port",
+    "os_start", "os_return"
+];
 
 const BUILTIN_SIGNATURES = new Map([
     ["poke", { ret: "void", params: 2 }],
@@ -13,7 +16,9 @@ const BUILTIN_SIGNATURES = new Map([
     ["cyc", { ret: "u16", params: 0 }],
     ["vblank", { ret: "void", params: 0 }],
     ["in_port", { ret: "u16", params: 1 }],
-    ["out_port", { ret: "void", params: 2 }]
+    ["out_port", { ret: "void", params: 2 }],
+    ["os_start", { ret: "void", params: 1 }],
+    ["os_return", { ret: "void", params: 0 }]
 ]);
 
 function createCompletionItem(label, kind, detail, documentation, insertText) {

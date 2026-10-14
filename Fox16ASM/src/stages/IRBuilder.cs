@@ -434,7 +434,10 @@ class IRBuilder
         string sourceFile,
         List<Diagnostic> diagnostics)
     {
-        if (opcode is "IN" or "OUT")
+        if (opcode is "MOV" or "STR" or "LOD" or
+            "CMP" or "JEQ" or "JNE" or "JLT" or "JGT" or "JLE" or "JGE" or
+            "ADD" or "SUB" or "MUL" or "DIV" or "AND2" or "OR" or "XOR2" or "SHL" or "SHR" or
+            "PUSH" or "POP" or "IN" or "OUT")
         {
             diagnostics.Add(Diagnostic.Error(
                 $"Opcode '{opcode}' requires --mode extended.",
@@ -457,6 +460,17 @@ class IRBuilder
     {
         if (opcode is "IN" or "OUT")
             return true;
+
+        if (opcode == "OSRET" && operandCount != 0)
+        {
+            diagnostics.Add(Diagnostic.Error(
+                "Opcode 'OSRET' does not take operands.",
+                sourceFile,
+                sourceLine.LineNumber,
+                1,
+                sourceLine.Text));
+            return false;
+        }
 
         if (opcode is "DBG_LGC" or "DBG_MEM" or "DBG_INP")
         {

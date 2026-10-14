@@ -57,7 +57,7 @@
             "patterns": [
                 {
                     "name": "keyword.control",
-                    "match": "(?i)\\b(?:NOP|LFM|WTM|SRA|AXY|SXY|MXY|DXY|EQU|LEQ|JPZ|JNZ|JMP|CLR|HLT|BSL|BSR|AND|ORA|OR|XOR|DWR|ILM|IWR|INC|DEC|MOV|STR|LOD|CMP|JEQ|JNE|JLT|JGT|JLE|JGE|ADD|SUB|MUL|DIV|SHL|SHR|IN|OUT|DBG_LGC|DBG_MEM|DBG_INP)\\b"
+                    "match": "(?i)\\b(?:NOP|LFM|WTM|SRA|AXY|SXY|MXY|DXY|EQU|LEQ|JPZ|JNZ|JMP|CLR|HLT|BSL|BSR|AND|ORA|OR|XOR|DWR|ILM|IWR|INC|DEC|MOV|STR|LOD|CMP|JEQ|JNE|JLT|JGT|JLE|JGE|ADD|SUB|MUL|DIV|SHL|SHR|PUSH|POP|WAIT|VBLANK|VBL|IN|OUT|OSRET|DBG_LGC|DBG_MEM|DBG_INP)\\b"
                 }
             ]
         },

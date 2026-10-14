@@ -29,10 +29,11 @@ class Generator
         string sourceFile,
         AssemblerMode mode,
         DebugFlags debugFlags,
-        bool strictFormat = false)
+        bool strictFormat = false,
+        ushort loadAddress = 0)
     {
         var diagnostics = new List<Diagnostic>();
-        var labelTable = ResolveLabelAddresses(ir, sourceFile, debugFlags, diagnostics);
+        var labelTable = ResolveLabelAddresses(ir, sourceFile, debugFlags, diagnostics, loadAddress);
         if (diagnostics.Any(d => d.Severity == DiagnosticSeverity.Error))
             return CompilationResult<GenerationOutput>.Failed(diagnostics);
 
@@ -52,8 +53,8 @@ class Generator
         using var memory = new MemoryStream();
         using var writer = new EndianBinaryWriter(EndianBitConverter.Big, memory);
 
-        var resetVector = ResolveResetVectorAddress(ir);
-        WriteHeader(memory, mode, payloadWordCount, resetVector);
+        var resetVector = ResolveResetVectorAddress(ir, loadAddress);
+        WriteHeader(memory, mode, payloadWordCount, loadAddress, resetVector);
 
         foreach (var item in ir.Items)
         {
@@ -125,9 +126,9 @@ class Generator
     private static int GetPayloadWordCount(AssemblerIR ir)
         => ir.Items.Sum(item => item.WordCount) + 2;
 
-    private static ushort ResolveResetVectorAddress(AssemblerIR ir)
+    private static ushort ResolveResetVectorAddress(AssemblerIR ir, ushort loadAddress)
     {
-        int address = 0;
+        int address = loadAddress;
         foreach (var item in ir.Items)
         {
             if (item.SegmentKind == IRSegmentKind.Code)
@@ -236,11 +237,12 @@ class Generator
         AssemblerIR ir,
         string sourceFile,
         DebugFlags debugFlags,
-        List<Diagnostic> diagnostics)
+        List<Diagnostic> diagnostics,
+        ushort loadAddress)
     {
         var labelsByName = new Dictionary<string, ushort>(StringComparer.OrdinalIgnoreCase);
         var itemAddresses = new int[ir.Items.Count];
-        var eofAddress = 0;
+        var eofAddress = (int)loadAddress;
 
         for (var i = 0; i < ir.Items.Count; i++)
         {
@@ -421,7 +423,7 @@ class Generator
         };
     }
 
-    private static void WriteHeader(Stream stream, AssemblerMode mode, int payloadWordCount, ushort resetVector)
+    private static void WriteHeader(Stream stream, AssemblerMode mode, int payloadWordCount, ushort loadAddress, ushort resetVector)
     {
         if (mode == AssemblerMode.Extended)
         {
@@ -429,7 +431,7 @@ class Generator
             stream.Write(magicBytes, 0, magicBytes.Length);
             stream.WriteByte(2);
             WriteBigEndianUInt16(stream, 1);
-            WriteBigEndianUInt16(stream, 0);
+            WriteBigEndianUInt16(stream, loadAddress);
             WriteBigEndianUInt16(stream, resetVector);
             WriteBigEndianUInt16(stream, (ushort)payloadWordCount);
             return;

@@ -1,9 +1,13 @@
 package foxc
 
-import "strings"
+import (
+	"strconv"
+	"strings"
+)
 
 type CompileOptions struct {
-	Mode string
+	Mode        string
+	LoadAddress uint16
 }
 
 func Compile(src string) (string, error) {
@@ -28,4 +32,13 @@ func CompileWithOptions(src string, opts CompileOptions) (string, error) {
 
 func isExtendedMode(mode string) bool {
 	return strings.EqualFold(strings.TrimSpace(mode), "extended")
+}
+
+func ParseLoadAddress(value string) (uint16, error) {
+	value = strings.TrimSpace(value)
+	if strings.HasPrefix(value, "$") {
+		value = "0x" + value[1:]
+	}
+	n, err := strconv.ParseUint(value, 0, 16)
+	return uint16(n), err
 }

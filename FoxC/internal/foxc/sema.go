@@ -35,6 +35,8 @@ func check(prog *Program, opts CompileOptions) error {
 	s.funcs["vblank"] = funcSig{ret: Type{Base: TypeVoid}, params: []Type{}}
 	s.funcs["in_port"] = funcSig{ret: Type{Base: TypeU16}, params: []Type{{Base: TypeU16}}}
 	s.funcs["out_port"] = funcSig{ret: Type{Base: TypeVoid}, params: []Type{{Base: TypeU16}, {Base: TypeU16}}}
+	s.funcs["os_return"] = funcSig{ret: Type{Base: TypeVoid}, params: []Type{}}
+	s.funcs["os_start"] = funcSig{ret: Type{Base: TypeVoid}, params: []Type{{Base: TypeU16}}}
 
 	for _, g := range prog.Globals {
 		if g.Type.Base == TypeVoid && g.Type.Ptr == 0 {

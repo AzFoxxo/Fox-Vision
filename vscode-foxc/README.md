@@ -5,6 +5,7 @@ FoxC Tools is a small VS Code extension for FoxC source files (`.fc`). It provid
 - Syntax highlighting for language keywords, types, built-ins, operators, and comments
 - Syntax highlighting for character and string literals, including escaped characters
 - Basic completion items for common keywords, types, built-ins, and snippets
+- FoxOS built-ins: `os_start(address)` and `os_return()`
 - Lightweight validation for common mistakes such as missing semicolons, unmatched braces, duplicate declarations, unknown identifiers, and incorrect call shapes
 
 FoxC literals follow the compiler's byte-oriented rules:

@@ -15,12 +15,13 @@ func main() {
 	out := flag.String("o", "", "output file")
 	mode := flag.String("mode", "legacy", "target machine mode (legacy|extended)")
 	strictFormat := flag.Bool("strict-format", false, "enforce ROM size compliance for the selected mode")
+	loadAddressText := flag.String("load-address", "0", "load address (decimal, 0x-prefixed hexadecimal, or $ hexadecimal)")
 	asmOnly := flag.Bool("asm", false, "assemble only: output Fox16ASM instead of binary ROM")
 	flag.BoolVar(asmOnly, "a", false, "short for --asm")
 	flag.Parse()
 
 	if *in == "" {
-		fmt.Fprintln(os.Stderr, "usage: foxc -i <input.fc> [-o output] [--mode legacy|extended] [--strict-format] [-a|--asm]")
+		fmt.Fprintln(os.Stderr, "usage: foxc -i <input.fc> [-o output] [--mode legacy|extended] [--load-address address] [--strict-format] [-a|--asm]")
 		os.Exit(2)
 	}
 
@@ -30,7 +31,13 @@ func main() {
 		os.Exit(1)
 	}
 
-	asm, err := foxc.CompileWithOptions(string(src), foxc.CompileOptions{Mode: *mode})
+	loadAddress, err := foxc.ParseLoadAddress(*loadAddressText)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "invalid load address: %v\n", err)
+		os.Exit(2)
+	}
+
+	asm, err := foxc.CompileWithOptions(string(src), foxc.CompileOptions{Mode: *mode, LoadAddress: loadAddress})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "compile error: %v\n", err)
 		os.Exit(1)
@@ -80,6 +87,7 @@ func main() {
 		"-i", asmPath,
 		"-o", binPath,
 		"--mode", *mode,
+		"--load-address", fmt.Sprintf("0x%04X", loadAddress),
 	}
 
 	if *strictFormat {
