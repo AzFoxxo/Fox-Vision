@@ -6,3 +6,4 @@ obj/
 FoxC/**/*f16
 .vscode/
 *foxc*
+.gitignore
