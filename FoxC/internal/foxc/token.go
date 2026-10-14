@@ -6,6 +6,8 @@ const (
 	tokEOF tokenKind = iota
 	tokIdent
 	tokNumber
+	tokChar
+	tokString
 	tokLParen
 	tokRParen
 	tokLBracket

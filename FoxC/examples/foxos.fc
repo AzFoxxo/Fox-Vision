@@ -1,0 +1,632 @@
+// FoxOS: a small Fox16 operating system and flash-backed command shell.
+//
+// Flash layout (16-bit words):
+//   0      magic
+//   1      format version
+//   2..33     file lengths for slots 0..31
+//   34..65    entry types (0=free, 1=file, 2=directory)
+//   66..97    entry name lengths
+//   98..129   parent slots (32 means root)
+//   130..385  entry names (8 words per slot)
+//   386..32767 file data, allocated in 16-word chunks per file
+//
+// Entry names are up to eight ASCII characters.
+
+u16 FLASH_WORDS = 32768;
+u16 ENTRY_COUNT = 32;
+u16 ROOT_SLOT = 32;
+u16 NOT_FOUND = 33;
+u16 METADATA_WORDS = 386;
+u16 FILE_CHUNK_WORDS = 16;
+
+u16 line[16];
+u16 line_len = 0;
+u16 current_directory = 32;
+
+u16 flash_read(u16 address)
+{
+    out_port(5, address * 2);
+    return in_port(5);
+}
+
+void flash_write(u16 address, u16 value)
+{
+    out_port(5, address * 2 + 1);
+    out_port(5, value);
+}
+
+void puts(u8 *text)
+{
+    while (*text != 0)
+    {
+        out_port(4, *text);
+        text = text + 1;
+    }
+}
+
+void puts_help()
+{
+    puts("help clear format install ls df\r\ncd PATH\r\ntouch PATH\r\nmkdir PATH\r\nrm PATH\r\n");
+}
+
+u16 command_matches(u8 *expected, u16 length)
+{
+    u16 i = 0;
+    if (line_len < length)
+    {
+        return 0;
+    }
+    while (i < length)
+    {
+        if (line[i] != *expected)
+        {
+            return 0;
+        }
+        i = i + 1;
+        expected = expected + 1;
+    }
+    return 1;
+}
+
+void format_disk()
+{
+    u16 i = 0;
+    // Erase the complete cart, not just the small filesystem header.
+    // Keep the loop counter from wrapping after address 0x7FFF.
+    while (i < 32767)
+    {
+        flash_write(i, 0);
+        i = i + 1;
+    }
+    flash_write(32767, 0);
+    i = 0;
+    flash_write(0, 18008);
+    flash_write(1, 6);
+    while (i < 32)
+    {
+        flash_write(i + 2, 0);
+        flash_write(i + 34, 0);
+        flash_write(i + 66, 0);
+        flash_write(i + 98, 32);
+        i = i + 1;
+    }
+    current_directory = 32;
+    puts("OK\r\n");
+}
+
+void clear_screen()
+{
+    out_port(4, 27);
+    puts("[2J");
+}
+
+u16 find_child(u16 parent, u16 start, u16 length)
+{
+    u16 slot = 0;
+    u16 name_i = 0;
+    u16 match = 0;
+    while (slot < 32)
+    {
+        if (flash_read(slot + 34) != 0 &&
+            flash_read(slot + 98) == parent &&
+            flash_read(slot + 66) == length)
+        {
+            match = 1;
+            name_i = 0;
+            while (name_i < length)
+            {
+                if (flash_read(130 + slot * 8 + name_i) != line[start + name_i])
+                {
+                    match = 0;
+                }
+                name_i = name_i + 1;
+            }
+            if (match == 1)
+            {
+                return slot;
+            }
+        }
+        slot = slot + 1;
+    }
+    return 32;
+}
+
+u16 resolve_directory(u16 start, u16 end)
+{
+    u16 directory = current_directory;
+    u16 i = start;
+    u16 component_start = 0;
+    u16 component_length = 0;
+    u16 child = 32;
+    if (start < end && line[start] == '/')
+    {
+        directory = 32;
+        i = i + 1;
+    }
+    while (i < end)
+    {
+        while (i < end && line[i] == '/')
+        {
+            i = i + 1;
+        }
+        if (i == end)
+        {
+            return directory;
+        }
+        component_start = i;
+        while (i < end && line[i] != '/')
+        {
+            i = i + 1;
+        }
+        component_length = i - component_start;
+        if (component_length == 1 && line[component_start] == '.')
+        {
+            directory = directory;
+        }
+        else
+        {
+            if (component_length == 2 && line[component_start] == '.' &&
+                line[component_start + 1] == '.')
+            {
+                if (directory != 32)
+                {
+                    directory = flash_read(directory + 98);
+                }
+            }
+            else
+            {
+                child = find_child(directory, component_start, component_length);
+                if (child == 32 || flash_read(child + 34) != 2)
+                {
+                    return 33;
+                }
+                directory = child;
+            }
+        }
+    }
+    return directory;
+}
+
+u16 resolve_path(u16 start, u16 end)
+{
+    u16 directory = current_directory;
+    u16 i = start;
+    u16 component_start = 0;
+    u16 component_length = 0;
+    u16 child = 32;
+    if (start < end && line[start] == '/')
+    {
+        directory = 32;
+        i = i + 1;
+    }
+    while (i < end)
+    {
+        while (i < end && line[i] == '/')
+        {
+            i = i + 1;
+        }
+        if (i == end)
+        {
+            return directory;
+        }
+        component_start = i;
+        while (i < end && line[i] != '/')
+        {
+            i = i + 1;
+        }
+        component_length = i - component_start;
+        if (component_length == 1 && line[component_start] == '.')
+        {
+            directory = directory;
+        }
+        else
+        {
+            if (component_length == 2 && line[component_start] == '.' &&
+                line[component_start + 1] == '.')
+            {
+                if (directory != 32)
+                {
+                    directory = flash_read(directory + 98);
+                }
+            }
+            else
+            {
+                child = find_child(directory, component_start, component_length);
+                if (child == 32)
+                {
+                    return 33;
+                }
+                directory = child;
+                if (i < end && flash_read(directory + 34) != 2)
+                {
+                    return 33;
+                }
+            }
+        }
+    }
+    return directory;
+}
+
+void list_files()
+{
+    u16 i = 0;
+    u16 length = 0;
+    u16 type = 0;
+    u16 name_i = 0;
+    u16 name_length = 0;
+    puts("files: ");
+    while (i < 32)
+    {
+        length = flash_read(i + 2);
+        type = flash_read(i + 34);
+        if (type > 0 && flash_read(i + 98) == current_directory)
+        {
+            name_i = 0;
+            name_length = flash_read(i + 66);
+            while (name_i < name_length)
+            {
+                out_port(4, flash_read(130 + i * 8 + name_i));
+                name_i = name_i + 1;
+            }
+            if (type == 1)
+            {
+                puts(":f=");
+                out_port(4, 48 + length);
+            }
+            else
+            {
+                puts(":d");
+            }
+            out_port(4, ' ');
+        }
+        i = i + 1;
+    }
+    out_port(4, '\r');
+    out_port(4, '\n');
+}
+
+void read_line()
+{
+    u16 ch = 0;
+    line_len = 0;
+    while (ch != 13)
+    {
+        ch = in_port(4);
+        if (ch != 0 && ch != 13)
+        {
+            if (line_len < 16)
+            {
+                line[line_len] = ch;
+                line_len = line_len + 1;
+            }
+            out_port(4, ch);
+        }
+    }
+    out_port(4, '\r');
+    out_port(4, '\n');
+}
+
+void create_entry(u16 start, u16 type)
+{
+    u16 slot = 0;
+    u16 i = 0;
+    u16 slash = start;
+    u16 parent_end = start;
+    u16 parent = current_directory;
+    u16 name_start = start;
+    u16 name_length = 0;
+    if (start < line_len && line[start] == '/')
+    {
+        parent = 32;
+    }
+    while (slash < line_len)
+    {
+        if (line[slash] == '/')
+        {
+            parent_end = slash;
+            name_start = slash + 1;
+        }
+        slash = slash + 1;
+    }
+    if (name_start >= line_len || line_len - name_start > 8)
+    {
+        puts("invalid name\r\n");
+        return;
+    }
+    if (parent_end != start)
+    {
+        parent = resolve_directory(start, parent_end);
+        if (parent == 33)
+        {
+            puts("parent directory not found\r\n");
+            return;
+        }
+    }
+    name_length = line_len - name_start;
+    if (find_child(parent, name_start, name_length) != 32)
+    {
+        puts("already exists\r\n");
+        return;
+    }
+    while (slot < 32 && flash_read(slot + 34) != 0)
+    {
+        slot = slot + 1;
+    }
+    if (slot == 32)
+    {
+        puts("no free entries\r\n");
+        return;
+    }
+    flash_write(slot + 2, 0);
+    flash_write(slot + 34, type);
+    flash_write(slot + 66, name_length);
+    flash_write(slot + 98, parent);
+    while (i < name_length)
+    {
+        flash_write(130 + slot * 8 + i, line[name_start + i]);
+        i = i + 1;
+    }
+    puts("created\r\n");
+}
+
+void install_directory(u8 *name, u16 length)
+{
+    u16 i = 0;
+    while (i < length)
+    {
+        line[i] = *name;
+        name = name + 1;
+        i = i + 1;
+    }
+    line_len = length;
+    create_entry(0, 2);
+}
+
+void print_u16(u16 value)
+{
+    if (value >= 10)
+    {
+        print_u16(value / 10);
+    }
+    out_port(4, 48 + value - (value / 10) * 10);
+}
+
+u16 check_disk_space()
+{
+    u16 slot = 0;
+    u16 used_words = 0;
+    while (slot < 32)
+    {
+        if (flash_read(slot + 34) != 0)
+        {
+            // Every active entry uses four metadata words and eight name
+            // words. The fixed metadata area is capacity, not used space.
+            used_words = used_words + 12;
+            if (flash_read(slot + 34) == 1)
+            {
+                // Files reserve their complete 16-word data chunk.
+                used_words = used_words + FILE_CHUNK_WORDS;
+            }
+        }
+        slot = slot + 1;
+    }
+    return FLASH_WORDS - used_words;
+}
+
+void show_disk_space()
+{
+    u16 free_words = check_disk_space();
+    puts("free words: ");
+    print_u16(free_words);
+    puts("\r\ntaken words: ");
+    print_u16(FLASH_WORDS - free_words);
+    puts("\r\n");
+}
+
+void install_disk()
+{
+    // Format disk
+    format_disk();
+
+    // Primary binary directory
+    install_directory("bin", 3);
+    // User home directory
+    install_directory("home", 4);
+
+    // System configuration directory
+    install_directory("etc", 3);
+    
+    // Temporary files directory
+    install_directory("tmp", 3);
+
+    puts("installation complete\r\n");
+}
+
+void remove_entry(u16 start)
+{
+    u16 slot = resolve_path(start, line_len);
+    u16 i = 0;
+    u16 child = 0;
+    if (slot == 32 || slot == 33)
+    {
+        puts("not found\r\n");
+        return;
+    }
+    if (flash_read(slot + 34) == 2)
+    {
+        while (child < 32)
+        {
+            if (flash_read(child + 34) != 0 && flash_read(child + 98) == slot)
+            {
+                puts("directory not empty\r\n");
+                return;
+            }
+            child = child + 1;
+        }
+    }
+    flash_write(slot + 2, 0);
+    flash_write(slot + 34, 0);
+    flash_write(slot + 66, 0);
+    while (i < 8)
+    {
+        flash_write(130 + slot * 8 + i, 0);
+        i = i + 1;
+    }
+    puts("removed\r\n");
+}
+
+void change_directory(u16 start)
+{
+    u16 slot = resolve_path(start, line_len);
+    if (slot == 32)
+    {
+        current_directory = 32;
+        puts("ok\r\n");
+        return;
+    }
+    if (slot == 33 || flash_read(slot + 34) != 2)
+    {
+        puts("directory not found\r\n");
+        return;
+    }
+    current_directory = slot;
+    puts("ok\r\n");
+}
+
+void print_path(u16 directory)
+{
+    if (directory == 32)
+    {
+        return;
+    }
+    print_path(flash_read(directory + 98));
+    puts("/");
+    out_port(4, flash_read(130 + directory * 8));
+}
+
+void print_logo()
+{
+    puts("                                                                   ,-,\r\n");
+    puts("                                                             _.-=;~ /_\r\n");
+    puts("                                                          _-~   '     ;.\r\n");
+    puts("                                                      _.-~     '   .-~-~`-._\r\n");
+    puts("                                                _.--~~:.             --.____88\r\n");
+    puts("                              ____.........--~~~. .'  .  .        _..-------~~\r\n");
+    puts("                     _..--~~~~               .' .'             ,'\r\n");
+    puts("                 _.-~                        .       .     ` ,'\r\n");
+    puts("               .'                                    :.    ./\r\n");
+    puts("             .:     ,/          `                   ::.   ,'\r\n");
+    puts("           .:'     ,(            ;.                ::. ,-'\r\n");
+    puts("          .'     ./'.`.     . . /:::._______.... _/:.o/\r\n");
+    puts("         /     ./'. . .)  . _.,'               `88;?88|\r\n");
+    puts("       ,'  . .,/'._,-~ /_.o8P'                  88P ?8b\r\n");
+    puts("    _,'' . .,/',-~    d888P'                    88'  88|\r\n");
+    puts(" _.'~  . .,:oP'        ?88b              _..--- 88.--'8b.--..__\r\n");
+    puts(":     ...' 88o __,------.88o ...__..._.=~- .    `~~   `~~      ~-._ Seal _.\r\n");
+    puts("`.;;;:='    ~~            ~~~                ~-    -       -   -\r\n");
+}
+
+
+void dispatch()
+{
+    if (line_len == 0)
+    {
+        return;
+    }
+    if (line_len == 5 && command_matches("clear", 5))
+    {
+        clear_screen();
+        return;
+    }
+    if (command_matches("mkdir ", 6))
+    {
+        if (line_len > 6)
+        {
+            create_entry(6, 2);
+        }
+        return;
+    }
+    if (line_len == 4 && command_matches("help", 4))
+    {
+        puts_help();
+        return;
+    }
+    if (line_len == 6 && command_matches("format", 6))
+    {
+        format_disk();
+        return;
+    }
+    if (line_len == 7 && command_matches("install", 7))
+    {
+        install_disk();
+        return;
+    }
+    if (line_len == 2 && command_matches("ls", 2))
+    {
+        list_files();
+        return;
+    }
+    if (line_len == 2 && command_matches("df", 2))
+    {
+        show_disk_space();
+        return;
+    }
+    if (command_matches("cd ", 3))
+    {
+        if (line_len > 3)
+        {
+            change_directory(3);
+        }
+        return;
+    }
+    if (command_matches("touch ", 6))
+    {
+        if (line_len > 6)
+        {
+            create_entry(6, 1);
+        }
+        return;
+    }
+    if (command_matches("rm ", 3))
+    {
+        if (line_len > 3)
+        {
+            remove_entry(3);
+        }
+        return;
+    }
+    if (command_matches("pwd", 3))
+    {
+        puts("/");
+        print_path(current_directory);
+        out_port(4, '\r');
+        out_port(4, '\n');
+        return;
+    }
+    if (command_matches("logo", 4))
+    {
+        print_logo();
+        return;
+    }
+}
+
+void main()
+{
+    u16 magic = flash_read(0);
+    u16 version = flash_read(1);
+    if (magic != 18008 || version != 6)
+    {
+        format_disk();
+    }
+    puts("Foxxo OS init!\r\n");
+    print_logo();
+    puts_help();
+    while (1)
+    {
+        puts("/");
+        print_path(current_directory);
+        puts("$");
+        read_line();
+        dispatch();
+    }
+}

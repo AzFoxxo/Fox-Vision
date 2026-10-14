@@ -15,6 +15,9 @@
             "include": "#builtins"
         },
         {
+            "include": "#literals"
+        },
+        {
             "include": "#numbers"
         },
         {
@@ -57,6 +60,18 @@
                 {
                     "name": "support.function.builtin.foxc",
                     "match": "\\b(?:poke|peek|wait|cyc|vblank|in_port|out_port)\\b"
+                }
+            ]
+        },
+        "literals": {
+            "patterns": [
+                {
+                    "name": "string.quoted.double.foxc",
+                    "match": "\"(?:\\\\.|[^\"\\\\\\r\\n])*\""
+                },
+                {
+                    "name": "constant.character.foxc",
+                    "match": "'(?:\\\\.|[^'\\\\\\r\\n])*'"
                 }
             ]
         },

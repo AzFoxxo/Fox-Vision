@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strconv"
 	"unicode"
+	"unicode/utf8"
 )
 
 type lexer struct {
@@ -61,6 +62,45 @@ func (l *lexer) nextToken() (token, error) {
 			return token{}, fmt.Errorf("invalid number %q at %d:%d", text, line, col)
 		}
 		return token{kind: tokNumber, text: text, line: line, col: col}, nil
+	}
+
+	if ch == '\'' || ch == '"' {
+		quote := ch
+		l.advance()
+		start := l.pos
+		for !l.eof() {
+			if l.peek() == '\\' {
+				l.advance()
+				if !l.eof() {
+					l.advance()
+				}
+				continue
+			}
+			if l.peek() == quote {
+				raw := string(l.src[start:l.pos])
+				l.advance()
+				decoded, err := strconv.Unquote(string(quote) + raw + string(quote))
+				if err != nil {
+					return token{}, fmt.Errorf("invalid literal at %d:%d: %v", line, col, err)
+				}
+				if quote == '\'' {
+					runes := []rune(decoded)
+					if len(runes) != 1 || runes[0] > 0xFF {
+						return token{}, fmt.Errorf("character literal must contain one byte at %d:%d", line, col)
+					}
+					return token{kind: tokChar, text: decoded, line: line, col: col}, nil
+				}
+				if !utf8.ValidString(decoded) {
+					return token{}, fmt.Errorf("invalid string literal at %d:%d", line, col)
+				}
+				return token{kind: tokString, text: decoded, line: line, col: col}, nil
+			}
+			if l.peek() == '\n' {
+				break
+			}
+			l.advance()
+		}
+		return token{}, fmt.Errorf("unterminated literal at %d:%d", line, col)
 	}
 
 	l.advance()

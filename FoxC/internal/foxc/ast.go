@@ -118,6 +118,18 @@ type IntLit struct {
 
 func (*IntLit) exprNode() {}
 
+type CharLit struct {
+	Value byte
+}
+
+func (*CharLit) exprNode() {}
+
+type StringLit struct {
+	Value string
+}
+
+func (*StringLit) exprNode() {}
+
 type IdentExpr struct {
 	Name string
 }

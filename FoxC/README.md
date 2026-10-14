@@ -6,6 +6,7 @@ FoxC is a compiler written in Go for a practical C-like subset that targets Fox1
 
 - Types: `u8`, `u16`, `void`, pointers (`u8 *`, `u16 *`)
 - Variables: global and local declarations with optional initialization, including fixed-size arrays and pointer variables
+- Literals: decimal numbers, character literals (`'A'`), and string literals for NUL-terminated `u8` array initialization
 - Functions: user-defined functions, parameters, `return`
 - Control flow: `if`/`else`, `while`
 - Operators: 
@@ -104,6 +105,14 @@ void main() {
 
 Note: FoxC currently accepts decimal integer literals in source. Address constants can be represented as decimal values.
 
+## FoxOS example
+
+`examples/foxos.fc` is a complete small operating system example. It enables
+extended mode, exposes a CLI through the VF16TTY port, and stores four fixed
+text files in port-mapped VF16Flash storage. See [docs/foxos.md](../docs/foxos.md)
+for the flash layout, port protocol, build command, and supported shell
+commands.
+
 Type note: implicit widening (`u8 -> u16`) is allowed; implicit narrowing (`u16 -> u8`) is rejected to avoid unintended truncation.
 
 Pointer note: the pointer model is word-based, so pointer-sized values are 16-bit words even when the pointed-to type is `u8`.
@@ -117,6 +126,33 @@ Implementation note (pointers):
 FoxC supports fixed-size arrays for `u8` and `u16` element types.
 
 `u8` arrays are packed into 16-bit words in generated memory layout (two `u8` elements per word).
+
+### Character and string literals
+
+Character literals represent one byte and have type `u8`:
+
+```c
+u8 newline = '\n';
+u8 letter = 'A';
+```
+
+Character and string literals accept the escaped forms understood by FoxC,
+including `\n`, `\r`, `\t`, `\\`, `\'`, `\"`, octal escapes, and hexadecimal
+or Unicode escapes. A character literal must decode to exactly one byte.
+
+String literals are NUL-terminated and can initialize `u8` arrays or be passed
+to functions expecting a `u8 *`. The array length can be inferred or specified
+explicitly:
+
+```c
+u8 greeting[] = "Hello";
+u8 prompt[8] = "Ready>";
+```
+
+The explicit array must have room for the terminating NUL. Strings use the
+same packed `u8` storage and indexing rules as other `u8` arrays. String
+literals used as pointer expressions are emitted as read-only word data, with
+one byte per word, so `u8 *` pointer arithmetic can advance through them.
 
 ### Declaration syntax
 

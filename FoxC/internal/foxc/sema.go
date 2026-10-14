@@ -77,7 +77,17 @@ func check(prog *Program, opts CompileOptions) error {
 	for _, g := range prog.Globals {
 		if g.Init != nil {
 			if g.IsArray {
-				return fmt.Errorf("global array %q cannot have initializer", g.Name)
+				str, ok := g.Init.(*StringLit)
+				if !ok {
+					return fmt.Errorf("global array %q initializer must be a string literal", g.Name)
+				}
+				if g.Type.Base != TypeU8 || g.Type.Ptr != 0 {
+					return fmt.Errorf("string initializer requires a u8 array")
+				}
+				if g.ArrayLen < len([]byte(str.Value))+1 {
+					return fmt.Errorf("string initializer for %q is too long: needs %d bytes", g.Name, len([]byte(str.Value))+1)
+				}
+				continue
 			}
 			t, err := s.exprType(g.Init)
 			if err != nil {
@@ -127,7 +137,17 @@ func (s *semantic) checkStmt(st Stmt) error {
 		}
 		if n.Decl.Init != nil {
 			if n.Decl.IsArray {
-				return fmt.Errorf("array %q cannot have initializer", n.Decl.Name)
+				str, ok := n.Decl.Init.(*StringLit)
+				if !ok {
+					return fmt.Errorf("array %q initializer must be a string literal", n.Decl.Name)
+				}
+				if n.Decl.Type.Base != TypeU8 || n.Decl.Type.Ptr != 0 {
+					return fmt.Errorf("string initializer requires a u8 array")
+				}
+				if n.Decl.ArrayLen < len([]byte(str.Value))+1 {
+					return fmt.Errorf("string initializer for %q is too long: needs %d bytes", n.Decl.Name, len([]byte(str.Value))+1)
+				}
+				return nil
 			}
 			t, err := s.exprType(n.Decl.Init)
 			if err != nil {
@@ -287,6 +307,10 @@ func (s *semantic) exprType(e Expr) (Type, error) {
 			return Type{Base: TypeU8}, nil
 		}
 		return Type{Base: TypeU16}, nil
+	case *CharLit:
+		return Type{Base: TypeU8}, nil
+	case *StringLit:
+		return Type{Base: TypeU8, Ptr: 1}, nil
 	case *IdentExpr:
 		t, ok := s.lookupVar(n.Name)
 		if !ok {

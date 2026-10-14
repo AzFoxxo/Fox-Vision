@@ -1,0 +1,19 @@
+u8 greeting[] = "Hello";
+u8 newline = '\n';
+
+void print_string(u8 *text) {
+    while (*text != 0) {
+        out_port(4, *text);
+        text = text + 1;
+    }
+}
+
+void main() {
+    print_string("FoxC");
+    u8 i = 0;
+    while (greeting[i] != 0) {
+        out_port(4, greeting[i]);
+        i = i + 1;
+    }
+    out_port(4, newline);
+}

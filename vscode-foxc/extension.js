@@ -159,6 +159,31 @@ function tokenize(text) {
         const tokenLine = line;
         const tokenColumn = column;
 
+        if (ch === "'" || ch === "\"") {
+            const quote = ch;
+            let value = advance();
+            let terminated = false;
+            while (index < text.length && current() !== "\n") {
+                const literalChar = advance();
+                value += literalChar;
+                if (literalChar === "\\") {
+                    if (index < text.length && current() !== "\n") {
+                        value += advance();
+                    }
+                    continue;
+                }
+                if (literalChar === quote) {
+                    terminated = true;
+                    break;
+                }
+            }
+            addToken(quote === "\"" ? "string" : "char", value, tokenLine, tokenColumn);
+            if (!terminated) {
+                addToken("unknown", "", tokenLine, tokenColumn);
+            }
+            continue;
+        }
+
         if (/[A-Za-z_]/.test(ch)) {
             let value = "";
             while (index < text.length && /[A-Za-z0-9_]/.test(current())) {
@@ -542,7 +567,9 @@ class FoxCValidator {
         }
 
         while (this.match("op", "[")) {
-            this.parseExpression();
+            if (!this.check("op", "]")) {
+                this.parseExpression();
+            }
             this.expect("op", "]", "expected ']' after array size");
         }
 
@@ -614,7 +641,9 @@ class FoxCValidator {
             this.declare(nameToken, typeToken.value);
 
             while (this.match("op", "[")) {
-                this.parseExpression();
+                if (!this.check("op", "]")) {
+                    this.parseExpression();
+                }
                 this.expect("op", "]", "expected ']' after array size");
             }
 
@@ -803,6 +832,10 @@ class FoxCValidator {
         const token = this.current();
 
         if (this.match("number")) {
+            return;
+        }
+
+        if (this.match("char") || this.match("string")) {
             return;
         }
 

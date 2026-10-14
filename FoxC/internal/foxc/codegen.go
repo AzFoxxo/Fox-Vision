@@ -8,7 +8,8 @@ import (
 )
 
 const (
-	globalBaseAddr  = 0x2000
+	globalBaseAddr  = 0x8000
+	globalLimitAddr = 0xEC78
 	runtimeStackTop = 28672
 )
 
@@ -61,6 +62,7 @@ type gen struct {
 	extendedMode bool
 
 	consts []string
+	data   []string
 	ir     []irInst
 
 	nextAddr uint16
@@ -80,6 +82,7 @@ type gen struct {
 
 	currentFrame *funcFrame
 	inlineDepth  map[string]int
+	stringLabels map[string]string
 
 	enableStackChecks bool
 	stackLimit        uint16
@@ -95,6 +98,7 @@ func generate(prog *Program, opts CompileOptions) (string, error) {
 		frames:       map[string]*funcFrame{},
 		inline:       map[string]inlineFn{},
 		inlineDepth:  map[string]int{},
+		stringLabels: map[string]string{},
 		stackLimit:   0xFFFF,
 	}
 	g.configureStackChecks()
@@ -162,6 +166,15 @@ func generate(prog *Program, opts CompileOptions) (string, error) {
 
 	for _, gl := range prog.Globals {
 		if gl.IsArray {
+			if gl.Init != nil {
+				str, ok := gl.Init.(*StringLit)
+				if !ok {
+					return "", fmt.Errorf("unsupported initializer for global array %q", gl.Name)
+				}
+				if err := g.emitStringArrayInit(g.globals[gl.Name], str.Value); err != nil {
+					return "", err
+				}
+			}
 			continue
 		}
 		if gl.Init == nil {
@@ -204,7 +217,11 @@ func generate(prog *Program, opts CompileOptions) (string, error) {
 	if len(g.consts) > 0 {
 		out.WriteByte('\n')
 	}
-	out.WriteString(renderIR(optimizeIR(g.ir)))
+	out.WriteString(renderIR(g.ir))
+	if len(g.data) > 0 {
+		out.WriteString("\n\n@segment data\n")
+		out.WriteString(strings.Join(g.data, "\n"))
+	}
 
 	return out.String(), nil
 }
@@ -399,6 +416,13 @@ func (g *gen) emitStmt(st Stmt) error {
 			return err
 		}
 		if n.Decl.Init != nil {
+			if slot.isArray {
+				str, ok := n.Decl.Init.(*StringLit)
+				if !ok {
+					return fmt.Errorf("unsupported initializer for array %q", n.Decl.Name)
+				}
+				return g.emitStringArrayInit(slot, str.Value)
+			}
 			if err := g.emitExpr(n.Decl.Init); err != nil {
 				return err
 			}
@@ -525,11 +549,17 @@ func (g *gen) emitExpr(e Expr) error {
 	switch n := e.(type) {
 	case *IntLit:
 		g.emit(fmt.Sprintf("MOV %%%d X", n.Value&0xFFFF))
+	case *CharLit:
+		g.emit(fmt.Sprintf("MOV %%%d X", n.Value))
+	case *StringLit:
+		label := g.stringLabel(n.Value)
+		g.emit("MOV " + label + " X")
 	case *IdentExpr:
 		slot, ok := g.lookup(n.Name)
 		if !ok {
 			return fmt.Errorf("unknown variable %q", n.Name)
 		}
+
 		if slot.isArray {
 			return fmt.Errorf("array %q requires an index", n.Name)
 		}
@@ -640,6 +670,32 @@ func (g *gen) emitExpr(e Expr) error {
 		return fmt.Errorf("unsupported expression")
 	}
 	return nil
+}
+
+func (g *gen) emitStringArrayInit(slot storage, value string) error {
+	if !slot.isArray || slot.typ.Base != TypeU8 || slot.typ.Ptr != 0 {
+		return fmt.Errorf("string initializer requires a u8 array")
+	}
+	bytes := append([]byte(value), 0)
+	for i, b := range bytes {
+		if err := g.emitArrayStore(slot, &IntLit{Value: i}, &CharLit{Value: b}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (g *gen) stringLabel(value string) string {
+	if label, ok := g.stringLabels[value]; ok {
+		return label
+	}
+	label := fmt.Sprintf("str_%d", len(g.stringLabels)+1)
+	g.stringLabels[value] = label
+	g.data = append(g.data, ":"+label)
+	for _, b := range append([]byte(value), 0) {
+		g.data = append(g.data, fmt.Sprintf("@word %%%d", b))
+	}
+	return label
 }
 
 func (g *gen) emitLogicalAnd(left, right Expr) error {
@@ -1028,8 +1084,8 @@ func (g *gen) emitCompareResult(op string) error {
 }
 
 func (g *gen) allocGlobal(t Type) (storage, error) {
-	if g.nextAddr >= runtimeStackTop {
-		return storage{}, fmt.Errorf("global storage overflow: reached stack region at $%04X", g.nextAddr)
+	if g.nextAddr >= globalLimitAddr {
+		return storage{}, fmt.Errorf("global storage overflow: reached reserved memory at $%04X", g.nextAddr)
 	}
 	name := "V_" + alphaName(int(g.nextAddr))
 	g.consts = append(g.consts, fmt.Sprintf("@const %s $%04X", name, g.nextAddr))
@@ -1045,7 +1101,7 @@ func (g *gen) allocGlobalArray(elem Type, length int) (storage, error) {
 	if words <= 0 {
 		return storage{}, fmt.Errorf("invalid array length %d", length)
 	}
-	if int(g.nextAddr)+words > runtimeStackTop {
+	if int(g.nextAddr)+words > globalLimitAddr {
 		return storage{}, fmt.Errorf("global array storage overflow")
 	}
 	name := "V_" + alphaName(int(g.nextAddr))

@@ -4,7 +4,8 @@ program        = { topDecl } ;
 
 topDecl        = varDecl | funcDecl ;
 
-varDecl        = type identifier [ "=" expression ] ";" ;
+varDecl        = type identifier [ "[" [ number ] "]" ]
+                 [ "=" expression ] ";" ;
 
 funcDecl       = type identifier "(" [ paramList ] ")" block ;
 
@@ -37,6 +38,8 @@ multiplicative = unary { ("*" | "/" | "&") unary } ;
 unary          = [ "-" | "~" | "&" | "*" ] primary ;
 
 primary        = number
+               | character
+               | string
                | identifier
                | call
                | "(" expression ")" ;
@@ -48,6 +51,12 @@ type           = baseType { "*" } ;
 baseType       = "u8" | "u16" | "void" ;
 identifier     = letter { letter | digit | "_" } ;
 number         = digit { digit } ;
+character      = "'" ( escaped | characterByte ) "'" ;
+string         = '"' { escaped | stringByte } '"' ;
+escaped        = "\" ( "'" | '"' | "\" | "a" | "b" | "f" | "n" | "r" | "t" | "v"
+                     | "0".."7" | "x" | "u" | "U" ) ;
+characterByte  = ? any source character except "'", "\", or a newline ? ;
+stringByte     = ? any source character except '"', "\", or a newline ? ;
 
 letter         = "A".."Z" | "a".."z" | "_" ;
 digit          = "0".."9" ;

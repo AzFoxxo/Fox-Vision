@@ -314,31 +314,36 @@ func (p *parser) parseVarDeclTail(typ Type, name string) (*VarDecl, error) {
 	decl := &VarDecl{Name: name, Type: typ}
 	if p.at(tokLBracket) {
 		p.next()
-		lenTok, err := p.expect(tokNumber, "expected array length")
-		if err != nil {
-			return nil, err
-		}
-		arrLen, err := strconv.Atoi(lenTok.text)
-		if err != nil || arrLen <= 0 {
-			return nil, fmt.Errorf("invalid array length %q at %d:%d", lenTok.text, lenTok.line, lenTok.col)
-		}
-		if _, err := p.expect(tokRBracket, "expected ']'"); err != nil {
-			return nil, err
+		if p.at(tokRBracket) {
+			p.next()
+		} else {
+			lenTok, err := p.expect(tokNumber, "expected array length")
+			if err != nil {
+				return nil, err
+			}
+			arrLen, err := strconv.Atoi(lenTok.text)
+			if err != nil || arrLen <= 0 {
+				return nil, fmt.Errorf("invalid array length %q at %d:%d", lenTok.text, lenTok.line, lenTok.col)
+			}
+			decl.ArrayLen = arrLen
+			if _, err := p.expect(tokRBracket, "expected ']'"); err != nil {
+				return nil, err
+			}
 		}
 		decl.IsArray = true
-		decl.ArrayLen = arrLen
 	}
 	if p.at(tokAssign) {
-		if decl.IsArray {
-			curr := p.curr()
-			return nil, fmt.Errorf("array initializer is not supported at %d:%d", curr.line, curr.col)
-		}
 		p.next()
 		expr, err := p.parseExpr()
 		if err != nil {
 			return nil, err
 		}
 		decl.Init = expr
+		if decl.IsArray && decl.ArrayLen == 0 {
+			if str, ok := expr.(*StringLit); ok {
+				decl.ArrayLen = len([]byte(str.Value)) + 1
+			}
+		}
 	}
 	if _, err := p.expect(tokSemi, "expected ';'"); err != nil {
 		return nil, err
@@ -551,6 +556,15 @@ func (p *parser) parsePrimary() (Expr, error) {
 		tok := p.next()
 		v, _ := strconv.Atoi(tok.text)
 		return &IntLit{Value: v}, nil
+	}
+	if p.at(tokChar) {
+		tok := p.next()
+		runes := []rune(tok.text)
+		return &CharLit{Value: byte(runes[0])}, nil
+	}
+	if p.at(tokString) {
+		tok := p.next()
+		return &StringLit{Value: tok.text}, nil
 	}
 	if p.at(tokIdent) {
 		name := p.next().text
