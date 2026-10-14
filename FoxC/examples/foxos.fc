@@ -21,6 +21,9 @@ u16 FILE_CHUNK_WORDS = 1000;
 u16 PROGRAM_BASE = 16384;
 u16 EMBED_BASE = 28672;
 u16 EMBED_MAGIC = 61527;
+u16 EMBED_NAME_MAX = 8;
+u16 EMBED_LENGTH_OFFSET = 10;
+u16 EMBED_DATA_OFFSET = 11;
 
 u16 line[16];
 u16 line_len = 0;
@@ -475,10 +478,12 @@ void install_embedded_program()
     u16 bin_slot = 0;
     u16 program_slot = 0;
     u16 embedded_magic = 0;
+    u16 embedded_name_length = 0;
     u16 embedded_length = 0;
     u16 i = 0;
     embedded_magic = peek(EMBED_BASE);
-    embedded_length = peek(EMBED_BASE + 1);
+    embedded_name_length = peek(EMBED_BASE + 1);
+    embedded_length = peek(EMBED_BASE + EMBED_LENGTH_OFFSET);
     if (embedded_magic != EMBED_MAGIC)
     {
         puts("install: embedded program header missing (magic=");
@@ -486,6 +491,11 @@ void install_embedded_program()
         puts(", expected=");
         print_u16(EMBED_MAGIC);
         puts(")\r\n");
+        return;
+    }
+    if (embedded_name_length == 0 || embedded_name_length > EMBED_NAME_MAX)
+    {
+        puts("install: embedded program name invalid\r\n");
         return;
     }
     if (embedded_length == 0 || embedded_length > FILE_CHUNK_WORDS)
@@ -499,30 +509,30 @@ void install_embedded_program()
     // bin is the first entry after format_disk.
     bin_slot = 0;
     current_directory = bin_slot;
-    line[0] = 'g';
-    line[1] = 'r';
-    line[2] = 'a';
-    line[3] = 'p';
-    line[4] = 'h';
-    line[5] = 'i';
-    line[6] = 'c';
-    line[7] = 's';
-    line_len = 8;
-    if (find_child(bin_slot, 0, 8) == 32)
+    i = 0;
+    while (i < embedded_name_length)
     {
-        create_entry(0, 1);
+        line[i] = peek(EMBED_BASE + 2 + i);
+        i = i + 1;
     }
-    program_slot = find_child(bin_slot, 0, 8);
+    line_len = embedded_name_length;
+    program_slot = find_child(bin_slot, 0, embedded_name_length);
     if (program_slot == 32)
     {
-        puts("install: could not create /bin/graphics\r\n");
+        create_entry(0, 1);
+        program_slot = find_child(bin_slot, 0, embedded_name_length);
+    }
+    if (program_slot == 32 || flash_read(program_slot + 34) != 1)
+    {
+        puts("install: could not create embedded program in /bin\r\n");
         return;
     }
     flash_write(program_slot + 2, embedded_length);
+    i = 0;
     while (i < embedded_length)
     {
         flash_write(METADATA_WORDS + program_slot * FILE_CHUNK_WORDS + i,
-            peek(EMBED_BASE + 2 + i));
+            peek(EMBED_BASE + EMBED_DATA_OFFSET + i));
         i = i + 1;
     }
 }
@@ -639,7 +649,6 @@ void print_logo()
     puts("`.;;;:='    ~~            ~~~                ~-    -       -   -\r\n");
 }
 
-
 void dispatch()
 {
     if (line_len == 0)
@@ -739,7 +748,7 @@ void main()
     {
         format_disk();
     }
-    puts("Foxxo OS init!\r\n");
+    puts("foxx OS init!\r\n");
     print_logo();
     puts_help();
     while (1)

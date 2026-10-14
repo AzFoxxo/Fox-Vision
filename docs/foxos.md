@@ -30,8 +30,7 @@ foxvision --rom build/foxxo-os.bin
 ```
 
 The default foreground program is
-`FoxC/examples/graphics_demo.fc`, installed as `/bin/graphics`. To use the
-lifecycle test instead:
+`FoxC/examples/graphics_demo.fc`. To use the lifecycle test instead:
 
 ```sh
 ./build-foxos.sh \
@@ -73,7 +72,10 @@ foxc -i FoxC/examples/foxos_program_test.fc -o build/ostest.bin \
 The build script embeds the foreground program into the OS ROM at `$7000`.
 The embedded image does not modify flash storage. When FoxOS receives the
 `install` command, it formats the filesystem, creates the standard
-directories, and copies the embedded program into `/bin/graphics`.
+directories, creates the embedded program's named file in `/bin`, and copies
+the program into it. The default name is `graphics`; use
+`--program-name <name>` to select another name of up to eight ASCII
+characters.
 
 ```sh
 ./build-foxos.sh \
@@ -88,7 +90,7 @@ FOXVISION_PORT5_DEVICE=VF16Flash \
 foxvision --rom build/foxxo-os.bin
 ```
 
-At the FoxOS prompt, run `install` once, then:
+At the FoxOS prompt, run `install`, then run the embedded program:
 
 ```text
 install

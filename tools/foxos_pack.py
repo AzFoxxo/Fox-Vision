@@ -7,6 +7,7 @@ from pathlib import Path
 
 EMBED_ADDRESS = 0x7000
 EMBED_MAGIC = 0xF057
+EMBED_NAME_MAX = 8
 
 
 def read_rom(path: Path) -> tuple[int, list[int], bytes]:
@@ -35,6 +36,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("os_rom", type=Path, help="resident FoxOS ROM")
     parser.add_argument("--embed-program", type=Path, required=True)
+    parser.add_argument("--embed-name", required=True, help="name to create under /bin (1-8 ASCII characters)")
     parser.add_argument("-o", "--output", type=Path, required=True)
     parser.add_argument("--embed-address", type=lambda value: int(value, 0), default=EMBED_ADDRESS)
     args = parser.parse_args()
@@ -47,10 +49,23 @@ def main() -> int:
         raise ValueError("foreground program must be built with --load-address 0x4000")
     if not 0 < len(program_words) <= 1000:
         raise ValueError(f"foreground program must contain 1-1000 words, found {len(program_words)}")
+    try:
+        embed_name = args.embed_name.encode("ascii")
+    except UnicodeEncodeError as error:
+        raise ValueError("--embed-name must contain ASCII characters") from error
+    if not 0 < len(embed_name) <= EMBED_NAME_MAX:
+        raise ValueError(f"--embed-name must contain 1-{EMBED_NAME_MAX} characters")
     if len(os_words) > args.embed_address:
         raise ValueError("OS ROM overlaps the embedded-program address")
     combined = os_words + [0] * (args.embed_address - len(os_words))
-    combined += [EMBED_MAGIC, len(program_words), *program_words]
+    combined += [
+        EMBED_MAGIC,
+        len(embed_name),
+        *embed_name,
+        *([0] * (EMBED_NAME_MAX - len(embed_name))),
+        len(program_words),
+        *program_words,
+    ]
     if len(combined) > 0x8000:
         raise ValueError("combined OS image exceeds extended ROM space")
 

@@ -6,6 +6,7 @@ INSTALL_DIR="${INSTALL_DIR:-$HOME/vf16/tools}"
 OUTPUT_DIR="$ROOT/build"
 OS_SOURCE="$ROOT/FoxC/examples/foxos.fc"
 PROGRAM_SOURCE="$ROOT/FoxC/examples/graphics_demo.fc"
+PROGRAM_NAME="graphics"
 
 usage() {
     cat <<'EOF'
@@ -17,6 +18,8 @@ program into the combined ROM used by FoxVision.
 Options:
   --program <source>       Foreground .fc or .f16 source
                            (default: FoxC/examples/graphics_demo.fc)
+  --program-name <name>    Name to create under /bin (1-8 ASCII characters)
+                           (default: graphics)
   --output-dir <path>      Generated ROM directory (default: ./build)
   --install-dir <path>     Host tool installation directory
   -h, --help               Show this help
@@ -33,6 +36,11 @@ while [[ $# -gt 0 ]]; do
         --output-dir)
             [[ $# -ge 2 ]] || { echo "--output-dir requires a path" >&2; exit 2; }
             OUTPUT_DIR="$2"
+            shift 2
+            ;;
+        --program-name)
+            [[ $# -ge 2 ]] || { echo "--program-name requires a name" >&2; exit 2; }
+            PROGRAM_NAME="$2"
             shift 2
             ;;
         --install-dir)
@@ -100,6 +108,7 @@ TEMP_OS_ROM="$OUTPUT_DIR/.foxxo-os-with-program.bin"
 python3 "$ROOT/tools/foxos_pack.py" \
     "$OS_ROM" \
     --embed-program "$PROGRAM_ROM" \
+    --embed-name "$PROGRAM_NAME" \
     --output "$TEMP_OS_ROM"
 mv "$TEMP_OS_ROM" "$OS_ROM"
 
@@ -114,4 +123,4 @@ echo "  FOXVISION_PORT5_DEVICE=VF16Flash \\"
 echo "  $INSTALL_DIR/foxvision --rom \"$OS_ROM\""
 echo ""
 echo "At the FoxOS prompt, run 'install' once, then:"
-echo "  run /bin/graphics"
+echo "  run /bin/$PROGRAM_NAME"
