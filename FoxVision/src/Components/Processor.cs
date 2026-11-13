@@ -503,6 +503,7 @@ namespace FoxVision
                             bool lessThan = a < b;
                             bool greaterThan = a > b;
                             SetComparisonFlags(equal, lessThan, greaterThan, !equal);
+                            return 3;
                         }
                         else
                         {
