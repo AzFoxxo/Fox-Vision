@@ -178,6 +178,6 @@ void main() {
         copy_board();
         
         // Frame timing
-        wait(12000);
+        vblank();
     }
 }

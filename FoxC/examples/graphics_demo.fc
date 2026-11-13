@@ -20,7 +20,7 @@ void drawFrame(u16 p) {
 }
 
 void waitSmall() {
-    wait(3000);
+    vblank();
 }
 
 void main() {

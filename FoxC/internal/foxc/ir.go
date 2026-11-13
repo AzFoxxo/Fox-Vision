@@ -221,19 +221,39 @@ func foldConstantBranches(in []irInst) []irInst {
 			}
 			cmp = cmpUnknown
 		case "CMP":
-			x := getReg("X")
-			y := getReg("Y")
-			if x.ok && y.ok {
-				switch {
-				case x.val < y.val:
-					cmp = cmpLess
-				case x.val > y.val:
-					cmp = cmpGreater
-				default:
-					cmp = cmpEqual
+			if len(inst.args) == 2 {
+				// Two-operand CMP compares arbitrary operands. Only fold when
+				// both sides are known constants/registers; extended registers
+				// are not tracked here.
+				a, aok := operandValue(inst.args[0], reg)
+				b, bok := operandValue(inst.args[1], reg)
+				if aok && bok {
+					switch {
+					case a < b:
+						cmp = cmpLess
+					case a > b:
+						cmp = cmpGreater
+					default:
+						cmp = cmpEqual
+					}
+				} else {
+					cmp = cmpUnknown
 				}
 			} else {
-				cmp = cmpUnknown
+				x := getReg("X")
+				y := getReg("Y")
+				if x.ok && y.ok {
+					switch {
+					case x.val < y.val:
+						cmp = cmpLess
+					case x.val > y.val:
+						cmp = cmpGreater
+					default:
+						cmp = cmpEqual
+					}
+				} else {
+					cmp = cmpUnknown
+				}
 			}
 		case "JEQ", "JNE", "JLT", "JGT", "JLE", "JGE":
 			if cmp != cmpUnknown && len(inst.args) == 1 {

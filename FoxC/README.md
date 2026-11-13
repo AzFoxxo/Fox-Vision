@@ -249,5 +249,20 @@ void main() {
 - Codegen avoids active-register (`SRA`) dependent instruction forms.
  - Generated assembly uses typed register operands (`X`, `Y`, `STATUS`, `SP`, `CYC`) and multi-operand MOI forms.
  - Legacy active-register instructions (`SRA`, `AXY`, `BSL`, etc.) are not emitted by the compiler.
+- In `--mode extended`, codegen uses the V1.11 `R0`-`R7` registers to keep values out of memory:
+  - `R0` and `R1` are reserved as expression temporaries, so ordinary binary,
+    comparison, array, and built-in operations do not bounce values through the
+    software stack.
+  - Up to six scalar locals/parameters per function are cached in `R7`-`R2`.
+    Parameters are loaded once at function entry; subsequent reads and writes use
+    the register directly.
+  - Variables whose address is taken (`&x`) are excluded from register caching so
+    pointer writes still target their memory slot. Arrays and globals stay
+    memory-backed.
+  - Live cached/scalar temporaries are spilled to the hardware stack around real
+    function calls, because callees may use any `R` register.
+  - Extended mode also uses the V1.11 two-operand `CMP SRC DST` form.
+- In `--mode legacy` the compiler keeps the original `X`/`Y` plus stack
+  evaluation strategy and does not emit `R` registers.
 - User functions are emitted as callable labels and return using a return-id dispatch sequence.
 - Function locals/params/return metadata are frame-addressed in a software call stack, allowing recursive calls.
