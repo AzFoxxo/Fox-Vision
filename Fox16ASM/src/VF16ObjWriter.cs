@@ -4,7 +4,7 @@ namespace Fox16ASM;
 
 public static class VF16ObjWriter
 {
-    public static void WriteObject(string path, byte[] textSectionData, Dictionary<string, ushort> labels)
+    public static void WriteObject(string path, byte[] textSectionData, Dictionary<string, ushort> labels, uint loadAddress = 0)
     {
         var sectionData = StripRomHeader(textSectionData);
 
@@ -34,7 +34,10 @@ public static class VF16ObjWriter
             bw.Write(nb);
             bw.Write((byte)1); // global
             bw.Write((int)0); // section index
-            bw.Write((uint)kv.Value);
+            // Object symbols are section-relative. Generator labels are
+            // absolute virtual addresses, so subtract the load address.
+            uint offset = kv.Value >= loadAddress ? kv.Value - loadAddress : kv.Value;
+            bw.Write(offset);
         }
 
         // no relocations

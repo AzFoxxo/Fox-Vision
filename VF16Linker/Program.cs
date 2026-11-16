@@ -61,6 +61,10 @@ namespace VF16Linker
     {
         public const string Magic = "VF16OBJ";
         public byte Version;
+        // Flat assembler output uses absolute virtual addresses in its symbol
+        // table. In that case the linker must not use symbol offsets to grow a
+        // section (doing so pads ROM images built at a non-zero load address).
+        public bool AbsoluteSymbols;
         public List<Section> Sections = new();
         public List<Symbol> Symbols = new();
         public List<Relocation> Relocations = new();
@@ -187,12 +191,15 @@ namespace VF16Linker
                 for (int si = 0; si < obj.Sections.Count; si++)
                 {
                     uint size = obj.Sections[si].Size;
-                    // ensure space for symbols located in this section
-                    foreach (var sym in obj.Symbols)
+                    if (!obj.AbsoluteSymbols)
                     {
-                        if (sym.SectionIndex == si)
+                        // ensure space for symbols located in this section
+                        foreach (var sym in obj.Symbols)
                         {
-                            size = Math.Max(size, sym.Offset + 2);
+                            if (sym.SectionIndex == si)
+                            {
+                                size = Math.Max(size, sym.Offset + 2);
+                            }
                         }
                     }
                     // ensure space for relocations in this section
@@ -287,10 +294,18 @@ namespace VF16Linker
                     var sym = obj.Symbols[si];
                     if ((sym.Flags & 1) == 0) continue; // not global
                     if (sym.SectionIndex < 0) continue; // absolute/undefined
-                    var sec = obj.Sections[sym.SectionIndex];
-                    var combinedBase = baseAddr[sec.Name];
-                    var perObjOff = perObjOffsetInCombined[(oi, sym.SectionIndex)];
-                    var addr = combinedBase + perObjOff + sym.Offset;
+                    uint addr;
+                    if (obj.AbsoluteSymbols)
+                    {
+                        addr = sym.Offset;
+                    }
+                    else
+                    {
+                        var sec = obj.Sections[sym.SectionIndex];
+                        var combinedBase = baseAddr[sec.Name];
+                        var perObjOff = perObjOffsetInCombined[(oi, sym.SectionIndex)];
+                        addr = combinedBase + perObjOff + sym.Offset;
+                    }
                     if (!symbolAddrs.ContainsKey(sym.Name)) symbolAddrs[sym.Name] = addr;
                 }
             }

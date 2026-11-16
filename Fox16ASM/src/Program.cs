@@ -215,7 +215,7 @@ namespace Fox16ASM
             if (emitObj)
             {
                 // emit a VF16Obj file directly
-                VF16ObjWriter.WriteObject(outputFile, genOut.Bytes, genOut.Labels);
+                VF16ObjWriter.WriteObject(outputFile, genOut.Bytes, genOut.Labels, loadAddress);
                 Console.WriteLine($"Object file written to {outputFile}");
                 return 0;
             }
@@ -223,6 +223,7 @@ namespace Fox16ASM
             // Otherwise, create an in-memory VF16Object and call the linker
             var vfObj = new VF16Linker.VF16Object();
             vfObj.Version = 1;
+            vfObj.AbsoluteSymbols = true;
             var textSection = new VF16Linker.Section { Name = ".text", Flags = 1, Size = (uint)genOut.Bytes.Length, Data = genOut.Bytes };
             vfObj.Sections.Add(textSection);
             // add symbols from labels

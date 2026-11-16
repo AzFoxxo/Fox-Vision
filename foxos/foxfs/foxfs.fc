@@ -1,0 +1,372 @@
+// FoxOS Filesystem (foxfs)
+// Flash-backed flat filesystem, 32 slots, hierarchical paths.
+// All path functions operate on the global line[] / line_len from kernel.fc.
+//
+// Flash layout (16-bit words):
+//   0          magic (18008)
+//   1          version (6)
+//   2..33      entry word-counts for slots 0..31
+//   34..65     entry types: 0=free 1=file 2=dir
+//   66..97     entry name lengths
+//   98..129    parent slot per entry (ROOT_SLOT=32 means root)
+//   130..385   entry names (8 words/slot, one ASCII char per word)
+//   386..32767 file data, one FILE_CHUNK_WORDS block per slot
+
+// ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
+
+u16 FS_MAGIC         = 18008;
+u16 FS_VERSION       = 6;
+u16 ENTRY_COUNT      = 32;
+u16 ROOT_SLOT        = 32;
+u16 NOT_FOUND        = 33;
+u16 METADATA_WORDS   = 386;
+u16 FILE_CHUNK_WORDS = 1000;
+u16 NAME_TABLE_BASE  = 130;
+u16 NAMES_PER_SLOT   = 8;
+
+// ---------------------------------------------------------------------------
+// State
+// ---------------------------------------------------------------------------
+
+u16 fs_current_dir = 32;
+
+// ---------------------------------------------------------------------------
+// Init / format
+// ---------------------------------------------------------------------------
+
+void fs_format()
+{
+    u16 i = 0;
+    while (i < 32767)
+    {
+        flash_write(i, 0);
+        i = i + 1;
+    }
+    flash_write(32767, 0);
+    flash_write(0, FS_MAGIC);
+    flash_write(1, FS_VERSION);
+    i = 0;
+    while (i < ENTRY_COUNT)
+    {
+        flash_write(i + 2,  0);
+        flash_write(i + 34, 0);
+        flash_write(i + 66, 0);
+        flash_write(i + 98, ROOT_SLOT);
+        i = i + 1;
+    }
+    fs_current_dir = ROOT_SLOT;
+}
+
+u16 fs_valid()
+{
+    return (flash_read(0) == FS_MAGIC && flash_read(1) == FS_VERSION);
+}
+
+// ---------------------------------------------------------------------------
+// Name helpers – operate on global line[] at a given offset
+// ---------------------------------------------------------------------------
+
+// Return 1 if flash name for slot matches line[buf_start .. buf_start+length-1].
+u16 fs_name_matches(u16 slot, u16 buf_start, u16 length)
+{
+    u16 i = 0;
+    u16 match = 1;
+    while (i < length)
+    {
+        if (flash_read(NAME_TABLE_BASE + slot * NAMES_PER_SLOT + i) != line[buf_start + i])
+        {
+            match = 0;
+        }
+        i = i + 1;
+    }
+    return match;
+}
+
+// Write line[start..start+length-1] as the name for slot.
+void fs_name_write(u16 slot, u16 start, u16 length)
+{
+    u16 i = 0;
+    while (i < length)
+    {
+        flash_write(NAME_TABLE_BASE + slot * NAMES_PER_SLOT + i, line[start + i]);
+        i = i + 1;
+    }
+    while (i < NAMES_PER_SLOT)
+    {
+        flash_write(NAME_TABLE_BASE + slot * NAMES_PER_SLOT + i, 0);
+        i = i + 1;
+    }
+}
+
+// Print an entry name to the terminal.
+void fs_name_print(u16 slot)
+{
+    u16 len = flash_read(slot + 66);
+    u16 i = 0;
+    while (i < len)
+    {
+        tty_putc(flash_read(NAME_TABLE_BASE + slot * NAMES_PER_SLOT + i));
+        i = i + 1;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Slot allocation
+// ---------------------------------------------------------------------------
+
+u16 fs_alloc_slot()
+{
+    u16 slot = 0;
+    while (slot < ENTRY_COUNT)
+    {
+        if (flash_read(slot + 34) == 0) { return slot; }
+        slot = slot + 1;
+    }
+    return NOT_FOUND;
+}
+
+u16 fs_data_base(u16 slot)
+{
+    return METADATA_WORDS + slot * FILE_CHUNK_WORDS;
+}
+
+// ---------------------------------------------------------------------------
+// Path resolution – all use global line[]
+// ---------------------------------------------------------------------------
+
+// Find child of parent whose name equals line[start..start+length-1].
+// Returns slot index or ROOT_SLOT if not found.
+u16 fs_find_child(u16 parent, u16 start, u16 length)
+{
+    u16 slot  = 0;
+    u16 type  = 0;
+    u16 par   = 0;
+    u16 nlen  = 0;
+    while (slot < ENTRY_COUNT)
+    {
+        type = flash_read(slot + 34);
+        par  = flash_read(slot + 98);
+        nlen = flash_read(slot + 66);
+        if (type != 0 && par == parent && nlen == length)
+        {
+            if (fs_name_matches(slot, start, length))
+            {
+                return slot;
+            }
+        }
+        slot = slot + 1;
+    }
+    return ROOT_SLOT;
+}
+
+// Resolve line[start..end-1] as a directory path.
+// Returns directory slot or NOT_FOUND.
+u16 fs_resolve_dir(u16 start, u16 end)
+{
+    u16 dir   = fs_current_dir;
+    u16 i     = start;
+    u16 cs    = 0;
+    u16 cl    = 0;
+    u16 child = 0;
+
+    if (start < end && line[start] == '/')
+    {
+        dir = ROOT_SLOT;
+        i = i + 1;
+    }
+    while (i < end)
+    {
+        while (i < end && line[i] == '/') { i = i + 1; }
+        if (i == end) { return dir; }
+        cs = i;
+        while (i < end && line[i] != '/') { i = i + 1; }
+        cl = i - cs;
+
+        if (cl == 1 && line[cs] == '.')
+        {
+            // stay in current dir
+        }
+        else
+        {
+            if (cl == 2 && line[cs] == '.' && line[cs + 1] == '.')
+            {
+                if (dir != ROOT_SLOT) { dir = flash_read(dir + 98); }
+            }
+            else
+            {
+                child = fs_find_child(dir, cs, cl);
+                if (child == ROOT_SLOT || flash_read(child + 34) != 2)
+                {
+                    return NOT_FOUND;
+                }
+                dir = child;
+            }
+        }
+    }
+    return dir;
+}
+
+// Resolve line[start..end-1] as a full path, returning the entry slot.
+u16 fs_resolve_path(u16 start, u16 end)
+{
+    u16 i     = end - 1;
+    u16 cs    = 0;
+    u16 cl    = 0;
+    u16 dir   = 0;
+    u16 child = 0;
+
+    while (i > start && line[i] == '/') { i = i - 1; }
+    cs = i;
+    while (cs > start && line[cs - 1] != '/') { cs = cs - 1; }
+    cl = i - cs + 1;
+
+    dir = fs_resolve_dir(start, cs);
+    if (dir == NOT_FOUND) { return NOT_FOUND; }
+
+    child = fs_find_child(dir, cs, cl);
+    return child;
+}
+
+// ---------------------------------------------------------------------------
+// Directory listing
+// ---------------------------------------------------------------------------
+
+void fs_list(u16 parent)
+{
+    u16 slot  = 0;
+    u16 count = 0;
+    u16 type  = 0;
+    u16 par   = 0;
+    while (slot < ENTRY_COUNT)
+    {
+        type = flash_read(slot + 34);
+        par  = flash_read(slot + 98);
+        if (type != 0 && par == parent)
+        {
+            fs_name_print(slot);
+            if (type == 2) { tty_putc('/'); }
+            tty_newline();
+            count = count + 1;
+        }
+        slot = slot + 1;
+    }
+    if (count == 0) { tty_puts("(empty)\r\n"); }
+}
+
+// ---------------------------------------------------------------------------
+// Disk usage
+// ---------------------------------------------------------------------------
+
+void fs_df()
+{
+    u16 used = 0;
+    u16 slot = 0;
+    while (slot < ENTRY_COUNT)
+    {
+        if (flash_read(slot + 34) != 0) { used = used + 1; }
+        slot = slot + 1;
+    }
+    tty_puts("used: ");
+    tty_putc('0' + used / 10);
+    tty_putc('0' + used - (used / 10) * 10);
+    tty_puts("/32 slots\r\n");
+}
+
+// ---------------------------------------------------------------------------
+// Create / remove entries – name taken from line[start..end-1]
+// ---------------------------------------------------------------------------
+
+void fs_create(u16 start, u16 end, u16 type)
+{
+    u16 i    = end - 1;
+    u16 cs   = 0;
+    u16 cl   = 0;
+    u16 dir  = 0;
+    u16 slot = 0;
+
+    while (i > start && line[i] == '/') { i = i - 1; }
+    cs = i;
+    while (cs > start && line[cs - 1] != '/') { cs = cs - 1; }
+    cl = i - cs + 1;
+
+    if (cl == 0 || cl > NAMES_PER_SLOT)
+    {
+        tty_puts("invalid name\r\n");
+        return;
+    }
+    dir = fs_resolve_dir(start, cs);
+    if (dir == NOT_FOUND)
+    {
+        tty_puts("parent not found\r\n");
+        return;
+    }
+    if (fs_find_child(dir, cs, cl) != ROOT_SLOT)
+    {
+        tty_puts("already exists\r\n");
+        return;
+    }
+    slot = fs_alloc_slot();
+    if (slot == NOT_FOUND)
+    {
+        tty_puts("directory full\r\n");
+        return;
+    }
+    flash_write(slot + 2,  0);
+    flash_write(slot + 34, type);
+    flash_write(slot + 66, cl);
+    flash_write(slot + 98, dir);
+    fs_name_write(slot, cs, cl);
+    tty_puts("created\r\n");
+}
+
+// Clear one name-table entry.
+void fs_clear_name(u16 slot)
+{
+    u16 i = 0;
+    while (i < NAMES_PER_SLOT)
+    {
+        flash_write(NAME_TABLE_BASE + slot * NAMES_PER_SLOT + i, 0);
+        i = i + 1;
+    }
+}
+
+// Free a slot and clear its metadata and name.
+void fs_clear_slot(u16 slot)
+{
+    flash_write(slot + 2,  0);
+    flash_write(slot + 34, 0);
+    flash_write(slot + 66, 0);
+    flash_write(slot + 98, ROOT_SLOT);
+    fs_clear_name(slot);
+}
+
+void fs_remove(u16 start, u16 end)
+{
+    u16 slot  = fs_resolve_path(start, end);
+    u16 type  = 0;
+    u16 child = 0;
+
+    if (slot == ROOT_SLOT || slot == NOT_FOUND)
+    {
+        tty_puts("not found\r\n");
+        return;
+    }
+    type = flash_read(slot + 34);
+    if (type == 2)
+    {
+        child = 0;
+        while (child < ENTRY_COUNT)
+        {
+            if (flash_read(child + 34) != 0 && flash_read(child + 98) == slot)
+            {
+                tty_puts("directory not empty\r\n");
+                return;
+            }
+            child = child + 1;
+        }
+    }
+    fs_clear_slot(slot);
+    tty_puts("removed\r\n");
+}

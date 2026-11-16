@@ -1,0 +1,33 @@
+// FoxOS boot entry – resident kernel image (kernel + foxfs)
+//
+// This file supplies main() for the kernel image only. The interactive
+// shell lives in foxsh/foxsh.fc and is built as a separate image
+// (foxsh.bin), so it is never linked into the resident kernel.
+
+void main()
+{
+    kernel_banner();
+
+    if (fs_valid() == 0)
+    {
+        tty_puts("Filesystem not found - formatting flash...\r\n");
+        fs_format();
+        tty_puts("Done.\r\n");
+    }
+    else
+    {
+        tty_puts("Flash filesystem OK.\r\n");
+    }
+
+    // If foxos_pack embedded a foreground program, hand control to it.
+    if (peek(EMBED_BASE) == EMBED_MAGIC)
+    {
+        kernel_exec_embedded(EMBED_BASE + EMBED_DATA_OFFSET,
+                             peek(EMBED_BASE + EMBED_LEN_OFFSET));
+    }
+
+    tty_puts("No embedded program; shell image is separate.\r\n");
+    while (1)
+    {
+    }
+}

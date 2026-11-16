@@ -1,0 +1,363 @@
+// FoxSH – the FoxOS interactive shell
+// Runs on boot from /bin/foxsh on the virtual machine.
+// Depends on: kernel/kernel.fc  foxfs/foxfs.fc
+//
+// This file is the top-level translation unit for the shell image. The
+// kernel and filesystem sources are concatenated in front of it by the
+// Makefile so the compiler sees their symbols first. The resident kernel
+// image (foxos.bin) does not include this file.
+
+// ---------------------------------------------------------------------------
+// Read a line from the terminal into line[] / line_len
+// ---------------------------------------------------------------------------
+
+void read_line()
+{
+    u16 c = 0;
+    line_len = 0;
+    while (1)
+    {
+        c = tty_getc();
+        // The TTY returns 0 when its input queue is empty. Ignore that so
+        // an idle poll does not fill line[] with NUL characters.
+        if (c != 0)
+        {
+            if (c == '\r' || c == '\n')
+            {
+                tty_newline();
+                return;
+            }
+            if (c == 8 || c == 127)   // backspace / DEL
+            {
+                if (line_len > 0)
+                {
+                    line_len = line_len - 1;
+                    tty_putc(8);
+                    tty_putc(' ');
+                    tty_putc(8);
+                }
+            }
+            else
+            {
+                if (line_len < LINE_MAX)
+                {
+                    line[line_len] = c;
+                    line_len = line_len + 1;
+                    tty_putc(c);    // local echo
+                }
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Command matching
+// ---------------------------------------------------------------------------
+
+u16 cmd_match(u8 *expected, u16 length)
+{
+    u16 i = 0;
+    if (line_len < length) { return 0; }
+    while (i < length)
+    {
+        if (line[i] != *expected) { return 0; }
+        i = i + 1;
+        expected = expected + 1;
+    }
+    return 1;
+}
+
+// ---------------------------------------------------------------------------
+// run – load a program from the flash filesystem and execute it
+// ---------------------------------------------------------------------------
+
+void shell_run(u16 path_start)
+{
+    u16 slot = fs_resolve_path(path_start, line_len);
+    u16 word_count = 0;
+    u16 data_base = 0;
+
+    if (slot == ROOT_SLOT || slot == NOT_FOUND || flash_read(slot + 34) != 1)
+    {
+        tty_puts("not found\r\n");
+        return;
+    }
+    word_count = flash_read(slot + 2);
+    if (word_count == 0)
+    {
+        tty_puts("empty program\r\n");
+        return;
+    }
+    data_base = fs_data_base(slot);
+    tty_puts("loading...\r\n");
+    kernel_exec(data_base, word_count);
+}
+
+// ---------------------------------------------------------------------------
+// install – copy embedded ROM program into /bin/<name>
+// ---------------------------------------------------------------------------
+
+void shell_install()
+{
+    u16 word_count = 0;
+    u16 src        = 0;
+    u16 i          = 0;
+    u16 name_len   = 0;
+    u16 slot       = 0;
+    u16 bin_slot   = 0;
+    u16 dest       = 0;
+    u16 scan       = 0;
+
+    // Check embedded region (ROM contents are read with peek()).
+    if (peek(EMBED_BASE) != EMBED_MAGIC)
+    {
+        tty_puts("no embedded program\r\n");
+        return;
+    }
+
+    name_len   = peek(EMBED_BASE + 1);
+    word_count = peek(EMBED_BASE + EMBED_LEN_OFFSET);
+    src        = EMBED_BASE + EMBED_DATA_OFFSET;
+
+    if (name_len == 0 || name_len > NAMES_PER_SLOT)
+    {
+        tty_puts("invalid embedded name\r\n");
+        return;
+    }
+
+    // Ensure /bin directory exists; create it if not.
+    line[0] = 'b';
+    line[1] = 'i';
+    line[2] = 'n';
+    bin_slot = fs_find_child(ROOT_SLOT, 0, 3);
+    if (bin_slot == ROOT_SLOT)
+    {
+        // Create /bin as a directory under root.
+        fs_create(0, 3, 2);
+        bin_slot = fs_find_child(ROOT_SLOT, 0, 3);
+    }
+
+    // Restore the embedded program name for the /bin lookup.
+    i = 0;
+    while (i < name_len)
+    {
+        line[i] = peek(EMBED_BASE + 2 + i);
+        i = i + 1;
+    }
+
+    // Reuse an existing /bin/<name> entry instead of creating a new slot
+    // every time install runs.
+    slot = fs_find_child(bin_slot, 0, name_len);
+    if (slot != ROOT_SLOT && flash_read(slot + 34) != 1)
+    {
+        tty_puts("target is a directory\r\n");
+        return;
+    }
+
+    // Remove duplicate copies left behind by older installs.
+    scan = 0;
+    while (scan < ENTRY_COUNT)
+    {
+        if (scan != slot &&
+            flash_read(scan + 34) != 0 &&
+            flash_read(scan + 98) == bin_slot &&
+            flash_read(scan + 66) == name_len &&
+            fs_name_matches(scan, 0, name_len))
+        {
+            fs_clear_slot(scan);
+        }
+        scan = scan + 1;
+    }
+
+    if (slot == ROOT_SLOT)
+    {
+        slot = fs_alloc_slot();
+        if (slot == NOT_FOUND)
+        {
+            tty_puts("no free slot\r\n");
+            return;
+        }
+    }
+
+    // Write the slot metadata.
+    flash_write(slot + 2,  word_count);
+    flash_write(slot + 34, 1);            // type = file
+    flash_write(slot + 66, name_len);
+    flash_write(slot + 98, bin_slot);
+
+    // Copy name words.
+    i = 0;
+    while (i < name_len)
+    {
+        flash_write(NAME_TABLE_BASE + slot * NAMES_PER_SLOT + i,
+                    peek(EMBED_BASE + 2 + i));
+        i = i + 1;
+    }
+    while (i < NAMES_PER_SLOT)
+    {
+        flash_write(NAME_TABLE_BASE + slot * NAMES_PER_SLOT + i, 0);
+        i = i + 1;
+    }
+
+    // Copy program words.
+    dest = fs_data_base(slot);
+    i = 0;
+    while (i < word_count)
+    {
+        flash_write(dest + i, peek(src + i));
+        i = i + 1;
+    }
+
+    tty_puts("installed /bin/");
+    fs_name_print(slot);
+    tty_newline();
+}
+
+// ---------------------------------------------------------------------------
+// Prompt helpers
+// ---------------------------------------------------------------------------
+
+void print_path(u16 directory)
+{
+    u16 name_i  = 0;
+    u16 name_len = 0;
+    if (directory == ROOT_SLOT) { return; }
+    print_path(flash_read(directory + 98));
+    tty_putc('/');
+    name_len = flash_read(directory + 66);
+    while (name_i < name_len)
+    {
+        tty_putc(flash_read(NAME_TABLE_BASE + directory * NAMES_PER_SLOT + name_i));
+        name_i = name_i + 1;
+    }
+}
+
+void print_prompt()
+{
+    if (fs_current_dir == ROOT_SLOT) { tty_putc('/'); }
+    else { print_path(fs_current_dir); }
+    tty_putc('$');
+    tty_putc(' ');
+}
+
+// ---------------------------------------------------------------------------
+// Help
+// ---------------------------------------------------------------------------
+
+void shell_help()
+{
+    tty_puts("FoxSH commands:\r\n");
+    tty_puts("  help           this message\r\n");
+    tty_puts("  clear          clear screen\r\n");
+    tty_puts("  pwd            print working directory\r\n");
+    tty_puts("  ls             list directory\r\n");
+    tty_puts("  df             disk usage\r\n");
+    tty_puts("  cd PATH        change directory\r\n");
+    tty_puts("  mkdir PATH     create directory\r\n");
+    tty_puts("  touch PATH     create empty file\r\n");
+    tty_puts("  rm PATH        remove entry\r\n");
+    tty_puts("  run PATH       execute program\r\n");
+    tty_puts("  install        install embedded ROM program into /bin\r\n");
+    tty_puts("  format         format the flash filesystem\r\n");
+    tty_puts("  logo           display the FoxOS logo\r\n");
+}
+
+// ---------------------------------------------------------------------------
+// Logo
+// ---------------------------------------------------------------------------
+
+void shell_logo()
+{
+    tty_puts("                                                                   ,-,\r\n");
+    tty_puts("                                                             _.-=;~ /_\r\n");
+    tty_puts("                                                          _-~   '     ;.\r\n");
+    tty_puts("                                                      _.-~     '   .-~-~`-._\r\n");
+    tty_puts("                                                _.--~~:.             --.____88\r\n");
+    tty_puts("                              ____.........--~~~. .'  .  .        _..-------~~\r\n");
+    tty_puts("                     _..--~~~~               .' .'             ,'\r\n");
+    tty_puts("                 _.-~                        .       .     ` ,'\r\n");
+    tty_puts("               .'                                    :.    ./\r\n");
+    tty_puts("             .:     ,/          `                   ::.   ,'\r\n");
+    tty_puts("           .:'     ,(            ;.                ::. ,-'\r\n");
+    tty_puts("          .'     ./'.`.     . . /:::._______.... _/:.o/\r\n");
+    tty_puts("         /     ./'. . .)  . _.,'               `88;?88|\r\n");
+    tty_puts("       ,'  . .,/'._,-~ /_.o8P'                  88P ?8b\r\n");
+    tty_puts("    _,'' . .,/',-~    d888P'                    88'  88|\r\n");
+    tty_puts(" _.'~  . .,:oP'        ?88b              _..--- 88.--'8b.--..__\r\n");
+    tty_puts(":     ...' 88o __,------.88o ...__..._.=~- .    `~~   `~~      ~-._ Seal _.\r\n");
+    tty_puts("`.;;;:='    ~~            ~~~                ~-    -       -   -\r\n");
+}
+
+// ---------------------------------------------------------------------------
+// Command dispatcher
+// ---------------------------------------------------------------------------
+
+void dispatch()
+{
+    if (line_len == 0) { return; }
+
+    if (line_len == 4 && cmd_match("help", 4)) { shell_help(); return; }
+    if (line_len == 4 && cmd_match("logo", 4)) { shell_logo(); return; }
+    if (line_len == 5 && cmd_match("clear", 5))
+    {
+        tty_putc(27); tty_puts("[2J"); return;
+    }
+    if (line_len == 3 && cmd_match("pwd", 3))
+    {
+        if (fs_current_dir == ROOT_SLOT) { tty_putc('/'); }
+        else { print_path(fs_current_dir); }
+        tty_newline();
+        return;
+    }
+    if (line_len == 2 && cmd_match("ls", 2)) { fs_list(fs_current_dir); return; }
+    if (line_len == 2 && cmd_match("df", 2)) { fs_df(); return; }
+    if (line_len == 6 && cmd_match("format", 6)) { fs_format(); tty_puts("OK\r\n"); return; }
+    if (line_len == 7 && cmd_match("install", 7)) { shell_install(); return; }
+
+    if (cmd_match("cd ", 3) && line_len > 3)
+    {
+        u16 slot = fs_resolve_path(3, line_len);
+        if (slot == ROOT_SLOT)       { fs_current_dir = ROOT_SLOT; tty_puts("ok\r\n"); return; }
+        if (slot == NOT_FOUND || flash_read(slot + 34) != 2)
+        { tty_puts("not a directory\r\n"); return; }
+        fs_current_dir = slot;
+        tty_puts("ok\r\n");
+        return;
+    }
+    if (cmd_match("mkdir ", 6) && line_len > 6) { fs_create(6, line_len, 2); return; }
+    if (cmd_match("touch ", 6) && line_len > 6) { fs_create(6, line_len, 1); return; }
+    if (cmd_match("rm ", 3)    && line_len > 3) { fs_remove(3, line_len);    return; }
+    if (cmd_match("run ", 4)   && line_len > 4) { shell_run(4); return; }
+
+    tty_puts("unknown command (type 'help')\r\n");
+}
+
+// ---------------------------------------------------------------------------
+// main – kernel entry point, run on boot
+// ---------------------------------------------------------------------------
+
+void main()
+{
+    kernel_banner();
+
+    if (fs_valid() == 0)
+    {
+        tty_puts("Filesystem not found – formatting flash...\r\n");
+        fs_format();
+        tty_puts("Done.\r\n");
+    }
+    else
+    {
+        tty_puts("Flash filesystem OK.\r\n");
+    }
+
+    shell_logo();
+    shell_help();
+
+    while (1)
+    {
+        print_prompt();
+        read_line();
+        dispatch();
+    }
+}
