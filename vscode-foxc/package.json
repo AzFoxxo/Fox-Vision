@@ -1,8 +1,8 @@
 {
     "name": "foxc-tools",
     "displayName": "FoxC Tools",
-    "description": "Syntax highlighting, completions, and basic validation for FoxC source files.",
-    "version": "0.0.2",
+    "description": "Syntax highlighting, completions, hover docs, and validation for FoxC source files. Supports u8, u16, u32 types; legacy, extended, and em2_am1 modes; all builtins including am()/em().",
+    "version": "0.1.0",
     "publisher": "azfoxxo",
     "license": "MIT",
     "engines": {

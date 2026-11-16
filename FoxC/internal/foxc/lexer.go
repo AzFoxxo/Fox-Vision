@@ -3,6 +3,7 @@ package foxc
 import (
 	"fmt"
 	"strconv"
+	"strings"
 	"unicode"
 	"unicode/utf8"
 )
@@ -41,7 +42,7 @@ func (l *lexer) nextToken() (token, error) {
 	if isIdentStart(ch) {
 		text := l.readWhile(func(r rune) bool { return isIdentStart(r) || unicode.IsDigit(r) })
 		switch text {
-		case "u8", "u16", "void":
+		case "u8", "u16", "u32", "void":
 			return token{kind: tokType, text: text, line: line, col: col}, nil
 		case "if":
 			return token{kind: tokIf, text: text, line: line, col: col}, nil
@@ -57,8 +58,41 @@ func (l *lexer) nextToken() (token, error) {
 	}
 
 	if unicode.IsDigit(ch) {
-		text := l.readWhile(unicode.IsDigit)
-		if _, err := strconv.Atoi(text); err != nil {
+		start := l.pos
+		if ch == '0' && (l.peekNext() == 'x' || l.peekNext() == 'X') {
+			l.advance()
+			l.advance()
+			for !l.eof() && (isHexDigit(l.peek()) || l.peek() == '_') {
+				l.advance()
+			}
+		} else if ch == '0' && (l.peekNext() == 'b' || l.peekNext() == 'B') {
+			l.advance()
+			l.advance()
+			for !l.eof() && (l.peek() == '0' || l.peek() == '1' || l.peek() == '_') {
+				l.advance()
+			}
+		} else {
+			l.readWhile(func(r rune) bool { return unicode.IsDigit(r) || r == '_' })
+		}
+
+		text := string(l.src[start:l.pos])
+		if _, err := parseIntLiteral(text); err != nil {
+			return token{}, fmt.Errorf("invalid number %q at %d:%d", text, line, col)
+		}
+		return token{kind: tokNumber, text: text, line: line, col: col}, nil
+	}
+
+	if ch == '$' {
+		l.advance()
+		start := l.pos
+		for !l.eof() && (isHexDigit(l.peek()) || l.peek() == '_') {
+			l.advance()
+		}
+		text := "$" + string(l.src[start:l.pos])
+		if len(text) == 1 {
+			return token{}, fmt.Errorf("invalid number %q at %d:%d", text, line, col)
+		}
+		if _, err := parseIntLiteral(text); err != nil {
 			return token{}, fmt.Errorf("invalid number %q at %d:%d", text, line, col)
 		}
 		return token{kind: tokNumber, text: text, line: line, col: col}, nil
@@ -236,4 +270,37 @@ func (l *lexer) advance() {
 
 func isIdentStart(r rune) bool {
 	return r == '_' || unicode.IsLetter(r)
+}
+
+func isHexDigit(r rune) bool {
+	return (r >= '0' && r <= '9') || (r >= 'a' && r <= 'f') || (r >= 'A' && r <= 'F')
+}
+
+// parseIntLiteral accepts decimal, 0x/0X hexadecimal, 0b/0B binary, and $
+// hexadecimal literals. Underscores are ignored. Values must fit in 32 bits.
+func parseIntLiteral(text string) (int, error) {
+	clean := strings.ReplaceAll(strings.TrimSpace(text), "_", "")
+	if clean == "" {
+		return 0, fmt.Errorf("empty number")
+	}
+
+	base := 10
+	digits := clean
+	switch {
+	case strings.HasPrefix(clean, "$"):
+		base = 16
+		digits = clean[1:]
+	case strings.HasPrefix(clean, "0x") || strings.HasPrefix(clean, "0X"):
+		base = 16
+		digits = clean[2:]
+	case strings.HasPrefix(clean, "0b") || strings.HasPrefix(clean, "0B"):
+		base = 2
+		digits = clean[2:]
+	}
+
+	value, err := strconv.ParseUint(digits, base, 32)
+	if err != nil {
+		return 0, err
+	}
+	return int(value), nil
 }

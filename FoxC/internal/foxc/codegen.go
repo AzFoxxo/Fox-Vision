@@ -69,6 +69,7 @@ type funcFrame struct {
 type gen struct {
 	prog         *Program
 	extendedMode bool
+	em2Am1Mode   bool
 
 	consts []string
 	data   []string
@@ -110,6 +111,7 @@ func generate(prog *Program, opts CompileOptions) (string, error) {
 	g := &gen{
 		prog:         prog,
 		extendedMode: isExtendedMode(opts.Mode),
+		em2Am1Mode:   isEm2Am1Mode(opts.Mode),
 		nextAddr:     globalBaseAddr,
 		globals:      map[string]storage{},
 		funcs:        map[string]*FuncDecl{},
@@ -176,7 +178,15 @@ func generate(prog *Program, opts CompileOptions) (string, error) {
 	}
 
 	g.emit(":main")
-	if g.extendedMode {
+	if g.em2Am1Mode {
+		// FoxC's data model is word based: globals, frame slots, arrays and
+		// label addresses are all counted in 16-bit words. Use the V2
+		// instruction set (EM=2) with word addressing (AM=0) so indirect
+		// loads/stores agree with that model. Mid-level code can still switch
+		// to byte addressing at run time with set_am(1).
+		g.emit("MOV %2 EM")
+		g.emit("MOV %0 AM")
+	} else if g.extendedMode {
 		g.emit("MOV %1 EM")
 	}
 	g.emit(fmt.Sprintf("MOV %%%d X", runtimeStackTop))
@@ -364,12 +374,12 @@ func (g *gen) prepareFrames() error {
 		if fn.Ret.Base != TypeVoid || fn.Ret.Ptr != 0 {
 			slot := storage{kind: storageFrame, offset: next, typ: fn.Ret}
 			fr.retSlot = &slot
-			next++
+			next += typeWords(fn.Ret)
 		}
 
 		for _, p := range fn.Params {
 			slot := storage{kind: storageFrame, offset: next, typ: p.Type}
-			next++
+			next += typeWords(p.Type)
 			fr.paramSlots = append(fr.paramSlots, slot)
 			fr.paramByName[p.Name] = slot
 		}
@@ -662,7 +672,7 @@ func (g *gen) emitExpr(e Expr) error {
 func (g *gen) emitExprInto(e Expr, dst string) error {
 	switch n := e.(type) {
 	case *IntLit:
-		g.emit(fmt.Sprintf("MOV %%%d %s", n.Value&0xFFFF, dst))
+		g.emitLoadImmediate(dst, uint32(n.Value))
 	case *CharLit:
 		g.emit(fmt.Sprintf("MOV %%%d %s", n.Value, dst))
 	case *StringLit:
@@ -701,11 +711,19 @@ func (g *gen) emitExprInto(e Expr, dst string) error {
 			if err := g.emitExprInto(n.X, regX); err != nil {
 				return err
 			}
-			g.emit("LOD " + dst + " X")
+			resultType := g.exprType(n)
+			if resultType.Ptr == 0 && resultType.Base == TypeU32 {
+				if !g.loadU32FromAddressInX(dst) {
+					g.emit("LOD " + dst + " X")
+				}
+			} else {
+				g.emit("LOD " + dst + " X")
+			}
 		case "-", "~":
 			if err := g.emitExprInto(n.X, dst); err != nil {
 				return err
 			}
+			resultType := g.exprType(n)
 			if n.Op == "-" {
 				if dst == regX {
 					g.emit("MOV %0 Y")
@@ -716,9 +734,24 @@ func (g *gen) emitExprInto(e Expr, dst string) error {
 					g.emit("SUB " + dst + " X")
 					g.emit("MOV X " + dst)
 				}
+			} else if resultType.Ptr == 0 && resultType.Base == TypeU32 {
+				// 32-bit complement: build 0xFFFFFFFF in a scratch register
+				// and XOR it into dst.
+				scratch := regY
+				if dst == regY {
+					scratch = regX
+				}
+				high, low, ok := splitRegister(scratch)
+				if !ok {
+					return fmt.Errorf("cannot materialise 32-bit complement")
+				}
+				g.emit(fmt.Sprintf("MOV %%%d %s", 0xFFFF, high))
+				g.emit(fmt.Sprintf("MOV %%%d %s", 0xFFFF, low))
+				g.emit("XOR " + scratch + " " + dst)
 			} else {
 				g.emit("XOR %65535 " + dst)
 			}
+			g.maskResult(dst, resultType)
 		default:
 			return fmt.Errorf("unsupported unary operator %q", n.Op)
 		}
@@ -756,13 +789,26 @@ func (g *gen) emitBinaryInto(n *BinaryExpr, dst string) error {
 		if err := g.emitExprInto(n.Right, dst); err != nil {
 			return err
 		}
+		lt, rt := g.exprType(n.Left), g.exprType(n.Right)
+		switch {
+		case (n.Op == "+" || n.Op == "-") && lt.Ptr > 0 && rt.Ptr == 0:
+			// pointer +/- integer: scale the integer by the element width.
+			g.emitScaleIndex(dst, pointerElementWords(lt))
+		case n.Op == "+" && rt.Ptr > 0 && lt.Ptr == 0:
+			g.emitScaleIndex(tmp, pointerElementWords(rt))
+		}
 		if commutativeOp(n.Op) {
 			g.emitBinaryOp(n.Op, tmp, dst)
+			g.maskResult(dst, g.exprType(n))
 		} else {
 			// dst = tmp OP dst; compute into tmp so the operand order is
 			// left OP right, then move the result into dst.
 			g.emitBinaryOp(n.Op, dst, tmp)
 			g.emit("MOV " + tmp + " " + dst)
+			if n.Op == "-" && lt.Ptr > 0 && rt.Ptr > 0 {
+				g.emitScaleIndex(dst, -pointerElementWords(lt))
+			}
+			g.maskResult(dst, g.exprType(n))
 		}
 		return nil
 	}
@@ -777,7 +823,18 @@ func (g *gen) emitBinaryInto(n *BinaryExpr, dst string) error {
 	}
 	g.emit("MOV X Y")
 	g.emit("POP " + dst)
+	lt, rt := g.exprType(n.Left), g.exprType(n.Right)
+	switch {
+	case (n.Op == "+" || n.Op == "-") && lt.Ptr > 0 && rt.Ptr == 0:
+		g.emitScaleIndex(regY, pointerElementWords(lt))
+	case n.Op == "+" && rt.Ptr > 0 && lt.Ptr == 0:
+		g.emitScaleIndex(dst, pointerElementWords(rt))
+	}
 	g.emitBinaryOp(n.Op, "Y", dst)
+	if n.Op == "-" && lt.Ptr > 0 && rt.Ptr > 0 {
+		g.emitScaleIndex(dst, -pointerElementWords(lt))
+	}
+	g.maskResult(dst, g.exprType(n))
 	return nil
 }
 
@@ -882,6 +939,32 @@ func (g *gen) emitCallInto(n *CallExpr, dst string) error {
 		if err := g.emitBuiltinOutPort(n); err != nil {
 			return err
 		}
+		g.emit("MOV %0 " + dst)
+		return nil
+	case "am":
+		g.emit("MOV AM " + dst)
+		return nil
+	case "set_am":
+		if len(n.Args) != 1 {
+			return fmt.Errorf("set_am expects 1 argument")
+		}
+		if err := g.emitExprInto(n.Args[0], regX); err != nil {
+			return err
+		}
+		g.emit("MOV X AM")
+		g.emit("MOV %0 " + dst)
+		return nil
+	case "em":
+		g.emit("MOV EM " + dst)
+		return nil
+	case "set_em":
+		if len(n.Args) != 1 {
+			return fmt.Errorf("set_em expects 1 argument")
+		}
+		if err := g.emitExprInto(n.Args[0], regX); err != nil {
+			return err
+		}
+		g.emit("MOV X EM")
 		g.emit("MOV %0 " + dst)
 		return nil
 	case "os_return":
@@ -1111,10 +1194,10 @@ func (g *gen) emitBuiltinOSStart(call *CallExpr) error {
 func portImmediateValue(expr Expr) (int, error) {
 	lit, ok := expr.(*IntLit)
 	if !ok {
-		return 0, fmt.Errorf("port operand must be a constant 0-7")
+		return 0, fmt.Errorf("port operand must be a constant (0-65535)")
 	}
-	if lit.Value < 0 || lit.Value > 7 {
-		return 0, fmt.Errorf("port operand %d out of range 0-7", lit.Value)
+	if lit.Value < 0 || lit.Value > 65535 {
+		return 0, fmt.Errorf("port operand %d out of range (0-65535)", lit.Value)
 	}
 	return lit.Value, nil
 }
@@ -1273,6 +1356,14 @@ func shortInlineCandidate(fn *FuncDecl) (inlineFn, bool) {
 	if fn.Name == "main" {
 		return inlineFn{}, false
 	}
+	for _, p := range fn.Params {
+		if p.Type.Base == TypeU32 && p.Type.Ptr == 0 {
+			return inlineFn{}, false
+		}
+	}
+	if fn.Ret.Base == TypeU32 && fn.Ret.Ptr == 0 {
+		return inlineFn{}, false
+	}
 	if len(fn.Body) != 1 {
 		return inlineFn{}, false
 	}
@@ -1382,12 +1473,13 @@ func (g *gen) emitCompareResultTo(op string, dst string) error {
 }
 
 func (g *gen) allocGlobal(t Type) (storage, error) {
-	if g.nextAddr >= globalLimitAddr {
+	size := typeWords(t)
+	if int(g.nextAddr)+size > int(globalLimitAddr) {
 		return storage{}, fmt.Errorf("global storage overflow: reached reserved memory at $%04X", g.nextAddr)
 	}
 	name := "V_" + alphaName(int(g.nextAddr))
 	g.consts = append(g.consts, fmt.Sprintf("@const %s $%04X", name, g.nextAddr))
-	g.nextAddr++
+	g.nextAddr += uint16(size)
 	return storage{kind: storageGlobal, operand: "<" + name + ">", typ: t}, nil
 }
 
@@ -1414,11 +1506,11 @@ func (g *gen) allocLocal(t Type) (storage, error) {
 		return g.allocGlobal(t)
 	}
 	maxLocal := g.currentFrame.localStart + g.currentFrame.localSlotCount
-	if g.currentFrame.localNextOffset >= maxLocal {
+	if g.currentFrame.localNextOffset+typeWords(t) > maxLocal {
 		return storage{}, fmt.Errorf("local slot overflow in function %q", g.currentFrame.decl.Name)
 	}
 	s := storage{kind: storageFrame, offset: g.currentFrame.localNextOffset, typ: t}
-	g.currentFrame.localNextOffset++
+	g.currentFrame.localNextOffset += typeWords(t)
 	return s, nil
 }
 
@@ -1446,10 +1538,236 @@ func arrayWordCount(elem TypeKind, length int) int {
 	if length <= 0 {
 		return 0
 	}
-	if elem == TypeU8 {
+	switch elem {
+	case TypeU8:
 		return (length + 1) / 2
+	case TypeU32:
+		return length * 2
+	default:
+		return length
 	}
-	return length
+}
+
+func typeWords(t Type) int {
+	if t.Ptr > 0 {
+		return 1
+	}
+	if t.Base == TypeU32 {
+		return 2
+	}
+	return 1
+}
+
+// pointerElementWords returns the number of 16-bit words occupied by one
+// pointed-to element. Only u32 currently spans more than one word; u16 and
+// pointer elements are one word, and u8 uses packed-byte semantics.
+func pointerElementWords(t Type) int {
+	if t.Ptr == 1 && t.Base == TypeU32 {
+		return 2
+	}
+	return 1
+}
+
+// emitScaleIndex multiplies a register by the element width for positive
+// values, or divides it for negative values. Only a width of two emits code.
+func (g *gen) emitScaleIndex(reg string, words int) {
+	switch words {
+	case 2:
+		g.emit("SHL %1 " + reg)
+	case -2:
+		g.emit("SHR %1 " + reg)
+	}
+}
+
+func splitRegister(name string) (high string, low string, ok bool) {
+	switch name {
+	case "X":
+		return "XH", "XL", true
+	case "Y":
+		return "YH", "YL", true
+	case "R0", "R1", "R2", "R3", "R4", "R5", "R6", "R7":
+		return name + "H", name + "L", true
+	default:
+		return "", "", false
+	}
+}
+
+// scratchAddressRegister returns a primary register that can hold a memory
+// address without clobbering dst. Y is reserved as the expression scratch
+// register, so it is used unless dst itself is Y.
+func scratchAddressRegister(dst string) string {
+	if dst == regY {
+		return regX
+	}
+	return regY
+}
+
+// loadU32FromStorageInto loads a two-word little-endian u32 value into the
+// full-width register dst.
+func (g *gen) loadU32FromStorageInto(slot storage, dst string) bool {
+	high, low, ok := splitRegister(dst)
+	if !ok {
+		return false
+	}
+	addr := scratchAddressRegister(dst)
+	if slot.kind == storageGlobal {
+		g.emit("MOV " + slot.operand + " " + addr)
+	} else {
+		g.loadFrameAddressInto(slot.offset, addr)
+	}
+	g.emit("LOD " + low + " " + addr)
+	g.emit("ADD %1 " + addr)
+	g.emit("LOD " + high + " " + addr)
+	return true
+}
+
+// storeU32ToStorageAddress stores a two-word little-endian u32 value held in
+// valueReg into slot.
+func (g *gen) storeU32ToStorageAddress(slot storage, valueReg string) bool {
+	high, low, ok := splitRegister(valueReg)
+	if !ok {
+		return false
+	}
+	addr := scratchAddressRegister(valueReg)
+	if slot.kind == storageGlobal {
+		g.emit("MOV " + slot.operand + " " + addr)
+	} else {
+		g.loadFrameAddressInto(slot.offset, addr)
+	}
+	g.emit("STR " + low + " " + addr)
+	g.emit("ADD %1 " + addr)
+	g.emit("STR " + high + " " + addr)
+	return true
+}
+
+// loadU32FromAddressInX loads a two-word little-endian u32 from the address in
+// X. dst may be X; in that case the address is staged through Y first.
+func (g *gen) loadU32FromAddressInX(dst string) bool {
+	high, low, ok := splitRegister(dst)
+	if !ok {
+		return false
+	}
+	if dst == regX {
+		g.emit("MOV X Y")
+		g.emit("LOD " + low + " Y")
+		g.emit("ADD %1 Y")
+		g.emit("LOD " + high + " Y")
+		return true
+	}
+	g.emit("LOD " + low + " X")
+	g.emit("ADD %1 X")
+	g.emit("LOD " + high + " X")
+	return true
+}
+
+// emitLoadImmediate materialises a full 32-bit constant. The assembler encodes
+// immediate operands as 16-bit words, so wide values are written through the
+// high/low sub-register aliases.
+func (g *gen) emitLoadImmediate(dst string, value uint32) {
+	if value <= 0xFFFF {
+		g.emit(fmt.Sprintf("MOV %%%d %s", value, dst))
+		return
+	}
+
+	high, low, ok := splitRegister(dst)
+	if !ok {
+		g.emit(fmt.Sprintf("MOV %%%d %s", value&0xFFFF, dst))
+		return
+	}
+	g.emit(fmt.Sprintf("MOV %%%d %s", (value>>16)&0xFFFF, high))
+	g.emit(fmt.Sprintf("MOV %%%d %s", value&0xFFFF, low))
+}
+
+func (g *gen) maskResult(dst string, t Type) {
+	if t.Ptr != 0 {
+		return
+	}
+	if t.Base == TypeU8 || t.Base == TypeU16 {
+		g.emit("AND %65535 " + dst)
+	}
+}
+
+// exprType is a lightweight code-generation-time type probe. It is not a
+// replacement for semantic analysis; it only supplies the width information
+// needed to mask 16-bit arithmetic and to lay out 32-bit values.
+func (g *gen) exprType(e Expr) Type {
+	switch n := e.(type) {
+	case *IntLit:
+		switch {
+		case n.Value > 0xFFFF:
+			return Type{Base: TypeU32}
+		case n.Value > 0xFF:
+			return Type{Base: TypeU16}
+		default:
+			return Type{Base: TypeU8}
+		}
+	case *CharLit:
+		return Type{Base: TypeU8}
+	case *StringLit:
+		return Type{Base: TypeU8, Ptr: 1}
+	case *IdentExpr:
+		if slot, ok := g.lookup(n.Name); ok {
+			return slot.typ
+		}
+	case *IndexExpr:
+		if slot, ok := g.lookup(n.Name); ok {
+			return slot.typ
+		}
+	case *UnaryExpr:
+		switch n.Op {
+		case "&":
+			t := g.exprType(n.X)
+			return Type{Base: t.Base, Ptr: t.Ptr + 1}
+		case "*":
+			t := g.exprType(n.X)
+			if t.Ptr > 0 {
+				return Type{Base: t.Base, Ptr: t.Ptr - 1}
+			}
+			return Type{Base: TypeU16}
+		case "~":
+			return g.exprType(n.X)
+		case "-":
+			t := g.exprType(n.X)
+			if t.Ptr == 0 && t.Base == TypeU32 {
+				return Type{Base: TypeU32}
+			}
+			return Type{Base: TypeU16}
+		}
+	case *BinaryExpr:
+		switch n.Op {
+		case "&&", "||", "==", "!=", "<", ">", "<=", ">=":
+			return Type{Base: TypeU8}
+		}
+		lt := g.exprType(n.Left)
+		rt := g.exprType(n.Right)
+		if lt.Ptr > 0 && rt.Ptr == 0 {
+			return lt
+		}
+		if rt.Ptr > 0 && lt.Ptr == 0 {
+			return rt
+		}
+		if lt.Ptr > 0 || rt.Ptr > 0 {
+			return Type{Base: TypeU16}
+		}
+		if lt.Base == TypeU32 || rt.Base == TypeU32 {
+			return Type{Base: TypeU32}
+		}
+		if lt.Base == TypeU16 || rt.Base == TypeU16 {
+			return Type{Base: TypeU16}
+		}
+		return Type{Base: TypeU8}
+	case *CallExpr:
+		switch n.Callee {
+		case "peek", "cyc", "in_port", "am", "em":
+			return Type{Base: TypeU16}
+		case "poke", "wait", "vblank", "out_port", "os_return", "os_start", "set_am", "set_em":
+			return Type{Base: TypeVoid}
+		}
+		if fn, ok := g.funcs[n.Callee]; ok {
+			return fn.Ret
+		}
+	}
+	return Type{Base: TypeInvalid}
 }
 
 func alphaName(n int) string {
@@ -1497,6 +1815,11 @@ func (g *gen) storeToStorage(slot storage) {
 	if slot.typ.Base == TypeU8 && slot.typ.Ptr == 0 {
 		g.emit("AND %255 X")
 	}
+	if slot.typ.Ptr == 0 && slot.typ.Base == TypeU32 {
+		if g.storeU32ToStorageAddress(slot, regX) {
+			return
+		}
+	}
 	if slot.kind == storageGlobal {
 		g.emit("STR X " + slot.operand)
 		return
@@ -1530,6 +1853,15 @@ func (g *gen) loadFromStorageInto(slot storage, dst string) {
 			g.emit("MOV " + slot.reg + " " + dst)
 		}
 		return
+	}
+	if slot.typ.Ptr == 0 && slot.typ.Base == TypeU32 {
+		if g.loadU32FromStorageInto(slot, dst) {
+			return
+		}
+		if dst != regX && g.loadU32FromStorageInto(slot, regX) {
+			g.emit("MOV X " + dst)
+			return
+		}
 	}
 	if slot.kind == storageGlobal {
 		g.emit("LOD " + dst + " " + slot.operand)
@@ -1585,6 +1917,9 @@ func (g *gen) emitAddressOfInto(e Expr, dst string) error {
 }
 
 func (g *gen) emitDerefStore(ptrExpr Expr, valueExpr Expr) error {
+	ptrType := g.exprType(ptrExpr)
+	isU32 := ptrType.Ptr == 1 && ptrType.Base == TypeU32
+
 	// Evaluate and store the value first (source order).
 	if tmp := g.allocTemp(); tmp != "" {
 		defer g.releaseTemp(tmp)
@@ -1594,7 +1929,14 @@ func (g *gen) emitDerefStore(ptrExpr Expr, valueExpr Expr) error {
 		if err := g.emitExprInto(ptrExpr, regX); err != nil {
 			return err
 		}
-		// For now, assume a u16 pointer (word store).
+		if isU32 {
+			if high, low, ok := splitRegister(tmp); ok {
+				g.emit("STR " + low + " X")
+				g.emit("ADD %1 X")
+				g.emit("STR " + high + " X")
+				return nil
+			}
+		}
 		g.emit("STR " + tmp + " X")
 		return nil
 	}
@@ -1608,12 +1950,19 @@ func (g *gen) emitDerefStore(ptrExpr Expr, valueExpr Expr) error {
 	}
 	g.emit("MOV X Y")
 	g.emit("POP X")
+	if isU32 {
+		g.emit("STR XL Y")
+		g.emit("ADD %1 Y")
+		g.emit("STR XH Y")
+		return nil
+	}
 	g.emit("STR X Y")
 	return nil
 }
 
 func (g *gen) emitArrayStore(slot storage, index Expr, value Expr) error {
 	isPackedByte := slot.typ.Base == TypeU8 && slot.typ.Ptr == 0
+	isU32 := slot.typ.Ptr == 0 && slot.typ.Base == TypeU32
 
 	if tmp := g.allocTemp(); tmp != "" {
 		defer g.releaseTemp(tmp)
@@ -1625,6 +1974,14 @@ func (g *gen) emitArrayStore(slot storage, index Expr, value Expr) error {
 		}
 		if err := g.emitArrayAddress(slot, index); err != nil {
 			return err
+		}
+		if isU32 {
+			if high, low, ok := splitRegister(tmp); ok {
+				g.emit("STR " + low + " X")
+				g.emit("ADD %1 X")
+				g.emit("STR " + high + " X")
+				return nil
+			}
 		}
 		if !isPackedByte {
 			g.emit("STR " + tmp + " X")
@@ -1657,6 +2014,20 @@ func (g *gen) emitArrayStore(slot storage, index Expr, value Expr) error {
 	}
 
 	// No free register: use the old memory-temp path.
+	if isU32 {
+		if err := g.emitExpr(value); err != nil {
+			return err
+		}
+		g.emit("PUSH X")
+		if err := g.emitArrayAddress(slot, index); err != nil {
+			return err
+		}
+		g.emit("POP Y")
+		g.emit("STR YL X")
+		g.emit("ADD %1 X")
+		g.emit("STR YH X")
+		return nil
+	}
 	if err := g.emitExpr(value); err != nil {
 		return err
 	}
@@ -1722,6 +2093,11 @@ func (g *gen) emitArrayLoadInto(slot storage, index Expr, dst string) error {
 	if err := g.emitArrayAddress(slot, index); err != nil {
 		return err
 	}
+	if slot.typ.Ptr == 0 && slot.typ.Base == TypeU32 {
+		if g.loadU32FromAddressInX(dst) {
+			return nil
+		}
+	}
 	if !(slot.typ.Base == TypeU8 && slot.typ.Ptr == 0) {
 		g.emit("LOD " + dst + " X")
 		return nil
@@ -1770,6 +2146,7 @@ func (g *gen) emitArrayLoadInto(slot storage, index Expr, dst string) error {
 
 func (g *gen) emitArrayAddress(slot storage, index Expr) error {
 	isPackedByte := slot.typ.Base == TypeU8 && slot.typ.Ptr == 0
+	isU32 := slot.typ.Ptr == 0 && slot.typ.Base == TypeU32
 
 	if tmp := g.allocTemp(); tmp != "" {
 		defer g.releaseTemp(tmp)
@@ -1780,6 +2157,9 @@ func (g *gen) emitArrayAddress(slot storage, index Expr) error {
 			g.emit("MOV " + tmp + " Y")
 			g.emit("AND %1 Y")
 			g.emit("SHR %1 " + tmp)
+		} else if isU32 {
+			// u32 elements occupy two 16-bit words.
+			g.emit("SHL %1 " + tmp)
 		}
 		g.loadArrayBaseAddress(slot)
 		g.emit("ADD " + tmp + " X")
@@ -1802,6 +2182,9 @@ func (g *gen) emitArrayAddress(slot storage, index Expr) error {
 		return nil
 	}
 
+	if isU32 {
+		g.emit("SHL %1 X")
+	}
 	g.emit("PUSH X")
 	g.loadArrayBaseAddress(slot)
 	g.emit("MOV X Y")
@@ -1959,7 +2342,7 @@ func countLocalsInStmt(st Stmt) int {
 		if n.Decl.IsArray {
 			return arrayWordCount(n.Decl.Type.Base, n.Decl.ArrayLen)
 		}
-		return 1
+		return typeWords(n.Decl.Type)
 	case *IfStmt:
 		return countLocalsInStmtList(n.Then) + countLocalsInStmtList(n.Else)
 	case *WhileStmt:

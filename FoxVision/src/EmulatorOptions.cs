@@ -12,6 +12,13 @@ namespace FoxVision
         VF16Flash = 5
     }
 
+    internal enum BuildTargetMode
+    {
+        Legacy = 0,
+        Extended = 1,
+        Em2Am1 = 2
+    }
+
     internal sealed class EmulatorOptions
     {
         internal const int PortCount = 8;
@@ -46,9 +53,19 @@ namespace FoxVision
         internal int FixedTtyPortIndex { get; set; } = ParseEnvInt("FOXVISION_TTY_PORT_INDEX", 4);
         internal PortDeviceKind[] PortDevices { get; set; } = CreateDefaultPortDevices();
 
-        // When true, build operations invoked from the GUI will target extended mode
-        // (passes `--mode extended` to the FoxC compiler and assembler).
-        internal bool BuildExtended { get; set; } = false;
+        // Target mode for builds invoked from the GUI or options
+        internal BuildTargetMode BuildMode { get; set; } = ParseEnvBuildMode("FOXVISION_BUILD_MODE", BuildTargetMode.Legacy);
+        internal ushort? BuildMapper { get; set; } = ParseEnvMapper("FOXVISION_BUILD_MAPPER");
+        internal bool BuildStrictFormat { get; set; } = ParseEnvBool("FOXVISION_BUILD_STRICT_FORMAT", true);
+        internal string BuildLoadAddress { get; set; } = Environment.GetEnvironmentVariable("FOXVISION_BUILD_LOAD_ADDRESS") ?? string.Empty;
+
+        // Backward compatibility property for extended mode
+        internal bool BuildExtended
+        {
+            get => BuildMode != BuildTargetMode.Legacy;
+            set => BuildMode = value ? BuildTargetMode.Extended : BuildTargetMode.Legacy;
+        }
+        internal bool Headless { get; set; } = ParseEnvBool("FOXVISION_HEADLESS", false);
         internal string KeyboardLayout { get; set; } = Environment.GetEnvironmentVariable("FOXVISION_KEYBOARD_LAYOUT") ?? string.Empty;
 
         internal string[] FlashSavePaths { get; set; } = CreateDefaultFlashSavePaths();
@@ -262,6 +279,44 @@ namespace FoxVision
             }
 
             return Enum.TryParse(value, true, out PortDeviceKind parsed) ? parsed : fallback;
+        }
+
+        private static ushort? ParseEnvMapper(string name)
+        {
+            var value = Environment.GetEnvironmentVariable(name);
+            if (string.IsNullOrWhiteSpace(value))
+                return null;
+            if (value.Equals("rombyte8_32", StringComparison.OrdinalIgnoreCase) || value.Equals("byte8_32", StringComparison.OrdinalIgnoreCase) || value == "2")
+                return 2;
+            if (value.Equals("rom32k", StringComparison.OrdinalIgnoreCase) || value == "1")
+                return 1;
+            if (value.Equals("rom4k", StringComparison.OrdinalIgnoreCase) || value == "0")
+                return 0;
+            return ushort.TryParse(value, out var m) ? m : null;
+        }
+
+        private static BuildTargetMode ParseEnvBuildMode(string name, BuildTargetMode fallback)
+        {
+            var value = Environment.GetEnvironmentVariable(name);
+            if (string.IsNullOrWhiteSpace(value))
+                return fallback;
+
+            if (Enum.TryParse(value, true, out BuildTargetMode parsed))
+                return parsed;
+
+            if (value.Equals("em2_am1", StringComparison.OrdinalIgnoreCase) ||
+                value.Equals("extended2", StringComparison.OrdinalIgnoreCase) ||
+                value.Equals("v2", StringComparison.OrdinalIgnoreCase) ||
+                value.Equals("em2", StringComparison.OrdinalIgnoreCase))
+                return BuildTargetMode.Em2Am1;
+
+            if (value.Equals("extended", StringComparison.OrdinalIgnoreCase))
+                return BuildTargetMode.Extended;
+
+            if (value.Equals("legacy", StringComparison.OrdinalIgnoreCase))
+                return BuildTargetMode.Legacy;
+
+            return fallback;
         }
 
         private static bool ParseEnvBool(string name, bool fallback)

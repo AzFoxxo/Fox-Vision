@@ -1,4 +1,4 @@
-﻿using System.IO;
+using System.IO;
 
 namespace Fox16ASM
 {
@@ -16,7 +16,9 @@ namespace Fox16ASM
             string outputFile = "vfox16.bin";
             bool showHelp = false;
             bool strictFormat = false;
-            ushort loadAddress = 0;
+            uint loadAddress = 0;
+            byte? romVersion = null;
+            ushort? mapper = null;
             var mode = AssemblerMode.Legacy;
             var debugFlags = new DebugFlags();
 
@@ -68,14 +70,41 @@ namespace Fox16ASM
                     case "--load-address":
                         if (i + 1 >= args.Length || !TryParseAddress(args[++i], out loadAddress))
                         {
-                            Console.WriteLine("Error: --load-address requires a 16-bit decimal or hexadecimal address");
+                            Console.WriteLine("Error: --load-address requires a decimal or hexadecimal address");
+                            return 1;
+                        }
+                        break;
+                    case "--rom-version":
+                        if (i + 1 >= args.Length || !byte.TryParse(args[++i], out var parsedVer) || parsedVer < 1 || parsedVer > 3)
+                        {
+                            Console.WriteLine("Error: --rom-version requires 1, 2, or 3");
+                            return 1;
+                        }
+                        romVersion = parsedVer;
+                        break;
+                    case "--mapper":
+                        if (i + 1 >= args.Length)
+                        {
+                            Console.WriteLine("Error: --mapper requires 0 (ROM4K), 1 (ROM32K), or 2 (ROMByte8_32)");
+                            return 1;
+                        }
+                        var mapperArg = args[++i];
+                        if (mapperArg.Equals("rom4k", StringComparison.OrdinalIgnoreCase) || mapperArg == "0")
+                            mapper = 0;
+                        else if (mapperArg.Equals("rom32k", StringComparison.OrdinalIgnoreCase) || mapperArg == "1")
+                            mapper = 1;
+                        else if (mapperArg.Equals("rombyte8_32", StringComparison.OrdinalIgnoreCase) || mapperArg.Equals("byte8_32", StringComparison.OrdinalIgnoreCase) || mapperArg == "2")
+                            mapper = 2;
+                        else
+                        {
+                            Console.WriteLine($"Error: Unknown mapper '{mapperArg}'. Expected rom4k (0), rom32k (1), or rombyte8_32 (2)");
                             return 1;
                         }
                         break;
                     case "--mode":
                         if (i + 1 >= args.Length)
                         {
-                            Console.WriteLine("Error: --mode requires a value of 'legacy' or 'extended'");
+                            Console.WriteLine("Error: --mode requires a value of 'legacy', 'extended', or 'em2_am1'");
                             return 1;
                         }
 
@@ -87,6 +116,14 @@ namespace Fox16ASM
                         else if (modeValue.Equals("extended", StringComparison.OrdinalIgnoreCase))
                         {
                             mode = AssemblerMode.Extended;
+                        }
+                        else if (modeValue.Equals("extended2", StringComparison.OrdinalIgnoreCase)
+                            || modeValue.Equals("em2_am1", StringComparison.OrdinalIgnoreCase)
+                            || modeValue.Equals("am1_em2", StringComparison.OrdinalIgnoreCase)
+                            || modeValue.Equals("em2", StringComparison.OrdinalIgnoreCase)
+                            || modeValue.Equals("v2", StringComparison.OrdinalIgnoreCase))
+                        {
+                            mode = AssemblerMode.Extended2;
                         }
                         else
                         {
@@ -114,6 +151,8 @@ namespace Fox16ASM
                 Console.WriteLine("  --labels              Show label resolution debug output");
                 Console.WriteLine("  --strict-format       Enforce ROM payload limit for the selected mode");
                 Console.WriteLine("  --load-address <addr> Load the image at a non-zero address");
+                Console.WriteLine("  --rom-version <1|2|3> Select extended ROM container version (default: 2 for extended, 3 for extended2/em2_am1)");
+                Console.WriteLine("  --mapper <name|id>    Select container mapper: rom4k (0), rom32k (1), rombyte8_32 (2)");
                 Console.WriteLine("  -h, --help            Show this help message");
                 return 0;
             }
@@ -164,7 +203,7 @@ namespace Fox16ASM
                 if (args[i] == "--obj") { emitObj = true; break; }
             }
 
-            var generationResult = Generator.Generate(irResult.Value, outputFile, inputFile, mode, debugFlags, strictFormat, loadAddress);
+            var generationResult = Generator.Generate(irResult.Value, outputFile, inputFile, mode, debugFlags, strictFormat, loadAddress, romVersion, mapper);
             if (!generationResult.Success)
             {
                 DiagnosticPrinter.Print(generationResult.Diagnostics);
@@ -199,15 +238,15 @@ namespace Fox16ASM
             return 0;
         }
 
-        private static bool TryParseAddress(string value, out ushort address)
+        private static bool TryParseAddress(string value, out uint address)
         {
             if (value.StartsWith("0x", StringComparison.OrdinalIgnoreCase))
-                return ushort.TryParse(value[2..], System.Globalization.NumberStyles.AllowHexSpecifier, null, out address);
+                return uint.TryParse(value[2..], System.Globalization.NumberStyles.AllowHexSpecifier, null, out address);
 
             if (value.StartsWith("$", StringComparison.Ordinal))
-                return ushort.TryParse(value[1..], System.Globalization.NumberStyles.AllowHexSpecifier, null, out address);
+                return uint.TryParse(value[1..], System.Globalization.NumberStyles.AllowHexSpecifier, null, out address);
 
-            return ushort.TryParse(value, out address);
+            return uint.TryParse(value, out address);
         }
     }
 }

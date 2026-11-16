@@ -13,15 +13,25 @@ import (
 func main() {
 	in := flag.String("i", "", "input FoxC file")
 	out := flag.String("o", "", "output file")
-	mode := flag.String("mode", "legacy", "target machine mode (legacy|extended)")
+	mode := flag.String("mode", "legacy", "target machine mode (legacy|extended|em2_am1)")
 	strictFormat := flag.Bool("strict-format", false, "enforce ROM size compliance for the selected mode")
 	loadAddressText := flag.String("load-address", "0", "load address (decimal, 0x-prefixed hexadecimal, or $ hexadecimal)")
 	asmOnly := flag.Bool("asm", false, "assemble only: output Fox16ASM instead of binary ROM")
 	flag.BoolVar(asmOnly, "a", false, "short for --asm")
+	flag.Usage = func() {
+		fmt.Fprintln(os.Stderr, "usage: foxc -i <input.fc> [-o output] [--mode legacy|extended|em2_am1] [--load-address address] [--strict-format] [-a|--asm]")
+		fmt.Fprintln(os.Stderr, "")
+		fmt.Fprintln(os.Stderr, "Modes:")
+		fmt.Fprintln(os.Stderr, "  legacy    16-bit address space, X/Y plus stack evaluation")
+		fmt.Fprintln(os.Stderr, "  extended  16-bit address space, R0-R7 registers, ports 0-7")
+		fmt.Fprintln(os.Stderr, "  em2_am1   V2.0 ISA: EM=2, 32-bit registers and u32 support;")
+		fmt.Fprintln(os.Stderr, "            the compiler starts in word addressing (AM=0) to match")
+		fmt.Fprintln(os.Stderr, "            its word-based labels, globals and pointers")
+	}
 	flag.Parse()
 
 	if *in == "" {
-		fmt.Fprintln(os.Stderr, "usage: foxc -i <input.fc> [-o output] [--mode legacy|extended] [--load-address address] [--strict-format] [-a|--asm]")
+		flag.Usage()
 		os.Exit(2)
 	}
 

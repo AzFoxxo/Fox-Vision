@@ -1,0 +1,100 @@
+// u32 regression test for the V2 ISA (--mode em2_am1 / extended2 / v2).
+//
+// Exercises 32-bit literals, constant folding, arithmetic, globals, frame
+// locals, function parameters/returns, arrays, dereferences and pointer
+// scaling. Prints PASS or FAIL through the TTY port (port 4).
+//
+// Build and run:
+//   foxc -i FoxC/examples/u32_test.fc -o /tmp/u32_test.f16 --mode em2_am1
+//   fox16asm -i /tmp/u32_test.f16 -o /tmp/u32_test.bin --mode em2_am1
+//   FoxVision --rom /tmp/u32_test.bin --headless
+
+u32 g_val;
+u32 g_arr[3];
+u32 g_fold = 0x10000000 + 0x02345678;
+u32 *g_ptr;
+
+u32 add32(u32 a, u32 b) {
+    return a + b;
+}
+
+u32 mix(u32 a, u32 b) {
+    u32 t = a * 3 + b;
+    return t ^ 0x00FF00FF;
+}
+
+void report(u16 ok) {
+    if (ok) {
+        out_port(4, 'P');
+        out_port(4, 'A');
+        out_port(4, 'S');
+        out_port(4, 'S');
+    } else {
+        out_port(4, 'F');
+        out_port(4, 'A');
+        out_port(4, 'I');
+        out_port(4, 'L');
+    }
+    out_port(4, 10);
+}
+
+void main() {
+    u16 ok = 1;
+
+    // 32-bit literals and constant folding.
+    if (g_fold != 0x12345678) { ok = 0; }
+
+    u32 a = 0x12345678;
+    u32 b = 0x0000ABCD;
+    u32 c = add32(a, b);
+    if (c != 0x12350245) { ok = 0; }
+
+    // Arithmetic keeps the full 32 bits.
+    if ((a + 1) != 0x12345679) { ok = 0; }
+    if ((a - 1) != 0x12345677) { ok = 0; }
+    if ((a >> 16) != 0x00001234) { ok = 0; }
+    if ((a & 0xFFFF) != 0x00005678) { ok = 0; }
+    if (a / 0x10000 != 0x00001234) { ok = 0; }
+
+    // Globals store both words (low word first).
+    g_val = c;
+    if (g_val != 0x12350245) { ok = 0; }
+    if ((g_val >> 16) != 0x00001235) { ok = 0; }
+    if ((g_val & 0xFFFF) != 0x00000245) { ok = 0; }
+
+    // u32 arrays scale by two words per element.
+    g_arr[0] = a;
+    g_arr[1] = b;
+    g_arr[2] = c;
+    if (g_arr[0] != a) { ok = 0; }
+    if (g_arr[1] != b) { ok = 0; }
+    if (g_arr[2] != c) { ok = 0; }
+
+    u32 d = g_arr[2];
+    u32 e = mix(d, 0x10);
+    if (e != 0x36600620) { ok = 0; }
+
+    // u32 pointer arithmetic scales by two words per element.
+    u32 *gp = &g_arr[0];
+    if (*(gp + 1) != b) { ok = 0; }
+    if (*(gp + 2) != c) { ok = 0; }
+    u32 *gp2 = &g_arr[2];
+    if ((gp2 - gp) != 2) { ok = 0; }
+
+    // Pointers to u32 load and store two words.
+    g_ptr = &g_val;
+    *g_ptr = 0xDEADBEEF;
+    if (g_val != 0xDEADBEEF) { ok = 0; }
+    if ((g_val >> 16) != 0x0000DEAD) { ok = 0; }
+    if ((g_val & 0xFFFF) != 0x0000BEEF) { ok = 0; }
+    u32 v = *g_ptr;
+    if (v != 0xDEADBEEF) { ok = 0; }
+
+    // Frame locals keep their high word across calls.
+    u32 x = 0xCAFEBABE;
+    u32 y = add32(x, 1);
+    if (y != 0xCAFEBABF) { ok = 0; }
+    if (x != 0xCAFEBABE) { ok = 0; }
+
+    report(ok);
+}

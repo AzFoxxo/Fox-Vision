@@ -13,21 +13,24 @@ Extended-mode ROM images are containers that include additional metadata immedia
 | Field              | Size (bytes) | Meaning                                                                       |
 | ------------------ | -----------: | ----------------------------------------------------------------------------- |
 | Magic              |           10 | Container magic (`.VFOX16EXT`)                                                |
-| ROM format version |            1 | Format/version byte (major version number; version 2 adds a reset vector)     |
-| Mapper             |            2 | ROM container mapping selector (0 = ROM4K, 1 = ROM32K) and layout policy      |
-| ROM start          |            2 | 16-bit load address (big-endian) where the payload should be placed in memory |
-| Reset vector       |            2 | 16-bit execution address (big-endian) used after reset                        |
-| ROM size           |            2 | 16-bit payload length in words (big-endian)                                   |
+| ROM format version |            1 | Format/version byte (1, 2, or 3; version 2 adds reset vector, version 3 uses 32-bit addresses and sizes) |
+| Mapper             |            2 | ROM container mapping selector (0 = ROM4K, 1 = ROM32K, 2 = ROMByte8_32) and layout policy |
+| ROM start          |       2 or 4 | Load address (big-endian; 16-bit in v1/v2, 32-bit in v3)                      |
+| Reset vector       |       2 or 4 | Execution address used after reset (16-bit in v2, 32-bit in v3)               |
+| ROM size           |       2 or 4 | Payload length in words (big-endian; 16-bit in v1/v2, 32-bit in v3)           |
 
-Total extended header length: 17 bytes for version 1 and 19 bytes for version 2. After these fields the payload follows (the ROM words in big-endian file order). The emulator and other loaders SHOULD validate `ROM size` against the actual payload length and may reject mismatches.
+Total extended header length: 17 bytes for version 1, 19 bytes for version 2, and 25 bytes (or 27 bytes with 32-bit mapper) for version 3. After these fields the payload follows (the ROM words in big-endian file order). The emulator and other loaders SHOULD validate `ROM size` against the actual payload length and may reject mismatches.
 
 ### Semantics
 
-- `ROM format version`: allows future changes to the container structure. Tools SHOULD support version 1 and version 2; version 2 introduces the `Reset vector` field. Tools may reject unknown higher versions unless explicitly configured to be permissive.
-- `Mapping`: selects the ROM container size policy and the layout policy for ROM-resident data. `0` means ROM4K and `1` means ROM32K. This field does not replace the runtime `EM` register.
-- `ROM start`: allows images to specify a non-zero load address (useful for relocation or alternative memory layouts). When a data segment is present, loaders SHOULD treat this field as the base offset for that segment so literal constants can be written directly into ROM.
-- `Reset vector`: provides the address the CPU SHOULD jump to immediately after a hardware or power-on reset. If present, the machine starts execution at this address instead of assuming the payload begins at address zero.
-- `ROM size`: the number of 16-bit words in the payload. Loaders SHOULD use this to avoid reading beyond the expected payload and to pre-allocate memory structures.
+- `ROM format version`: allows changes to the container structure. Tools support version 1, version 2, and version 3. Version 2 introduces the `Reset vector` field. Version 3 expands `ROM start`, `Reset vector`, and `ROM size` to full 32-bit fields to handle larger ROM payloads and 32-bit address spaces.
+- `Mapping`: selects the ROM container size policy and layout policy:
+  - `0`: `ROM4K` (up to 4K words / 4,096 words).
+  - `1`: `ROM32K` (up to 32K words / 32,768 words).
+  - `2`: `ROMByte8_32` (supports up to the 32-bit limit, and initializes the CPU in 8-bit byte addressing mode `AM = 1` with 32-bit memory address space `EM = 2`).
+- `ROM start`: allows images to specify a non-zero load address (useful for relocation or alternative memory layouts). When a data segment is present, loaders SHOULD treat this field as the base offset for that segment so literal constants can be written directly into ROM. In version 3, this is a 32-bit value.
+- `Reset vector`: provides the address the CPU SHOULD jump to immediately after a hardware or power-on reset. In version 3, this is a 32-bit value.
+- `ROM size`: the number of 16-bit words in the payload. In version 3, this is a 32-bit value, allowing images beyond 64K words up to the 32-bit limit.
 
 ### ROM-resident constant layout
 

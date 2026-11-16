@@ -35,12 +35,19 @@ func check(prog *Program, opts CompileOptions) error {
 	s.funcs["vblank"] = funcSig{ret: Type{Base: TypeVoid}, params: []Type{}}
 	s.funcs["in_port"] = funcSig{ret: Type{Base: TypeU16}, params: []Type{{Base: TypeU16}}}
 	s.funcs["out_port"] = funcSig{ret: Type{Base: TypeVoid}, params: []Type{{Base: TypeU16}, {Base: TypeU16}}}
+	s.funcs["am"] = funcSig{ret: Type{Base: TypeU16}, params: []Type{}}
+	s.funcs["set_am"] = funcSig{ret: Type{Base: TypeVoid}, params: []Type{{Base: TypeU16}}}
+	s.funcs["em"] = funcSig{ret: Type{Base: TypeU16}, params: []Type{}}
+	s.funcs["set_em"] = funcSig{ret: Type{Base: TypeVoid}, params: []Type{{Base: TypeU16}}}
 	s.funcs["os_return"] = funcSig{ret: Type{Base: TypeVoid}, params: []Type{}}
 	s.funcs["os_start"] = funcSig{ret: Type{Base: TypeVoid}, params: []Type{{Base: TypeU16}}}
 
 	for _, g := range prog.Globals {
 		if g.Type.Base == TypeVoid && g.Type.Ptr == 0 {
 			return fmt.Errorf("global %q cannot be void", g.Name)
+		}
+		if g.Type.Base == TypeU32 && !s.extendedMode {
+			return fmt.Errorf("global %q: u32 requires extended mode", g.Name)
 		}
 		if _, exists := s.globals[g.Name]; exists {
 			return fmt.Errorf("duplicate global %q", g.Name)
@@ -58,10 +65,16 @@ func check(prog *Program, opts CompileOptions) error {
 		if _, exists := s.funcs[fn.Name]; exists {
 			return fmt.Errorf("duplicate function %q", fn.Name)
 		}
+		if fn.Ret.Base == TypeU32 && !s.extendedMode {
+			return fmt.Errorf("function %q: u32 requires extended mode", fn.Name)
+		}
 		params := make([]Type, 0, len(fn.Params))
 		for _, p := range fn.Params {
 			if p.Type.Base == TypeVoid && p.Type.Ptr == 0 {
 				return fmt.Errorf("parameter %q in %q cannot be void", p.Name, fn.Name)
+			}
+			if p.Type.Base == TypeU32 && !s.extendedMode {
+				return fmt.Errorf("parameter %q in %q: u32 requires extended mode", p.Name, fn.Name)
 			}
 			params = append(params, p.Type)
 		}
@@ -130,6 +143,9 @@ func (s *semantic) checkStmt(st Stmt) error {
 	case *VarDeclStmt:
 		if n.Decl.Type.Base == TypeVoid && n.Decl.Type.Ptr == 0 {
 			return fmt.Errorf("variable %q cannot be void", n.Decl.Name)
+		}
+		if n.Decl.Type.Base == TypeU32 && !s.extendedMode {
+			return fmt.Errorf("variable %q: u32 requires extended mode", n.Decl.Name)
 		}
 		if n.Decl.IsArray && n.Decl.ArrayLen <= 0 {
 			return fmt.Errorf("array %q must have positive length", n.Decl.Name)
@@ -302,8 +318,14 @@ func (s *semantic) checkStmt(st Stmt) error {
 func (s *semantic) exprType(e Expr) (Type, error) {
 	switch n := e.(type) {
 	case *IntLit:
-		if n.Value < 0 || n.Value > 0xFFFF {
-			return Type{Base: TypeInvalid}, fmt.Errorf("literal %d out of 16-bit range", n.Value)
+		if n.Value < 0 || n.Value > 0xFFFFFFFF {
+			return Type{Base: TypeInvalid}, fmt.Errorf("literal %d out of 32-bit range", n.Value)
+		}
+		if n.Value > 0xFFFF {
+			if !s.extendedMode {
+				return Type{Base: TypeInvalid}, fmt.Errorf("32-bit literal %d requires extended mode", n.Value)
+			}
+			return Type{Base: TypeU32}, nil
 		}
 		if n.Value <= 0xFF {
 			return Type{Base: TypeU8}, nil
@@ -350,10 +372,13 @@ func (s *semantic) exprType(e Expr) (Type, error) {
 			return t, nil
 		}
 		if n.Op == "-" {
-			// numeric negation -> u16
-			_, err := s.exprType(n.X)
+			// numeric negation -> u16 unless the operand is u32
+			t, err := s.exprType(n.X)
 			if err != nil {
 				return Type{Base: TypeInvalid}, err
+			}
+			if t.Ptr == 0 && t.Base == TypeU32 {
+				return Type{Base: TypeU32}, nil
 			}
 			return Type{Base: TypeU16}, nil
 		}
@@ -437,13 +462,25 @@ func (s *semantic) exprType(e Expr) (Type, error) {
 		case "*", "/", "&", "|", "^", "<<", ">>":
 			// fall through to numeric rules
 		}
-		// numeric result type: u16 if either operand is u16
-		if lt.Base == TypeU16 || rt.Base == TypeU16 {
-			return Type{Base: TypeU16}, nil
+		// numeric result type: promote to the widest operand (u8 < u16 < u32)
+		rank := func(t Type) int {
+			switch t.Base {
+			case TypeU32:
+				return 3
+			case TypeU16:
+				return 2
+			case TypeU8:
+				return 1
+			default:
+				return 0
+			}
 		}
-		return Type{Base: TypeU8}, nil
+		if rank(lt) > rank(rt) {
+			return Type{Base: lt.Base}, nil
+		}
+		return Type{Base: rt.Base}, nil
 	case *CallExpr:
-		if !s.extendedMode && (n.Callee == "in_port" || n.Callee == "out_port") {
+		if !s.extendedMode && (n.Callee == "in_port" || n.Callee == "out_port" || n.Callee == "am" || n.Callee == "set_am" || n.Callee == "em" || n.Callee == "set_em") {
 			return Type{Base: TypeInvalid}, fmt.Errorf("%s requires extended mode", n.Callee)
 		}
 		sig, ok := s.funcs[n.Callee]
@@ -473,11 +510,18 @@ func assignable(dst, src Type) bool {
 	if dst.Base == src.Base && dst.Ptr == src.Ptr {
 		return true
 	}
-	// allow widening u8 -> u16 for non-pointer values
-	if dst.Ptr == 0 && src.Ptr == 0 && dst.Base == TypeU16 && src.Base == TypeU8 {
-		return true
+	if dst.Ptr != 0 || src.Ptr != 0 {
+		return false
 	}
-	return false
+	// allow widening u8 -> u16/u32 and u16 -> u32 for non-pointer values
+	switch dst.Base {
+	case TypeU16:
+		return src.Base == TypeU8
+	case TypeU32:
+		return src.Base == TypeU8 || src.Base == TypeU16
+	default:
+		return false
+	}
 }
 
 func stmtListAlwaysReturns(stmts []Stmt) bool {

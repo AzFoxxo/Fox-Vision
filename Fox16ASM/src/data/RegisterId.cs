@@ -4,6 +4,11 @@ namespace Fox16ASM
     {
         X = 0x0000,
         Y = 0x0001,
+        PC = 0x0002,
+        STATUS = 0x0003,
+        SP = 0x0004,
+        CYC = 0x0005,
+        EM = 0x0006,
         R0 = 0x0007,
         R1 = 0x0008,
         R2 = 0x0009,
@@ -12,11 +17,35 @@ namespace Fox16ASM
         R5 = 0x000C,
         R6 = 0x000D,
         R7 = 0x000E,
-        PC = 0x0002,
-        STATUS = 0x0003,
-        SP = 0x0004,
-        CYC = 0x0005,
-        EM = 0x0006,
+        AM = 0x000F,
+
+        XL = 0x0010,
+        XH = 0x0011,
+        YL = 0x0012,
+        YH = 0x0013,
+        PCL = 0x0014,
+        PCH = 0x0015,
+        SPL = 0x0016,
+        SPH = 0x0017,
+        CYCL = 0x0018,
+        CYCH = 0x0019,
+
+        R0L = 0x0020,
+        R0H = 0x0021,
+        R1L = 0x0022,
+        R1H = 0x0023,
+        R2L = 0x0024,
+        R2H = 0x0025,
+        R3L = 0x0026,
+        R3H = 0x0027,
+        R4L = 0x0028,
+        R4H = 0x0029,
+        R5L = 0x002A,
+        R5H = 0x002B,
+        R6L = 0x002C,
+        R6H = 0x002D,
+        R7L = 0x002E,
+        R7H = 0x002F,
     }
 
     static class RegisterOperands
@@ -27,6 +56,11 @@ namespace Fox16ASM
             {
                 "X" => RegisterId.X,
                 "Y" => RegisterId.Y,
+                "PC" => RegisterId.PC,
+                "STATUS" => RegisterId.STATUS,
+                "SP" => RegisterId.SP,
+                "CYC" => RegisterId.CYC,
+                "EM" => RegisterId.EM,
                 "R0" => RegisterId.R0,
                 "R1" => RegisterId.R1,
                 "R2" => RegisterId.R2,
@@ -35,32 +69,48 @@ namespace Fox16ASM
                 "R5" => RegisterId.R5,
                 "R6" => RegisterId.R6,
                 "R7" => RegisterId.R7,
-                "PC" => RegisterId.PC,
-                "STATUS" => RegisterId.STATUS,
-                "SP" => RegisterId.SP,
-                "CYC" => RegisterId.CYC,
-                "EM" => RegisterId.EM,
+                "AM" => RegisterId.AM,
+
+                "XL" => RegisterId.XL,
+                "XH" => RegisterId.XH,
+                "YL" => RegisterId.YL,
+                "YH" => RegisterId.YH,
+                "PCL" => RegisterId.PCL,
+                "PCH" => RegisterId.PCH,
+                "SPL" => RegisterId.SPL,
+                "SPH" => RegisterId.SPH,
+                "CYCL" => RegisterId.CYCL,
+                "CYCH" => RegisterId.CYCH,
+
+                "R0L" => RegisterId.R0L,
+                "R0H" => RegisterId.R0H,
+                "R1L" => RegisterId.R1L,
+                "R1H" => RegisterId.R1H,
+                "R2L" => RegisterId.R2L,
+                "R2H" => RegisterId.R2H,
+                "R3L" => RegisterId.R3L,
+                "R3H" => RegisterId.R3H,
+                "R4L" => RegisterId.R4L,
+                "R4H" => RegisterId.R4H,
+                "R5L" => RegisterId.R5L,
+                "R5H" => RegisterId.R5H,
+                "R6L" => RegisterId.R6L,
+                "R6H" => RegisterId.R6H,
+                "R7L" => RegisterId.R7L,
+                "R7H" => RegisterId.R7H,
                 _ => default
             };
 
-            return symbol is "X" or "Y" or "R0" or "R1" or "R2" or "R3" or "R4" or "R5" or "R6" or "R7" or "PC" or "STATUS" or "SP" or "CYC" or "EM";
+            return symbol is "X" or "Y" or "PC" or "STATUS" or "SP" or "CYC" or "EM"
+                or "R0" or "R1" or "R2" or "R3" or "R4" or "R5" or "R6" or "R7" or "AM"
+                or "XL" or "XH" or "YL" or "YH" or "PCL" or "PCH" or "SPL" or "SPH" or "CYCL" or "CYCH"
+                or "R0L" or "R0H" or "R1L" or "R1H" or "R2L" or "R2H" or "R3L" or "R3H"
+                or "R4L" or "R4H" or "R5L" or "R5H" or "R6L" or "R6H" or "R7L" or "R7H";
         }
 
         internal static bool IsSupportedRegisterId(ushort value)
-            => value == (ushort)RegisterId.X
-                || value == (ushort)RegisterId.Y
-                || value == (ushort)RegisterId.R0
-                || value == (ushort)RegisterId.R1
-                || value == (ushort)RegisterId.R2
-                || value == (ushort)RegisterId.R3
-                || value == (ushort)RegisterId.R4
-                || value == (ushort)RegisterId.R5
-                || value == (ushort)RegisterId.R6
-                || value == (ushort)RegisterId.R7
-                || value == (ushort)RegisterId.PC
-                || value == (ushort)RegisterId.STATUS
-                || value == (ushort)RegisterId.SP
-                || value == (ushort)RegisterId.CYC
-                || value == (ushort)RegisterId.EM;
+            => (value >= (ushort)RegisterId.X && value <= (ushort)RegisterId.AM)
+            || (value >= (ushort)RegisterId.XL && value <= (ushort)RegisterId.CYCH)
+            || (value >= (ushort)RegisterId.R0L && value <= (ushort)RegisterId.R7H);
     }
 }

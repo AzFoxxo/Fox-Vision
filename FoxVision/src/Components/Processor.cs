@@ -7,10 +7,12 @@ namespace FoxVision
 {
     internal class Processor
     {
-        private ushort regX, regY, regSP, regPC, regCYC;
-        private readonly ushort _resetPC;
-        private ushort[] regR;
+        private uint regX, regY, regSP, regPC, regCYC;
+        private readonly uint _resetPC;
+        private readonly ushort _mapper;
+        private uint[] regR;
         private ushort regEM;
+        private ushort regAM;
         private ulong _totalCycleCount;
         private byte regStatus;
         private bool _waitActive;
@@ -63,10 +65,40 @@ namespace FoxVision
         private const ushort RegisterIdR5 = 0x000C;
         private const ushort RegisterIdR6 = 0x000D;
         private const ushort RegisterIdR7 = 0x000E;
+        private const ushort RegisterIdPC = 0x0002;
         private const ushort RegisterIdStatus = 0x0003;
         private const ushort RegisterIdSP = 0x0004;
         private const ushort RegisterIdCYC = 0x0005;
         private const ushort RegisterIdEM = 0x0006;
+        private const ushort RegisterIdAM = 0x000F;
+
+        private const ushort RegisterIdXL = 0x0010;
+        private const ushort RegisterIdXH = 0x0011;
+        private const ushort RegisterIdYL = 0x0012;
+        private const ushort RegisterIdYH = 0x0013;
+        private const ushort RegisterIdPCL = 0x0014;
+        private const ushort RegisterIdPCH = 0x0015;
+        private const ushort RegisterIdSPL = 0x0016;
+        private const ushort RegisterIdSPH = 0x0017;
+        private const ushort RegisterIdCYCL = 0x0018;
+        private const ushort RegisterIdCYCH = 0x0019;
+
+        private const ushort RegisterIdR0L = 0x0020;
+        private const ushort RegisterIdR0H = 0x0021;
+        private const ushort RegisterIdR1L = 0x0022;
+        private const ushort RegisterIdR1H = 0x0023;
+        private const ushort RegisterIdR2L = 0x0024;
+        private const ushort RegisterIdR2H = 0x0025;
+        private const ushort RegisterIdR3L = 0x0026;
+        private const ushort RegisterIdR3H = 0x0027;
+        private const ushort RegisterIdR4L = 0x0028;
+        private const ushort RegisterIdR4H = 0x0029;
+        private const ushort RegisterIdR5L = 0x002A;
+        private const ushort RegisterIdR5H = 0x002B;
+        private const ushort RegisterIdR6L = 0x002C;
+        private const ushort RegisterIdR6H = 0x002D;
+        private const ushort RegisterIdR7L = 0x002E;
+        private const ushort RegisterIdR7H = 0x002F;
         private const int PortCount = 8;
         private const ushort VramSizeInWords = 5000;
         private const ushort StackStartAddress = (ushort)(ushort.MaxValue - VramSizeInWords);
@@ -79,23 +111,33 @@ namespace FoxVision
         private int _pauseRequested;
 
         internal Processor(ContiguousMemory RAM, int executionSpeedHz, bool logInstruction)
-            : this(RAM, executionSpeedHz, logInstruction, 0, null)
+            : this(RAM, executionSpeedHz, logInstruction, 0, null, 0)
         {
         }
 
 
-        internal Processor(ContiguousMemory RAM, int executionSpeedHz, bool logInstruction, ushort initialPC, PortDeviceKind[]? portDevices = null)
+        internal Processor(ContiguousMemory RAM, int executionSpeedHz, bool logInstruction, uint initialPC, PortDeviceKind[]? portDevices = null, ushort mapper = 0)
         {
             this.RAM = RAM;
             _resetPC = initialPC;
+            _mapper = mapper;
 
             regX = 0;
             regY = 0;
-            regR = new ushort[8];
+            regR = new uint[8];
             regSP = StackStartAddress;
             regPC = initialPC;
             regCYC = 0;
-            regEM = 0;
+            if (_mapper == 2)
+            {
+                regEM = 2;
+                regAM = 1;
+            }
+            else
+            {
+                regEM = 0;
+                regAM = 0;
+            }
             _totalCycleCount = 0;
             regStatus = 0;
             _waitActive = false;
@@ -137,7 +179,7 @@ namespace FoxVision
 
             if (_waitActive)
             {
-                ushort elapsed = unchecked((ushort)(regCYC - _waitStartCycle));
+                ushort elapsed = unchecked((ushort)((regCYC & 0xFFFF) - _waitStartCycle));
                 if (elapsed >= _waitDuration)
                     _waitActive = false;
             }
@@ -151,19 +193,15 @@ namespace FoxVision
 
             if (!_waitActive && !_vblankWaitActive)
             {
-                ushort[] data = new ushort[] { RAM.ReadUnchecked(regPC), 0, 0 };
-                if (regPC != RAM.MaxAddress)
-                    data[1] = RAM.ReadUnchecked((ushort)(regPC + 1));
-                if (regPC + 1 != RAM.MaxAddress)
-                    data[2] = RAM.ReadUnchecked((ushort)(regPC + 2));
+                ushort[] data = new ushort[] { RAM.ReadWord(regPC), RAM.ReadWord(regPC + 1), RAM.ReadWord(regPC + 2) };
 
-                ushort oldPC = regPC;
+                uint oldPC = regPC;
                 ushort diffPC = DecodeExecuteInstruction(data[0], data[1], data[2]);
 
                 if (regPC == oldPC)
                     regPC += diffPC;
 
-                if (regPC > RAM.MaxAddress)
+                if (!Is32BitMemoryEnabled && regPC > RAM.MaxAddress)
                     regPC = 0;
             }
 
@@ -213,7 +251,16 @@ namespace FoxVision
             regSP = StackStartAddress;
             regPC = _resetPC;
             regCYC = 0;
-            regEM = 0;
+            if (_mapper == 2)
+            {
+                regEM = 2;
+                regAM = 1;
+            }
+            else
+            {
+                regEM = 0;
+                regAM = 0;
+            }
             if (regR is not null)
                 Array.Clear(regR, 0, regR.Length);
             _totalCycleCount = 0;
@@ -274,12 +321,12 @@ namespace FoxVision
                     break;
 
                 case 0x1:
-                    SetValueOfTheActiveRegister(RAM.ReadUnchecked(first_operand));
+                    SetValueOfTheActiveRegister(ReadMemory(first_operand));
                     return 2;
 
                 case 0x2:
                     LogInstructionExecuting("WTM", first_operand);
-                    RAM.WriteUnchecked(first_operand, GetValueOfTheActiveRegister());
+                    WriteMemory(first_operand, GetValueOfTheActiveRegister());
                     return 2;
 
                 case 0x3:
@@ -311,14 +358,14 @@ namespace FoxVision
 
                 case 0x7:
                     LogInstructionExecuting("DXY", first_operand);
-                    if (regY == 0)
+                    if ((regY & 0xFFFF) == 0)
                     {
                         SetIllegalDivision(true);
                         SetValueOfTheActiveRegister(0);
                         break;
                     }
                     SetIllegalDivision(false);
-                    SetValueOfTheActiveRegister((ushort)(regX / regY));
+                    SetValueOfTheActiveRegister((ushort)((regX & 0xFFFF) / (regY & 0xFFFF)));
                     break;
 
                 case 0x8:
@@ -334,9 +381,9 @@ namespace FoxVision
                 case 0x9:
                     LogInstructionExecuting("LEQ", first_operand);
                     {
-                        bool lessThan = regX < regY;
-                        bool greaterThan = regX > regY;
-                        bool equal = regX == regY;
+                        bool lessThan = (regX & 0xFFFF) < (regY & 0xFFFF);
+                        bool greaterThan = (regX & 0xFFFF) > (regY & 0xFFFF);
+                        bool equal = (regX & 0xFFFF) == (regY & 0xFFFF);
                         // Preserve legacy LEQ flow: JPZ/JNZ consume the predicate bit.
                         SetComparisonFlags(lessThan, lessThan, greaterThan, !equal);
                     }
@@ -345,18 +392,18 @@ namespace FoxVision
                 case 0xA:
                     LogInstructionExecuting("JPZ", first_operand);
                     if (!IsPredicateSet)
-                        regPC = first_operand;
+                        regPC = TryResolveMemoryAddressOperand(first_operand, firstOperandType, out uint targetPC) ? targetPC : first_operand;
                     return 2;
 
                 case 0xB:
                     LogInstructionExecuting("JNZ", first_operand);
                     if (IsPredicateSet)
-                        regPC = first_operand;
+                        regPC = TryResolveMemoryAddressOperand(first_operand, firstOperandType, out uint targetPC) ? targetPC : first_operand;
                     return 2;
 
                 case 0xC:
                     LogInstructionExecuting("JMP", first_operand);
-                    regPC = first_operand;
+                    regPC = TryResolveMemoryAddressOperand(first_operand, firstOperandType, out uint jmpTarget) ? jmpTarget : first_operand;
                     return 2;
 
                 case 0xD:
@@ -401,12 +448,12 @@ namespace FoxVision
 
                 case 0x15:
                     LogInstructionExecuting("ILM", first_operand);
-                    SetValueOfTheActiveRegister(RAM.ReadUnchecked(GetValueOfTheActiveRegister()));
+                    SetValueOfTheActiveRegister(ReadMemory(GetValueOfTheActiveRegister()));
                     break;
 
                 case 0x16:
                     LogInstructionExecuting("IWR", first_operand);
-                    RAM.WriteUnchecked(GetValueOfTheInactiveRegister(), GetValueOfTheActiveRegister());
+                    WriteMemory(GetValueOfTheInactiveRegister(), GetValueOfTheActiveRegister());
                     break;
 
                 case 0x17:
@@ -422,15 +469,38 @@ namespace FoxVision
                 case 0x19:
                     LogInstructionExecuting("MOV", first_operand);
                     {
-                        ushort src = ResolveOperandValue(first_operand, firstOperandType);
                         ushort dst = second_operand;
 
-                        if (!TryWriteRegisterOperand(dst, secondOperandType, src))
+                        // A 32-bit move is used when both sides are primary
+                        // registers. Moves involving an immediate or an H/L
+                        // sub-register retain their 16-bit width and zero-extend
+                        // when the destination is a primary register.
+                        if (Is32BitMemoryEnabled
+                            && firstOperandType == OperandTypeRegister
+                            && secondOperandType == OperandTypeRegister
+                            && IsPrimary32BitRegister(first_operand)
+                            && IsPrimary32BitRegister(dst)
+                            && TryRead32BitRegister(first_operand, out uint src32))
                         {
-                            Console.ForegroundColor = ConsoleColor.Red;
-                            Console.WriteLine($"Illegal MOV destination {dst:X4}");
-                            Console.ResetColor();
-                            goto NOP;
+                            if (!TryWrite32BitRegister(dst, src32))
+                            {
+                                Console.ForegroundColor = ConsoleColor.Red;
+                                Console.WriteLine($"Illegal MOV destination {dst:X4}");
+                                Console.ResetColor();
+                                goto NOP;
+                            }
+                        }
+                        else
+                        {
+                            ushort src = ResolveOperandValue(first_operand, firstOperandType);
+
+                            if (!TryWriteRegisterOperand(dst, secondOperandType, src))
+                            {
+                                Console.ForegroundColor = ConsoleColor.Red;
+                                Console.WriteLine($"Illegal MOV destination {dst:X4}");
+                                Console.ResetColor();
+                                goto NOP;
+                            }
                         }
                     }
                     return 3;
@@ -449,7 +519,7 @@ namespace FoxVision
                             goto NOP;
                         }
 
-                        if (!TryResolveMemoryAddressOperand(dstAddressOperand, secondOperandType, out ushort dstAddress))
+                        if (!TryResolveMemoryAddressOperand(dstAddressOperand, secondOperandType, out uint dstAddress))
                         {
                             Console.ForegroundColor = ConsoleColor.Red;
                             Console.WriteLine($"Illegal STR destination address operand {dstAddressOperand:X4}");
@@ -457,7 +527,7 @@ namespace FoxVision
                             goto NOP;
                         }
 
-                        RAM.WriteUnchecked(dstAddress, value);
+                        WriteMemory(dstAddress, value);
                     }
                     return 3;
 
@@ -468,7 +538,7 @@ namespace FoxVision
                         ushort dstRegister = first_operand;
                         ushort srcAddressOperand = second_operand;
 
-                        if (!TryResolveMemoryAddressOperand(srcAddressOperand, secondOperandType, out ushort srcAddress))
+                        if (!TryResolveMemoryAddressOperand(srcAddressOperand, secondOperandType, out uint srcAddress))
                         {
                             Console.ForegroundColor = ConsoleColor.Red;
                             Console.WriteLine($"Illegal LOD source address operand {srcAddressOperand:X4}");
@@ -476,7 +546,7 @@ namespace FoxVision
                             goto NOP;
                         }
 
-                        ushort value = RAM.ReadUnchecked(srcAddress);
+                        ushort value = ReadMemory(srcAddress);
 
                         if (!TryWriteRegisterOperand(dstRegister, firstOperandType, value))
                         {
@@ -496,21 +566,40 @@ namespace FoxVision
                         var operandCount = (byte)(opcode & 0b11);
                         if (operandCount == 2)
                         {
-                            // V1.11: CMP SRC DST - compare two supplied operands (register/immediate/memory)
-                            ushort a = ResolveOperandValue(first_operand, firstOperandType);
-                            ushort b = ResolveOperandValue(second_operand, secondOperandType);
-                            bool equal = a == b;
-                            bool lessThan = a < b;
-                            bool greaterThan = a > b;
-                            SetComparisonFlags(equal, lessThan, greaterThan, !equal);
-                            return 3;
+                            // V1.11: CMP SRC DST - compare two supplied operands (register/immediate/memory).
+                            // V2.0 promotes the comparison to 32 bits whenever a primary
+                            // 32-bit register participates, so mixed register/immediate
+                            // and register/sub-register comparisons behave correctly.
+                            bool use32Bit = Is32BitMemoryEnabled
+                                && ((firstOperandType == OperandTypeRegister && IsPrimary32BitRegister(first_operand))
+                                    || (secondOperandType == OperandTypeRegister && IsPrimary32BitRegister(second_operand)));
+                            if (use32Bit
+                                && TryResolveOperandValue32(first_operand, firstOperandType, out uint first32)
+                                && TryResolveOperandValue32(second_operand, secondOperandType, out uint second32))
+                            {
+                                bool equal = first32 == second32;
+                                bool lessThan = first32 < second32;
+                                bool greaterThan = first32 > second32;
+                                SetComparisonFlags(equal, lessThan, greaterThan, !equal);
+                                return 3;
+                            }
+                            else
+                            {
+                                ushort a = ResolveOperandValue(first_operand, firstOperandType);
+                                ushort b = ResolveOperandValue(second_operand, secondOperandType);
+                                bool equal = a == b;
+                                bool lessThan = a < b;
+                                bool greaterThan = a > b;
+                                SetComparisonFlags(equal, lessThan, greaterThan, !equal);
+                                return 3;
+                            }
                         }
                         else
                         {
                             // Legacy behaviour: compare X and Y
-                            bool equal = regX == regY;
-                            bool lessThan = regX < regY;
-                            bool greaterThan = regX > regY;
+                            bool equal = (regX & 0xFFFF) == (regY & 0xFFFF);
+                            bool lessThan = (regX & 0xFFFF) < (regY & 0xFFFF);
+                            bool greaterThan = (regX & 0xFFFF) > (regY & 0xFFFF);
                             SetComparisonFlags(equal, lessThan, greaterThan, !equal);
                         }
                     }
@@ -520,55 +609,55 @@ namespace FoxVision
                 case 0x1D:
                     LogInstructionExecuting("JEQ", first_operand);
                     if (IsEqual)
-                        regPC = first_operand;
+                        regPC = TryResolveMemoryAddressOperand(first_operand, firstOperandType, out uint targetPC) ? targetPC : first_operand;
                     return 2;
 
                 case 0x1E:
                     LogInstructionExecuting("JNE", first_operand);
                     if (IsNotEqual)
-                        regPC = first_operand;
+                        regPC = TryResolveMemoryAddressOperand(first_operand, firstOperandType, out uint targetPC) ? targetPC : first_operand;
                     return 2;
 
                 case 0x1F:
                     LogInstructionExecuting("JLT", first_operand);
                     if (IsLessThan)
-                        regPC = first_operand;
+                        regPC = TryResolveMemoryAddressOperand(first_operand, firstOperandType, out uint targetPC) ? targetPC : first_operand;
                     return 2;
 
                 case 0x20:
                     LogInstructionExecuting("JGT", first_operand);
                     if (IsGreaterThan)
-                        regPC = first_operand;
+                        regPC = TryResolveMemoryAddressOperand(first_operand, firstOperandType, out uint targetPC) ? targetPC : first_operand;
                     return 2;
 
                 case 0x21:
                     LogInstructionExecuting("JLE", first_operand);
                     if (IsLessThan || IsEqual)
-                        regPC = first_operand;
+                        regPC = TryResolveMemoryAddressOperand(first_operand, firstOperandType, out uint targetPC) ? targetPC : first_operand;
                     return 2;
 
                 case 0x22:
                     LogInstructionExecuting("JGE", first_operand);
                     if (IsGreaterThan || IsEqual)
-                        regPC = first_operand;
+                        regPC = TryResolveMemoryAddressOperand(first_operand, firstOperandType, out uint targetPC) ? targetPC : first_operand;
                     return 2;
 
                 // V1.6 multi-operand ALU instructions.
                 case 0x23:
                     LogInstructionExecuting("ADD", first_operand);
-                    if (!TryExecuteBinaryMoInstruction(first_operand, firstOperandType, second_operand, secondOperandType, (src, dst) => (ushort)(dst + src)))
+                    if (!TryExecuteBinaryMoInstruction(first_operand, firstOperandType, second_operand, secondOperandType, (src, dst) => dst + src))
                         goto NOP;
                     return 3;
 
                 case 0x24:
                     LogInstructionExecuting("SUB", first_operand);
-                    if (!TryExecuteBinaryMoInstruction(first_operand, firstOperandType, second_operand, secondOperandType, (src, dst) => (ushort)(dst - src)))
+                    if (!TryExecuteBinaryMoInstruction(first_operand, firstOperandType, second_operand, secondOperandType, (src, dst) => dst - src))
                         goto NOP;
                     return 3;
 
                 case 0x25:
                     LogInstructionExecuting("MUL", first_operand);
-                    if (!TryExecuteBinaryMoInstruction(first_operand, firstOperandType, second_operand, secondOperandType, (src, dst) => (ushort)(dst * src)))
+                    if (!TryExecuteBinaryMoInstruction(first_operand, firstOperandType, second_operand, secondOperandType, (src, dst) => dst * src))
                         goto NOP;
                     return 3;
 
@@ -583,7 +672,7 @@ namespace FoxVision
                         }
 
                         SetIllegalDivision(false);
-                        return (ushort)(dst / src);
+                        return dst / src;
                     }))
                     {
                         goto NOP;
@@ -592,68 +681,96 @@ namespace FoxVision
 
                 case 0x27:
                     LogInstructionExecuting("AND", first_operand);
-                    if (!TryExecuteBinaryMoInstruction(first_operand, firstOperandType, second_operand, secondOperandType, (src, dst) => (ushort)(dst & src)))
+                    if (!TryExecuteBinaryMoInstruction(first_operand, firstOperandType, second_operand, secondOperandType, (src, dst) => dst & src))
                         goto NOP;
                     return 3;
 
                 case 0x28:
                     LogInstructionExecuting("OR", first_operand);
-                    if (!TryExecuteBinaryMoInstruction(first_operand, firstOperandType, second_operand, secondOperandType, (src, dst) => (ushort)(dst | src)))
+                    if (!TryExecuteBinaryMoInstruction(first_operand, firstOperandType, second_operand, secondOperandType, (src, dst) => dst | src))
                         goto NOP;
                     return 3;
 
                 case 0x29:
                     LogInstructionExecuting("XOR", first_operand);
-                    if (!TryExecuteBinaryMoInstruction(first_operand, firstOperandType, second_operand, secondOperandType, (src, dst) => (ushort)(dst ^ src)))
+                    if (!TryExecuteBinaryMoInstruction(first_operand, firstOperandType, second_operand, secondOperandType, (src, dst) => dst ^ src))
                         goto NOP;
                     return 3;
 
                 case 0x2A:
                     LogInstructionExecuting("SHL", first_operand);
-                    if (!TryExecuteBinaryMoInstruction(first_operand, firstOperandType, second_operand, secondOperandType, (src, dst) => (ushort)(dst << src)))
+                    if (!TryExecuteBinaryMoInstruction(first_operand, firstOperandType, second_operand, secondOperandType, (src, dst) => dst << (int)(src & 31)))
                         goto NOP;
                     return 3;
 
                 case 0x2B:
                     LogInstructionExecuting("SHR", first_operand);
-                    if (!TryExecuteBinaryMoInstruction(first_operand, firstOperandType, second_operand, secondOperandType, (src, dst) => (ushort)(dst >> src)))
+                    if (!TryExecuteBinaryMoInstruction(first_operand, firstOperandType, second_operand, secondOperandType, (src, dst) => dst >> (int)(src & 31)))
                         goto NOP;
                     return 3;
 
                 // V1.7 stack instructions using an explicit register operand.
                 case 0x2C:
                     LogInstructionExecuting("PUSH", first_operand);
-                    if (!TryReadRegisterOperand(first_operand, firstOperandType, out ushort pushValue, allowStatus: true))
                     {
-                        Console.ForegroundColor = ConsoleColor.Red;
-                        Console.WriteLine($"Illegal PUSH source register {first_operand:X4}");
-                        Console.ResetColor();
-                        goto NOP;
-                    }
+                        // Primary registers push 32 bits; H/L sub-registers and the
+                        // 16-bit control registers push 16 bits. SP advances by the
+                        // address-granularity size of the pushed value (AM-aware).
+                        if (Is32BitMemoryEnabled
+                            && firstOperandType == OperandTypeRegister
+                            && IsPrimary32BitRegister(first_operand)
+                            && TryRead32BitRegister(first_operand, out uint pushValue32))
+                        {
+                            PushStackValue(pushValue32, 32);
+                            return 2;
+                        }
 
-                    RAM.WriteUnchecked(regSP, pushValue);
-                    unchecked { regSP--; }
+                        if (!TryReadRegisterOperand(first_operand, firstOperandType, out ushort pushValue, allowStatus: true))
+                        {
+                            Console.ForegroundColor = ConsoleColor.Red;
+                            Console.WriteLine($"Illegal PUSH source register {first_operand:X4}");
+                            Console.ResetColor();
+                            goto NOP;
+                        }
+
+                        PushStackValue(pushValue, 16);
+                    }
                     return 2;
 
                 case 0x2D:
                     LogInstructionExecuting("POP", first_operand);
-                    if (!IsRegisterOperand(firstOperandType, first_operand))
                     {
-                        Console.ForegroundColor = ConsoleColor.Red;
-                        Console.WriteLine($"Illegal POP destination register {first_operand:X4}");
-                        Console.ResetColor();
-                        goto NOP;
-                    }
+                        if (!IsRegisterOperand(firstOperandType, first_operand))
+                        {
+                            Console.ForegroundColor = ConsoleColor.Red;
+                            Console.WriteLine($"Illegal POP destination register {first_operand:X4}");
+                            Console.ResetColor();
+                            goto NOP;
+                        }
 
-                    unchecked { regSP++; }
-                    if (!TryWriteRegisterOperand(first_operand, firstOperandType, RAM.ReadUnchecked(regSP), allowStatus: true))
-                    {
-                        Console.ForegroundColor = ConsoleColor.Red;
-                        Console.WriteLine($"Illegal POP destination register {first_operand:X4}");
-                        Console.ResetColor();
-                        goto NOP;
+                        if (Is32BitMemoryEnabled && IsPrimary32BitRegister(first_operand) && Supports32BitRegisterWrite(first_operand))
+                        {
+                            uint popped32 = PopStackValue(32);
+                            if (!TryWrite32BitRegister(first_operand, popped32))
+                            {
+                                Console.ForegroundColor = ConsoleColor.Red;
+                                Console.WriteLine($"Illegal POP destination register {first_operand:X4}");
+                                Console.ResetColor();
+                                goto NOP;
+                            }
+                        }
+                        else
+                        {
+                            ushort popped16 = (ushort)PopStackValue(16);
+                            if (!TryWriteRegisterOperand(first_operand, firstOperandType, popped16, allowStatus: true))
+                            {
+                                Console.ForegroundColor = ConsoleColor.Red;
+                                Console.WriteLine($"Illegal POP destination register {first_operand:X4}");
+                                Console.ResetColor();
+                                goto NOP;
+                            }
+                        }
                     }
-
                     return 2;
 
                 // V1.8 timing instruction.
@@ -661,7 +778,7 @@ namespace FoxVision
                     LogInstructionExecuting("WAIT", first_operand);
                     {
                         ushort delay = ResolveOperandValue(first_operand, firstOperandType);
-                        _waitStartCycle = regCYC;
+                        _waitStartCycle = (ushort)(regCYC & 0xFFFF);
                         _waitDuration = delay;
                         _waitActive = true;
                     }
@@ -811,10 +928,10 @@ namespace FoxVision
             => SetActiveRegister(regID != 0);
 
         private ushort GetValueOfTheActiveRegister()
-            => IsActiveRegisterY ? regY : regX;
+            => (ushort)((IsActiveRegisterY ? regY : regX) & 0xFFFF);
 
         private ushort GetValueOfTheInactiveRegister()
-            => IsActiveRegisterY ? regX : regY;
+            => (ushort)((IsActiveRegisterY ? regX : regY) & 0xFFFF);
 
         private void SetValueOfTheActiveRegister(ushort value)
         {
@@ -829,6 +946,106 @@ namespace FoxVision
 
         private bool IsExtendedModeEnabled
             => regEM != 0;
+
+        private bool Is32BitMemoryEnabled
+            => regEM == 2;
+
+        private static ushort NormalizeExtensionMode(ushort value)
+            => value switch
+            {
+                0 => 0,
+                1 => 1,
+                2 => 2,
+                // Unknown values behave as plain extended mode rather than
+                // silently enabling the 32-bit bus.
+                _ => 1
+            };
+
+        private bool IsByteAddressingEnabled
+            => regAM == 1;
+
+        private ushort ReadMemory(uint address)
+        {
+            if (!Is32BitMemoryEnabled)
+                address &= 0xFFFF;
+
+            if (IsByteAddressingEnabled)
+            {
+                return (ushort)RAM.ReadByte(address);
+            }
+            else
+            {
+                return RAM.ReadWord(address);
+            }
+        }
+
+        private void WriteMemory(uint address, ushort value)
+        {
+            if (!Is32BitMemoryEnabled)
+                address &= 0xFFFF;
+
+            if (IsByteAddressingEnabled)
+            {
+                RAM.WriteByte(address, (byte)(value & 0xFF));
+            }
+            else
+            {
+                RAM.WriteWord(address, value);
+            }
+        }
+
+        // Pushes a value onto the hardware stack. The stack grows downwards.
+        // In word-addressed mode each 16-bit unit occupies one word; in
+        // byte-addressed mode each unit occupies one byte.
+        private void PushStackValue(uint value, int bits)
+        {
+            int units = IsByteAddressingEnabled ? bits / 8 : bits / 16;
+
+            if (IsByteAddressingEnabled)
+            {
+                for (int i = units - 1; i >= 0; i--)
+                {
+                    uint address = regSP - (uint)(units - 1 - i);
+                    if (!Is32BitMemoryEnabled)
+                        address &= 0xFFFF;
+                    RAM.WriteByte(address, (byte)(value >> (8 * i)));
+                }
+            }
+            else
+            {
+                for (int i = units - 1; i >= 0; i--)
+                {
+                    uint address = regSP - (uint)(units - 1 - i);
+                    if (!Is32BitMemoryEnabled)
+                        address &= 0xFFFF;
+                    RAM.WriteWord(address, (ushort)(value >> (16 * i)));
+                }
+            }
+
+            unchecked { regSP -= (uint)units; }
+        }
+
+        // Pops a value from the hardware stack. After raising SP by the size of
+        // the stored value the units are read back in little-endian order.
+        private uint PopStackValue(int bits)
+        {
+            int units = IsByteAddressingEnabled ? bits / 8 : bits / 16;
+            unchecked { regSP += (uint)units; }
+
+            uint value = 0;
+            for (int i = 0; i < units; i++)
+            {
+                uint unitAddress = regSP - (uint)(units - 1 - i);
+                if (!Is32BitMemoryEnabled)
+                    unitAddress &= 0xFFFF;
+                uint unit = IsByteAddressingEnabled
+                    ? RAM.ReadByte(unitAddress)
+                    : RAM.ReadWord(unitAddress);
+                value |= unit << (IsByteAddressingEnabled ? 8 * i : 16 * i);
+            }
+
+            return value;
+        }
 
         private bool IsEqual
             => IsPredicateSet;
@@ -901,32 +1118,154 @@ namespace FoxVision
             };
         }
 
+        private static bool RequiresExtendedMode(ushort operand)
+            => (operand >= RegisterIdR0 && operand <= RegisterIdAM)
+            || (operand >= RegisterIdXL && operand <= RegisterIdCYCH)
+            || (operand >= RegisterIdR0L && operand <= RegisterIdR7H);
+
+        private static bool IsPrimary32BitRegister(ushort operand)
+            => operand == RegisterIdX || operand == RegisterIdY || operand == RegisterIdPC
+            || operand == RegisterIdSP || operand == RegisterIdCYC
+            || (operand >= RegisterIdR0 && operand <= RegisterIdR7);
+
+        private bool TryRead32BitRegister(ushort operand, out uint value)
+        {
+            value = 0;
+            if (RequiresExtendedMode(operand) && !IsExtendedModeEnabled)
+                return false;
+            switch (operand)
+            {
+                case RegisterIdX: value = regX; return true;
+                case RegisterIdY: value = regY; return true;
+                case RegisterIdPC: value = regPC; return true;
+                case RegisterIdSP: value = regSP; return true;
+                case RegisterIdCYC: value = regCYC; return true;
+                case RegisterIdR0: value = regR[0]; return true;
+                case RegisterIdR1: value = regR[1]; return true;
+                case RegisterIdR2: value = regR[2]; return true;
+                case RegisterIdR3: value = regR[3]; return true;
+                case RegisterIdR4: value = regR[4]; return true;
+                case RegisterIdR5: value = regR[5]; return true;
+                case RegisterIdR6: value = regR[6]; return true;
+                case RegisterIdR7: value = regR[7]; return true;
+                case RegisterIdEM: value = regEM; return true;
+                case RegisterIdAM: value = regAM; return true;
+
+                case RegisterIdXL: value = regX & 0xFFFF; return true;
+                case RegisterIdXH: value = (regX >> 16) & 0xFFFF; return true;
+                case RegisterIdYL: value = regY & 0xFFFF; return true;
+                case RegisterIdYH: value = (regY >> 16) & 0xFFFF; return true;
+                case RegisterIdPCL: value = regPC & 0xFFFF; return true;
+                case RegisterIdPCH: value = (regPC >> 16) & 0xFFFF; return true;
+                case RegisterIdSPL: value = regSP & 0xFFFF; return true;
+                case RegisterIdSPH: value = (regSP >> 16) & 0xFFFF; return true;
+                case RegisterIdCYCL: value = regCYC & 0xFFFF; return true;
+                case RegisterIdCYCH: value = (regCYC >> 16) & 0xFFFF; return true;
+
+                case RegisterIdR0L: value = regR[0] & 0xFFFF; return true;
+                case RegisterIdR0H: value = (regR[0] >> 16) & 0xFFFF; return true;
+                case RegisterIdR1L: value = regR[1] & 0xFFFF; return true;
+                case RegisterIdR1H: value = (regR[1] >> 16) & 0xFFFF; return true;
+                case RegisterIdR2L: value = regR[2] & 0xFFFF; return true;
+                case RegisterIdR2H: value = (regR[2] >> 16) & 0xFFFF; return true;
+                case RegisterIdR3L: value = regR[3] & 0xFFFF; return true;
+                case RegisterIdR3H: value = (regR[3] >> 16) & 0xFFFF; return true;
+                case RegisterIdR4L: value = regR[4] & 0xFFFF; return true;
+                case RegisterIdR4H: value = (regR[4] >> 16) & 0xFFFF; return true;
+                case RegisterIdR5L: value = regR[5] & 0xFFFF; return true;
+                case RegisterIdR5H: value = (regR[5] >> 16) & 0xFFFF; return true;
+                case RegisterIdR6L: value = regR[6] & 0xFFFF; return true;
+                case RegisterIdR6H: value = (regR[6] >> 16) & 0xFFFF; return true;
+                case RegisterIdR7L: value = regR[7] & 0xFFFF; return true;
+                case RegisterIdR7H: value = (regR[7] >> 16) & 0xFFFF; return true;
+                default:
+                    return false;
+            }
+        }
+
+        private static bool Supports32BitRegisterWrite(ushort operand)
+            => operand == RegisterIdX || operand == RegisterIdY || operand == RegisterIdSP
+            || (operand >= RegisterIdR0 && operand <= RegisterIdR7);
+
+        private bool TryWrite32BitRegister(ushort operand, uint value)
+        {
+            if (RequiresExtendedMode(operand) && !IsExtendedModeEnabled)
+                return false;
+
+            switch (operand)
+            {
+                case RegisterIdX: regX = value; return true;
+                case RegisterIdY: regY = value; return true;
+                case RegisterIdSP: regSP = value; return true;
+                case RegisterIdR0: regR[0] = value; return true;
+                case RegisterIdR1: regR[1] = value; return true;
+                case RegisterIdR2: regR[2] = value; return true;
+                case RegisterIdR3: regR[3] = value; return true;
+                case RegisterIdR4: regR[4] = value; return true;
+                case RegisterIdR5: regR[5] = value; return true;
+                case RegisterIdR6: regR[6] = value; return true;
+                case RegisterIdR7: regR[7] = value; return true;
+                default:
+                    return false;
+            }
+        }
+
         private bool TryReadRegisterOperand(ushort operand, byte operandType, out ushort value, bool allowStatus = false)
         {
             value = 0;
             if (!IsRegisterOperand(operandType, operand))
                 return false;
 
-            // R0-R7 are only available in extension mode
-            if (operand >= RegisterIdR0 && operand <= RegisterIdR7 && !IsExtendedModeEnabled)
+            if (RequiresExtendedMode(operand) && !IsExtendedModeEnabled)
                 return false;
 
             return operand switch
             {
-                RegisterIdX => SetOutValue(regX, out value),
-                RegisterIdY => SetOutValue(regY, out value),
-                RegisterIdR0 => SetOutValue(regR[0], out value),
-                RegisterIdR1 => SetOutValue(regR[1], out value),
-                RegisterIdR2 => SetOutValue(regR[2], out value),
-                RegisterIdR3 => SetOutValue(regR[3], out value),
-                RegisterIdR4 => SetOutValue(regR[4], out value),
-                RegisterIdR5 => SetOutValue(regR[5], out value),
-                RegisterIdR6 => SetOutValue(regR[6], out value),
-                RegisterIdR7 => SetOutValue(regR[7], out value),
+                RegisterIdX => SetOutValue((ushort)(regX & 0xFFFF), out value),
+                RegisterIdY => SetOutValue((ushort)(regY & 0xFFFF), out value),
+                RegisterIdPC => SetOutValue((ushort)(regPC & 0xFFFF), out value),
                 RegisterIdStatus when allowStatus => SetOutValue(regStatus, out value),
-                RegisterIdSP => SetOutValue(regSP, out value),
-                RegisterIdCYC => SetOutValue(regCYC, out value),
+                RegisterIdSP => SetOutValue((ushort)(regSP & 0xFFFF), out value),
+                RegisterIdCYC => SetOutValue((ushort)(regCYC & 0xFFFF), out value),
                 RegisterIdEM => SetOutValue(regEM, out value),
+                RegisterIdAM => SetOutValue(regAM, out value),
+
+                RegisterIdR0 => SetOutValue((ushort)(regR[0] & 0xFFFF), out value),
+                RegisterIdR1 => SetOutValue((ushort)(regR[1] & 0xFFFF), out value),
+                RegisterIdR2 => SetOutValue((ushort)(regR[2] & 0xFFFF), out value),
+                RegisterIdR3 => SetOutValue((ushort)(regR[3] & 0xFFFF), out value),
+                RegisterIdR4 => SetOutValue((ushort)(regR[4] & 0xFFFF), out value),
+                RegisterIdR5 => SetOutValue((ushort)(regR[5] & 0xFFFF), out value),
+                RegisterIdR6 => SetOutValue((ushort)(regR[6] & 0xFFFF), out value),
+                RegisterIdR7 => SetOutValue((ushort)(regR[7] & 0xFFFF), out value),
+
+                RegisterIdXL => SetOutValue((ushort)(regX & 0xFFFF), out value),
+                RegisterIdXH => SetOutValue((ushort)((regX >> 16) & 0xFFFF), out value),
+                RegisterIdYL => SetOutValue((ushort)(regY & 0xFFFF), out value),
+                RegisterIdYH => SetOutValue((ushort)((regY >> 16) & 0xFFFF), out value),
+                RegisterIdPCL => SetOutValue((ushort)(regPC & 0xFFFF), out value),
+                RegisterIdPCH => SetOutValue((ushort)((regPC >> 16) & 0xFFFF), out value),
+                RegisterIdSPL => SetOutValue((ushort)(regSP & 0xFFFF), out value),
+                RegisterIdSPH => SetOutValue((ushort)((regSP >> 16) & 0xFFFF), out value),
+                RegisterIdCYCL => SetOutValue((ushort)(regCYC & 0xFFFF), out value),
+                RegisterIdCYCH => SetOutValue((ushort)((regCYC >> 16) & 0xFFFF), out value),
+
+                RegisterIdR0L => SetOutValue((ushort)(regR[0] & 0xFFFF), out value),
+                RegisterIdR0H => SetOutValue((ushort)((regR[0] >> 16) & 0xFFFF), out value),
+                RegisterIdR1L => SetOutValue((ushort)(regR[1] & 0xFFFF), out value),
+                RegisterIdR1H => SetOutValue((ushort)((regR[1] >> 16) & 0xFFFF), out value),
+                RegisterIdR2L => SetOutValue((ushort)(regR[2] & 0xFFFF), out value),
+                RegisterIdR2H => SetOutValue((ushort)((regR[2] >> 16) & 0xFFFF), out value),
+                RegisterIdR3L => SetOutValue((ushort)(regR[3] & 0xFFFF), out value),
+                RegisterIdR3H => SetOutValue((ushort)((regR[3] >> 16) & 0xFFFF), out value),
+                RegisterIdR4L => SetOutValue((ushort)(regR[4] & 0xFFFF), out value),
+                RegisterIdR4H => SetOutValue((ushort)((regR[4] >> 16) & 0xFFFF), out value),
+                RegisterIdR5L => SetOutValue((ushort)(regR[5] & 0xFFFF), out value),
+                RegisterIdR5H => SetOutValue((ushort)((regR[5] >> 16) & 0xFFFF), out value),
+                RegisterIdR6L => SetOutValue((ushort)(regR[6] & 0xFFFF), out value),
+                RegisterIdR6H => SetOutValue((ushort)((regR[6] >> 16) & 0xFFFF), out value),
+                RegisterIdR7L => SetOutValue((ushort)(regR[7] & 0xFFFF), out value),
+                RegisterIdR7H => SetOutValue((ushort)((regR[7] >> 16) & 0xFFFF), out value),
                 _ => false
             };
         }
@@ -936,89 +1275,53 @@ namespace FoxVision
             if (!IsRegisterOperand(operandType, operand))
                 return false;
 
-            // R0-R7 are only writable in extension mode
-            if (operand >= RegisterIdR0 && operand <= RegisterIdR7 && !IsExtendedModeEnabled)
+            if (RequiresExtendedMode(operand) && !IsExtendedModeEnabled)
                 return false;
 
-            if (operand == RegisterIdX)
+            switch (operand)
             {
-                regX = value;
-                return true;
-            }
+                case RegisterIdX: regX = value; return true;
+                case RegisterIdY: regY = value; return true;
+                case RegisterIdSP: regSP = value; return true;
+                case RegisterIdStatus when allowStatus: regStatus = (byte)value; return true;
+                case RegisterIdEM: regEM = NormalizeExtensionMode(value); return true;
+                case RegisterIdAM: regAM = (ushort)(value != 0 ? 1 : 0); return true;
 
-            if (operand == RegisterIdY)
-            {
-                regY = value;
-                return true;
-            }
+                case RegisterIdR0: regR[0] = value; return true;
+                case RegisterIdR1: regR[1] = value; return true;
+                case RegisterIdR2: regR[2] = value; return true;
+                case RegisterIdR3: regR[3] = value; return true;
+                case RegisterIdR4: regR[4] = value; return true;
+                case RegisterIdR5: regR[5] = value; return true;
+                case RegisterIdR6: regR[6] = value; return true;
+                case RegisterIdR7: regR[7] = value; return true;
 
-            if (operand == RegisterIdR0)
-            {
-                regR[0] = value;
-                return true;
-            }
+                case RegisterIdXL: regX = (regX & 0xFFFF0000) | value; return true;
+                case RegisterIdXH: regX = (regX & 0x0000FFFF) | ((uint)value << 16); return true;
+                case RegisterIdYL: regY = (regY & 0xFFFF0000) | value; return true;
+                case RegisterIdYH: regY = (regY & 0x0000FFFF) | ((uint)value << 16); return true;
+                case RegisterIdSPL: regSP = (regSP & 0xFFFF0000) | value; return true;
+                case RegisterIdSPH: regSP = (regSP & 0x0000FFFF) | ((uint)value << 16); return true;
 
-            if (operand == RegisterIdR1)
-            {
-                regR[1] = value;
-                return true;
+                case RegisterIdR0L: regR[0] = (regR[0] & 0xFFFF0000) | value; return true;
+                case RegisterIdR0H: regR[0] = (regR[0] & 0x0000FFFF) | ((uint)value << 16); return true;
+                case RegisterIdR1L: regR[1] = (regR[1] & 0xFFFF0000) | value; return true;
+                case RegisterIdR1H: regR[1] = (regR[1] & 0x0000FFFF) | ((uint)value << 16); return true;
+                case RegisterIdR2L: regR[2] = (regR[2] & 0xFFFF0000) | value; return true;
+                case RegisterIdR2H: regR[2] = (regR[2] & 0x0000FFFF) | ((uint)value << 16); return true;
+                case RegisterIdR3L: regR[3] = (regR[3] & 0xFFFF0000) | value; return true;
+                case RegisterIdR3H: regR[3] = (regR[3] & 0x0000FFFF) | ((uint)value << 16); return true;
+                case RegisterIdR4L: regR[4] = (regR[4] & 0xFFFF0000) | value; return true;
+                case RegisterIdR4H: regR[4] = (regR[4] & 0x0000FFFF) | ((uint)value << 16); return true;
+                case RegisterIdR5L: regR[5] = (regR[5] & 0xFFFF0000) | value; return true;
+                case RegisterIdR5H: regR[5] = (regR[5] & 0x0000FFFF) | ((uint)value << 16); return true;
+                case RegisterIdR6L: regR[6] = (regR[6] & 0xFFFF0000) | value; return true;
+                case RegisterIdR6H: regR[6] = (regR[6] & 0x0000FFFF) | ((uint)value << 16); return true;
+                case RegisterIdR7L: regR[7] = (regR[7] & 0xFFFF0000) | value; return true;
+                case RegisterIdR7H: regR[7] = (regR[7] & 0x0000FFFF) | ((uint)value << 16); return true;
+                default:
+                    return false;
             }
-
-            if (operand == RegisterIdR2)
-            {
-                regR[2] = value;
-                return true;
-            }
-
-            if (operand == RegisterIdR3)
-            {
-                regR[3] = value;
-                return true;
-            }
-
-            if (operand == RegisterIdR4)
-            {
-                regR[4] = value;
-                return true;
-            }
-
-            if (operand == RegisterIdR5)
-            {
-                regR[5] = value;
-                return true;
-            }
-
-            if (operand == RegisterIdR6)
-            {
-                regR[6] = value;
-                return true;
-            }
-
-            if (operand == RegisterIdR7)
-            {
-                regR[7] = value;
-                return true;
-            }
-
-            if (operand == RegisterIdStatus && allowStatus)
-            {
-                regStatus = (byte)value;
-                return true;
-            }
-
-            if (operand == RegisterIdSP)
-            {
-                regSP = value;
-                return true;
-            }
-
-            if (operand == RegisterIdEM)
-            {
-                regEM = value;
-                return true;
-            }
-
-            return false;
         }
 
         private ushort ResolveOperandValue(ushort operand, byte operandType)
@@ -1028,19 +1331,61 @@ namespace FoxVision
 
             if (operandType == OperandTypeIndirectMemory)
             {
-                if (!TryReadRegisterOperand(operand, operandType, out ushort indirectAddress, allowStatus: false))
+                if (!TryResolveMemoryAddressOperand(operand, operandType, out uint indirectAddress))
                     return 0;
-                return RAM.ReadUnchecked(indirectAddress);
+                return ReadMemory(indirectAddress);
             }
 
             if (operandType == OperandTypeDirectMemory)
-                return RAM.ReadUnchecked(operand);
+                return ReadMemory(operand);
 
             return operand;
         }
 
-        private bool TryExecuteBinaryMoInstruction(ushort srcOperand, byte srcOperandType, ushort dstOperand, byte dstOperandType, Func<ushort, ushort, ushort> operation)
+        // Resolves an operand as a 32-bit value. Immediates and 16-bit
+        // sub-registers are zero-extended, while primary registers, pointers
+        // and memory accesses preserve their full width.
+        private bool TryResolveOperandValue32(ushort operand, byte operandType, out uint value)
         {
+            value = 0;
+
+            if (operandType == OperandTypeRegister)
+                return TryRead32BitRegister(operand, out value);
+
+            if (operandType == OperandTypeIndirectMemory)
+            {
+                if (!TryResolveMemoryAddressOperand(operand, operandType, out uint address))
+                    return false;
+                value = ReadMemory(address);
+                return true;
+            }
+
+            if (operandType == OperandTypeDirectMemory)
+            {
+                value = ReadMemory(operand);
+                return true;
+            }
+
+            value = operand;
+            return true;
+        }
+
+        private bool TryExecuteBinaryMoInstruction(ushort srcOperand, byte srcOperandType, ushort dstOperand, byte dstOperandType, Func<uint, uint, uint> operation)
+        {
+            // A primary 32-bit destination performs a full 32-bit operation
+            // only when the 32-bit memory/register model is enabled (EM=2).
+            if (Is32BitMemoryEnabled
+                && dstOperandType == OperandTypeRegister
+                && IsPrimary32BitRegister(dstOperand)
+                && TryRead32BitRegister(dstOperand, out uint dstValue32))
+            {
+                if (!TryResolveOperandValue32(srcOperand, srcOperandType, out uint srcValue32))
+                    return false;
+
+                uint result32 = operation(srcValue32, dstValue32);
+                return TryWrite32BitRegister(dstOperand, result32);
+            }
+
             ushort srcValue = ResolveOperandValue(srcOperand, srcOperandType);
 
             if (!TryReadRegisterOperand(dstOperand, dstOperandType, out ushort dstValue, allowStatus: false))
@@ -1051,15 +1396,22 @@ namespace FoxVision
                 return false;
             }
 
-            ushort result = operation(srcValue, dstValue);
-            return TryWriteRegisterOperand(dstOperand, dstOperandType, result);
+            uint result = operation(srcValue, dstValue) & 0xFFFF;
+            return TryWriteRegisterOperand(dstOperand, dstOperandType, (ushort)result);
         }
 
-        private bool TryResolveMemoryAddressOperand(ushort operand, byte operandType, out ushort address)
+        private bool TryResolveMemoryAddressOperand(ushort operand, byte operandType, out uint address)
         {
-            if (operandType == OperandTypeIndirectMemory || (operandType == OperandTypeRegister && (operand == RegisterIdX || operand == RegisterIdY)))
+            if (operandType == OperandTypeIndirectMemory || operandType == OperandTypeRegister)
             {
-                return TryReadRegisterOperand(operand, OperandTypeRegister, out address, allowStatus: false);
+                if (TryRead32BitRegister(operand, out address))
+                {
+                    if (!Is32BitMemoryEnabled)
+                        address &= 0xFFFF;
+                    return true;
+                }
+                address = 0;
+                return false;
             }
 
             if (operandType == OperandTypeDirectMemory || operandType == OperandTypeImmediate)
@@ -1077,17 +1429,13 @@ namespace FoxVision
             if (operandType != OperandTypeRegister && operandType != OperandTypeIndirectMemory)
                 return false;
 
-            return operand == RegisterIdX || operand == RegisterIdY || (operand >= RegisterIdR0 && operand <= RegisterIdR7) || operand == RegisterIdStatus || operand == RegisterIdSP || operand == RegisterIdCYC || operand == RegisterIdEM;
+            return (operand >= RegisterIdX && operand <= RegisterIdAM)
+                || (operand >= RegisterIdXL && operand <= RegisterIdCYCH)
+                || (operand >= RegisterIdR0L && operand <= RegisterIdR7H);
         }
 
         private bool TryReadPort(ushort port, out ushort value)
         {
-            if (port >= PortCount)
-            {
-                value = 0;
-                return false;
-            }
-
             var portDevices = _portDevices;
             if (port < portDevices.Length)
             {
@@ -1222,11 +1570,6 @@ namespace FoxVision
 
         private bool TryWritePort(ushort port, ushort value)
         {
-            if (port >= PortCount)
-            {
-                return false;
-            }
-
             var portDevices = _portDevices;
             if (port < portDevices.Length)
             {

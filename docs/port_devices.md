@@ -4,19 +4,24 @@ Fox Vision exposes port-based I/O for input and output devices when running in e
 
 ## Overview
 
-**NOTE:** V1.10 (`EM=1` mode) introduces ports. When enabled, the system exposes eight generic 16-bit I/O ports (`0x0000`–`0x0007`). Ports are simple bidirectional data endpoints with no fixed semantic meaning in the ISA. Device behaviour is defined externally by the emulator/system configuration.
+**NOTE:** V1.10 introduces ports. When extension mode (`EM=1` or `EM=2`) is enabled, the system exposes a 16-bit I/O port address space (`0x0000`–`0xFFFF`). Ports are simple bidirectional data endpoints with no fixed semantic meaning in the ISA. Device behaviour is defined externally by the emulator/system configuration.
 
-Port I/O is not available in legacy mode. Programs must initialize extension mode by writing `0x0001` to the `EM` register:
+Port I/O is not available in legacy mode. Programs must initialize extension mode by writing `0x0001` or `0x0002` to the `EM` register:
 
 ```
-MOV %1 EM
+MOV %1 EM   ; 16-bit extended mode
+; or
+MOV %2 EM   ; 32-bit address space mode
+MOV %1 AM   ; 8-bit byte addressing
 ```
 
 ### Port Characteristics
 
-- Eight ports are exposed
+- 16-bit port space is exposed (`0x0000` to `0xFFFF`, decimal 0 to 65,535)
 - Each port is 16 bits wide
-- Port numbers are encoded as 16-bit immediate values in the range `0x0000` to `0x0007`
+- Port numbers are encoded as 16-bit immediate values
+- Ports `0x0000` to `0x0007` default to standard emulator devices (VF16Pad, Keyboard, Mouse, TTY, Flash)
+- Ports `0x0008` to `0xFFFF` are available for user and expansion devices
 - Ports are not memory-mapped
 - Ports do not latch, queue, clear, or acknowledge input. They always return the most recent device state.
 - Device state (including controllers) is maintained continuously by the emulator as a live snapshot

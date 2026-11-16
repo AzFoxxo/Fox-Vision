@@ -13,13 +13,49 @@ EMBED_NAME_MAX = 8
 def read_rom(path: Path) -> tuple[int, list[int], bytes]:
     data = path.read_bytes()
     if data.startswith(b".VFOX16EXT"):
-        if len(data) < 19:
+        if len(data) < 11:
             raise ValueError("extended ROM header is truncated")
-        start = struct.unpack_from(">H", data, 13)[0]
-        size = struct.unpack_from(">H", data, 17)[0]
-        payload = data[19:]
+        version = data[10]
+        if version == 1:
+            if len(data) < 17:
+                raise ValueError("extended ROM header v1 is truncated")
+            start = struct.unpack_from(">H", data, 13)[0]
+            size = struct.unpack_from(">H", data, 15)[0]
+            header_len = 17
+        elif version == 2:
+            if len(data) < 19:
+                raise ValueError("extended ROM header v2 is truncated")
+            start = struct.unpack_from(">H", data, 13)[0]
+            size = struct.unpack_from(">H", data, 17)[0]
+            header_len = 19
+        elif version == 3:
+            if len(data) >= 27:
+                test_size = struct.unpack_from(">I", data, 23)[0]
+                payload_len = len(data) - 27
+                if payload_len % 2 != 0:
+                    payload_len += 1
+                if payload_len // 2 == test_size:
+                    header_len = 27
+                    start = struct.unpack_from(">I", data, 15)[0]
+                    size = test_size
+                else:
+                    if len(data) < 25:
+                        raise ValueError("extended ROM header v3 is truncated")
+                    header_len = 25
+                    start = struct.unpack_from(">I", data, 13)[0]
+                    size = struct.unpack_from(">I", data, 21)[0]
+            elif len(data) >= 25:
+                header_len = 25
+                start = struct.unpack_from(">I", data, 13)[0]
+                size = struct.unpack_from(">I", data, 21)[0]
+            else:
+                raise ValueError("extended ROM header v3 is truncated")
+        else:
+            raise ValueError(f"unsupported extended ROM version: {version}")
+        payload = data[header_len:]
+        header_bytes = data[:header_len]
     elif data.startswith(b".VISOFOX16"):
-        start, size, payload = 0, None, data[10:]
+        start, size, payload, header_bytes = 0, None, data[10:], data[:10]
     else:
         raise ValueError(f"{path} is not a Fox Vision ROM image")
 
@@ -29,7 +65,7 @@ def read_rom(path: Path) -> tuple[int, list[int], bytes]:
         payload = payload[:size * 2]
     elif len(payload) % 2:
         raise ValueError(f"{path} has an odd payload length")
-    return start, list(struct.unpack(f">{len(payload) // 2}H", payload)), data[:19]
+    return start, list(struct.unpack(f">{len(payload) // 2}H", payload)), header_bytes
 
 
 def main() -> int:
@@ -66,11 +102,20 @@ def main() -> int:
         len(program_words),
         *program_words,
     ]
-    if len(combined) > 0x8000:
+    version = header[10] if len(header) > 10 else 0
+    mapper = struct.unpack_from(">H", header, 11)[0] if len(header) >= 13 else 0
+    max_limit = 0x80000000 if mapper == 2 or version == 3 else 0x8000
+    if len(combined) > max_limit:
         raise ValueError("combined OS image exceeds extended ROM space")
 
     output_header = bytearray(header)
-    struct.pack_into(">H", output_header, 17, len(combined))
+    if version == 3:
+        size_offset = 23 if len(output_header) >= 27 else 21
+        struct.pack_into(">I", output_header, size_offset, len(combined))
+    elif version == 2:
+        struct.pack_into(">H", output_header, 17, len(combined))
+    elif version == 1:
+        struct.pack_into(">H", output_header, 15, len(combined))
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_bytes(bytes(output_header) + struct.pack(f">{len(combined)}H", *combined))
     print(f"embedded {args.embed_program} ({len(program_words)} words) into {args.output}")

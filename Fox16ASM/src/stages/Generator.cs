@@ -30,17 +30,26 @@ class Generator
         AssemblerMode mode,
         DebugFlags debugFlags,
         bool strictFormat = false,
-        ushort loadAddress = 0)
+        uint loadAddress = 0,
+        byte? romVersion = null,
+        ushort? mapper = null)
     {
+        byte effectiveVersion = romVersion ?? (mode == AssemblerMode.Extended2 || loadAddress > ushort.MaxValue ? (byte)3 : (byte)2);
+        ushort effectiveMapper = mapper ?? (effectiveVersion == 3 || mode == AssemblerMode.Extended2 ? (ushort)2 : (ushort)1);
+        if (effectiveMapper == 2 && !romVersion.HasValue)
+        {
+            effectiveVersion = 3;
+        }
+
         var diagnostics = new List<Diagnostic>();
-        var labelTable = ResolveLabelAddresses(ir, sourceFile, debugFlags, diagnostics, loadAddress);
+        var labelTable = ResolveLabelAddresses(ir, sourceFile, debugFlags, diagnostics, loadAddress, is32BitLimit: effectiveMapper == 2 || effectiveVersion == 3 || mode == AssemblerMode.Extended2);
         if (diagnostics.Any(d => d.Severity == DiagnosticSeverity.Error))
             return CompilationResult<GenerationOutput>.Failed(diagnostics);
 
         var payloadWordCount = GetPayloadWordCount(ir);
         if (strictFormat)
         {
-            var maximumPayloadWords = GetStrictFormatMaxPayloadWords(mode);
+            var maximumPayloadWords = GetStrictFormatMaxPayloadWords(mode, effectiveMapper);
             if (payloadWordCount > maximumPayloadWords)
             {
                 diagnostics.Add(Diagnostic.Error(
@@ -54,7 +63,7 @@ class Generator
         using var writer = new EndianBinaryWriter(EndianBitConverter.Big, memory);
 
         var resetVector = ResolveResetVectorAddress(ir, loadAddress);
-        WriteHeader(memory, mode, payloadWordCount, loadAddress, resetVector);
+        WriteHeader(memory, mode, payloadWordCount, loadAddress, resetVector, effectiveVersion, effectiveMapper);
 
         foreach (var item in ir.Items)
         {
@@ -126,22 +135,26 @@ class Generator
     private static int GetPayloadWordCount(AssemblerIR ir)
         => ir.Items.Sum(item => item.WordCount) + 2;
 
-    private static ushort ResolveResetVectorAddress(AssemblerIR ir, ushort loadAddress)
+    private static uint ResolveResetVectorAddress(AssemblerIR ir, uint loadAddress)
     {
-        int address = loadAddress;
+        uint address = loadAddress;
         foreach (var item in ir.Items)
         {
             if (item.SegmentKind == IRSegmentKind.Code)
-                return (ushort)address;
+                return address;
 
-            address += item.WordCount;
+            address += (uint)item.WordCount;
         }
 
         return 0;
     }
 
-    private static int GetStrictFormatMaxPayloadWords(AssemblerMode mode)
-        => mode == AssemblerMode.Extended ? ExtendedStrictFormatMaxPayloadWords : LegacyStrictFormatMaxPayloadWords;
+    private static long GetStrictFormatMaxPayloadWords(AssemblerMode mode, ushort mapper)
+    {
+        if (mapper == 2 || mode == AssemblerMode.Extended2)
+            return int.MaxValue;
+        return mode != AssemblerMode.Legacy ? ExtendedStrictFormatMaxPayloadWords : LegacyStrictFormatMaxPayloadWords;
+    }
 
     private static bool ValidateInstructionOperands(
         IRInstruction instruction,
@@ -150,16 +163,19 @@ class Generator
         string sourceFile,
         List<Diagnostic> diagnostics)
     {
-        // In legacy mode, R0-R7 registers are not available.
+        // In legacy mode, extended registers (R0-R7, AM, sub-registers) are not available.
         if (mode == AssemblerMode.Legacy)
         {
             for (int i = 0; i < resolvedOperands.Count; i++)
             {
                 var ro = resolvedOperands[i];
-                if (ro.Kind == IROperandKind.Register && ro.Value >= 0x0007 && ro.Value <= 0x000E)
+                if (ro.Kind == IROperandKind.Register && ro.Value >= 0x0007)
                 {
+                    string regName = Enum.IsDefined(typeof(RegisterId), ro.Value)
+                        ? ((RegisterId)ro.Value).ToString()
+                        : $"0x{ro.Value:X4}";
                     diagnostics.Add(Diagnostic.Error(
-                        $"Register operand 'R{ro.Value - 0x0007}' is only available in extended mode.",
+                        $"Register operand '{regName}' is only available in extended mode.",
                         sourceFile,
                         instruction.Line,
                         instruction.Column,
@@ -219,17 +235,6 @@ class Generator
             return false;
         }
 
-        if (portOperand.Value > 0x0007)
-        {
-            diagnostics.Add(Diagnostic.Error(
-                $"Port operand for opcode '{instruction.Opcode}' must be in the range 0x0000 to 0x0007.",
-                sourceFile,
-                instruction.Line,
-                instruction.Column,
-                instruction.SourceLine));
-            return false;
-        }
-
         return true;
     }
 
@@ -238,17 +243,18 @@ class Generator
         string sourceFile,
         DebugFlags debugFlags,
         List<Diagnostic> diagnostics,
-        ushort loadAddress)
+        uint loadAddress,
+        bool is32BitLimit = false)
     {
         var labelsByName = new Dictionary<string, ushort>(StringComparer.OrdinalIgnoreCase);
-        var itemAddresses = new int[ir.Items.Count];
-        var eofAddress = (int)loadAddress;
+        var itemAddresses = new long[ir.Items.Count];
+        var eofAddress = (long)loadAddress;
 
         for (var i = 0; i < ir.Items.Count; i++)
         {
             itemAddresses[i] = eofAddress;
             eofAddress += ir.Items[i].WordCount;
-            if (eofAddress > ushort.MaxValue)
+            if (!is32BitLimit && eofAddress > ushort.MaxValue)
             {
                 diagnostics.Add(Diagnostic.Error(
                     "Program exceeds addressable 16-bit ROM space.",
@@ -423,22 +429,46 @@ class Generator
         };
     }
 
-    private static void WriteHeader(Stream stream, AssemblerMode mode, int payloadWordCount, ushort loadAddress, ushort resetVector)
+    private static void WriteHeader(Stream stream, AssemblerMode mode, int payloadWordCount, uint loadAddress, uint resetVector, byte version, ushort mapper)
     {
-        if (mode == AssemblerMode.Extended)
+        if (mode != AssemblerMode.Legacy)
         {
             var magicBytes = System.Text.Encoding.ASCII.GetBytes(".VFOX16EXT");
             stream.Write(magicBytes, 0, magicBytes.Length);
-            stream.WriteByte(2);
-            WriteBigEndianUInt16(stream, 1);
-            WriteBigEndianUInt16(stream, loadAddress);
-            WriteBigEndianUInt16(stream, resetVector);
-            WriteBigEndianUInt16(stream, (ushort)payloadWordCount);
+            stream.WriteByte(version);
+            if (version == 3)
+            {
+                WriteBigEndianUInt16(stream, mapper);
+                WriteBigEndianUInt32(stream, loadAddress);
+                WriteBigEndianUInt32(stream, resetVector);
+                WriteBigEndianUInt32(stream, (uint)payloadWordCount);
+            }
+            else if (version == 2)
+            {
+                WriteBigEndianUInt16(stream, mapper);
+                WriteBigEndianUInt16(stream, (ushort)loadAddress);
+                WriteBigEndianUInt16(stream, (ushort)resetVector);
+                WriteBigEndianUInt16(stream, (ushort)payloadWordCount);
+            }
+            else
+            {
+                WriteBigEndianUInt16(stream, mapper);
+                WriteBigEndianUInt16(stream, (ushort)loadAddress);
+                WriteBigEndianUInt16(stream, (ushort)payloadWordCount);
+            }
             return;
         }
 
         var legacyMagicBytes = System.Text.Encoding.ASCII.GetBytes(".VISOFOX16");
         stream.Write(legacyMagicBytes, 0, legacyMagicBytes.Length);
+    }
+
+    private static void WriteBigEndianUInt32(Stream stream, uint value)
+    {
+        stream.WriteByte((byte)(value >> 24));
+        stream.WriteByte((byte)((value >> 16) & 0xFF));
+        stream.WriteByte((byte)((value >> 8) & 0xFF));
+        stream.WriteByte((byte)(value & 0xFF));
     }
 
     private static void WriteBigEndianUInt16(Stream stream, ushort value)

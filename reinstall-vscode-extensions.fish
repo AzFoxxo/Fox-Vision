@@ -1,7 +1,15 @@
 #!/usr/bin/env fish
 
 set -g root (cd (dirname (status --current-filename)); and pwd)
-set -q VSCODE_BIN; or set -g VSCODE_BIN code
+if not set -q VSCODE_BIN
+    for bin in code code-insiders codium code-oss cursor
+        if command -q $bin
+            set -g VSCODE_BIN $bin
+            break
+        end
+    end
+    set -q VSCODE_BIN; or set -g VSCODE_BIN code
+end
 set -g tmp_dir (mktemp -d)
 
 function cleanup --on-event fish_exit

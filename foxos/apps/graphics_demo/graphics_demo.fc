@@ -1,0 +1,47 @@
+// graphics_demo – FoxOS foreground application
+// Loaded at 0x4000, launched by foxsh via "run /bin/graphics"
+//
+// Cycles a 16-color palette across a 100×50 (5000 pixel) block of VRAM,
+// producing a smooth scrolling-gradient animation synced to vertical blank.
+//
+// VRAM is mapped at the top of the Fox16 address space (0xFFFF downwards).
+
+u16 VRAM_TOP = 65535;
+u16 PIXELS   = 5000;
+u16 phase    = 0;
+
+// Return a 4-bit palette index for pixel idx at animation phase p.
+u16 colorFor(u16 idx, u16 p)
+{
+    u16 v = idx + p;
+    return v & 15;
+}
+
+// Paint a full frame into VRAM.
+void drawFrame(u16 p)
+{
+    u16 addr = VRAM_TOP;
+    u16 i    = 0;
+    while (i < PIXELS)
+    {
+        poke(addr, colorFor(i, p));
+        addr = addr - 1;
+        i    = i + 1;
+    }
+}
+
+// Wait for the next vertical-blank signal.
+void waitVBlank()
+{
+    vblank();
+}
+
+void main()
+{
+    while (1)
+    {
+        drawFrame(phase);
+        phase = (phase + 1) & 15;
+        waitVBlank();
+    }
+}

@@ -2,7 +2,6 @@ package foxc
 
 import (
 	"fmt"
-	"strconv"
 )
 
 type parser struct {
@@ -321,7 +320,7 @@ func (p *parser) parseVarDeclTail(typ Type, name string) (*VarDecl, error) {
 			if err != nil {
 				return nil, err
 			}
-			arrLen, err := strconv.Atoi(lenTok.text)
+			arrLen, err := parseIntLiteral(lenTok.text)
 			if err != nil || arrLen <= 0 {
 				return nil, fmt.Errorf("invalid array length %q at %d:%d", lenTok.text, lenTok.line, lenTok.col)
 			}
@@ -554,7 +553,10 @@ func (p *parser) parseUnary() (Expr, error) {
 func (p *parser) parsePrimary() (Expr, error) {
 	if p.at(tokNumber) {
 		tok := p.next()
-		v, _ := strconv.Atoi(tok.text)
+		v, err := parseIntLiteral(tok.text)
+		if err != nil {
+			return nil, fmt.Errorf("invalid number %q at %d:%d", tok.text, tok.line, tok.col)
+		}
 		return &IntLit{Value: v}, nil
 	}
 	if p.at(tokChar) {
@@ -628,6 +630,8 @@ func (p *parser) parseType() (TypeKind, error) {
 		return TypeU8, nil
 	case "u16":
 		return TypeU16, nil
+	case "u32":
+		return TypeU32, nil
 	case "void":
 		return TypeVoid, nil
 	default:

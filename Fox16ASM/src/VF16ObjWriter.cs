@@ -56,7 +56,25 @@ public static class VF16ObjWriter
         if (romBytes.Length >= extendedMagic.Length &&
             Encoding.ASCII.GetString(romBytes, 0, extendedMagic.Length) == extendedMagic)
         {
-            const int extendedHeaderLength = 17;
+            byte version = romBytes.Length > 10 ? romBytes[10] : (byte)1;
+            int extendedHeaderLength = version switch
+            {
+                1 => 17,
+                2 => 19,
+                3 => 25,
+                _ => 19
+            };
+            if (version == 3 && romBytes.Length >= 27)
+            {
+                uint expectedWords4 = (uint)((romBytes[23] << 24) | (romBytes[24] << 16) | (romBytes[25] << 8) | romBytes[26]);
+                int pBytes = romBytes.Length - 27;
+                if ((pBytes & 1) != 0) pBytes++;
+                if ((ulong)(pBytes / 2) == expectedWords4)
+                {
+                    extendedHeaderLength = 27;
+                }
+            }
+
             if (romBytes.Length <= extendedHeaderLength)
                 return Array.Empty<byte>();
 

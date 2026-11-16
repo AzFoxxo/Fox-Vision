@@ -3,30 +3,16 @@
     "name": "Fox16ASM",
     "scopeName": "source.fox16asm",
     "patterns": [
-        {
-            "include": "#comments"
-        },
-        {
-            "include": "#labels"
-        },
-        {
-            "include": "#directives"
-        },
-        {
-            "include": "#keywords"
-        },
-        {
-            "include": "#registers"
-        },
-        {
-            "include": "#machineSymbols"
-        },
-        {
-            "include": "#numbers"
-        },
-        {
-            "include": "#constants"
-        }
+        { "include": "#comments" },
+        { "include": "#labels" },
+        { "include": "#directives" },
+        { "include": "#keywords" },
+        { "include": "#subregisters" },
+        { "include": "#registers" },
+        { "include": "#machineSymbols" },
+        { "include": "#numbers" },
+        { "include": "#constants" },
+        { "include": "#strings" }
     ],
     "repository": {
         "comments": {
@@ -40,7 +26,7 @@
         "labels": {
             "patterns": [
                 {
-                    "name": "entity.name.label",
+                    "name": "entity.name.label.fox16asm",
                     "match": "^\\s*:[A-Za-z_][A-Za-z0-9_]*"
                 }
             ]
@@ -49,22 +35,38 @@
             "patterns": [
                 {
                     "name": "keyword.control.directive.fox16asm",
-                    "match": "^\\s*@(?:const)\\b"
+                    "match": "^\\s*@(?:const|include|org|align|db|dw)\\b"
                 }
             ]
         },
         "keywords": {
             "patterns": [
                 {
-                    "name": "keyword.control",
-                    "match": "(?i)\\b(?:NOP|LFM|WTM|SRA|AXY|SXY|MXY|DXY|EQU|LEQ|JPZ|JNZ|JMP|CLR|HLT|BSL|BSR|AND|ORA|OR|XOR|DWR|ILM|IWR|INC|DEC|MOV|STR|LOD|CMP|JEQ|JNE|JLT|JGT|JLE|JGE|ADD|SUB|MUL|DIV|SHL|SHR|PUSH|POP|WAIT|VBLANK|VBL|IN|OUT|OSRET|DBG_LGC|DBG_MEM|DBG_INP)\\b"
+                    "comment": "Modern MOI multi-operand instructions (ISA V1.10+)",
+                    "name": "keyword.control.moi.fox16asm",
+                    "match": "(?i)\\b(?:MOV|STR|LOD|CMP|ADD|SUB|MUL|DIV|SHL|SHR|AND|OR|XOR|PUSH|POP|JMP|JEQ|JNE|JLT|JGT|JLE|JGE|IN|OUT|WAIT|VBLANK|VBL|OSRET|NOP|HLT|INC|DEC)\\b"
+                },
+                {
+                    "comment": "Legacy single-operand/no-operand instructions",
+                    "name": "keyword.control.legacy.fox16asm",
+                    "match": "(?i)\\b(?:LFM|WTM|SRA|AXY|SXY|MXY|DXY|EQU|LEQ|JPZ|JNZ|CLR|BSL|BSR|ORA|XOR|DWR|ILM|IWR|DBG_LGC|DBG_MEM|DBG_INP)\\b"
+                }
+            ]
+        },
+        "subregisters": {
+            "comment": "V2.0 high/low 32-bit sub-registers — match before generic registers",
+            "patterns": [
+                {
+                    "name": "variable.language.subregister.fox16asm",
+                    "match": "(?i)\\b(?:R[0-7][HL]|X[HL]|Y[HL]|PC[HL]|SP[HL]|CYC[HL]|AM)\\b"
                 }
             ]
         },
         "registers": {
             "patterns": [
                 {
-                    "name": "variable.language",
+                    "comment": "Core always-available registers",
+                    "name": "variable.language.register.fox16asm",
                     "match": "(?i)\\b(?:X|Y|STATUS)\\b"
                 }
             ]
@@ -72,28 +74,46 @@
         "machineSymbols": {
             "patterns": [
                 {
-                    "name": "variable.language",
-                    "match": "(?i)\\b(?:PC|SP|CYC|EM|R[0-7]|PORT[0-7])\\b"
+                    "comment": "Extended/V2 special registers",
+                    "name": "support.variable.machine.fox16asm",
+                    "match": "(?i)\\b(?:PC|SP|CYC|EM|R[0-7])\\b"
+                },
+                {
+                    "comment": "Port operands — full 16-bit range allowed in em2_am1 mode",
+                    "name": "support.variable.port.fox16asm",
+                    "match": "(?i)\\bPORT[0-9]+\\b"
                 }
             ]
         },
         "numbers": {
             "patterns": [
                 {
-                    "name": "constant.numeric.decimal.fox16asm",
-                    "match": "%[0-9]+\\b"
+                    "name": "constant.numeric.immediate.fox16asm",
+                    "match": "%[0-9]+"
                 },
                 {
                     "name": "constant.numeric.hex.fox16asm",
-                    "match": "\\$[0-9A-Fa-f]+\\b"
+                    "match": "\\$[0-9A-Fa-f]+"
+                },
+                {
+                    "name": "constant.numeric.decimal.fox16asm",
+                    "match": "(?<![A-Za-z_$%@])\\b[0-9]+\\b"
                 }
             ]
         },
         "constants": {
             "patterns": [
                 {
-                    "name": "constant.other.symbol",
+                    "name": "constant.other.symbol.fox16asm",
                     "match": "<[A-Za-z_][A-Za-z0-9_]*>"
+                }
+            ]
+        },
+        "strings": {
+            "patterns": [
+                {
+                    "name": "string.quoted.double.fox16asm",
+                    "match": "\"(?:\\\\.|[^\"\\\\\\r\\n])*\""
                 }
             ]
         }

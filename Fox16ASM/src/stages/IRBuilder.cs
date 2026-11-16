@@ -350,9 +350,9 @@ class IRBuilder
         }
 
         var upperPart = part.ToUpperInvariant();
-        if (upperPart.Length == 5 && upperPart.StartsWith("PORT", StringComparison.Ordinal) && upperPart[4] >= '0' && upperPart[4] <= '7')
+        if (upperPart.StartsWith("PORT", StringComparison.Ordinal) && upperPart.Length > 4 && ushort.TryParse(upperPart.Substring(4), out var portIndex))
         {
-            if (mode != AssemblerMode.Extended)
+            if (mode == AssemblerMode.Legacy)
             {
                 diagnostics.Add(Diagnostic.Error(
                     $"Port operand '{part}' requires --mode extended.",
@@ -364,8 +364,7 @@ class IRBuilder
                 return false;
             }
 
-            var portIndex = upperPart[4] - '0';
-            operand = IROperand.Immediate((ushort)portIndex, sourceLine.LineNumber, column);
+            operand = IROperand.Immediate(portIndex, sourceLine.LineNumber, column);
             return true;
         }
 

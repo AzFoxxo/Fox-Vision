@@ -4,4 +4,5 @@ enum AssemblerMode
 {
     Legacy,
     Extended,
+    Extended2,
 }

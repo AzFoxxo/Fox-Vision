@@ -1,30 +1,48 @@
 # FoxC Tools
 
-FoxC Tools is a small VS Code extension for FoxC source files (`.fc`). It provides:
+FoxC Tools is a VS Code extension for FoxC source files (`.fc`). It provides syntax highlighting, completions, hover documentation, snippets, and validation.
 
-- Syntax highlighting for language keywords, types, built-ins, operators, and comments
-- Syntax highlighting for character and string literals, including escaped characters
-- Basic completion items for common keywords, types, built-ins, and snippets
-- FoxOS built-ins: `os_start(address)` and `os_return()`
-- Lightweight validation for common mistakes such as missing semicolons, unmatched braces, duplicate declarations, unknown identifiers, and incorrect call shapes
+Supports legacy, extended (V1.10), and V2.0 (`em2_am1`) language features.
 
-FoxC literals follow the compiler's byte-oriented rules:
+## Features
 
-- Character literals use single quotes and produce one `u8`, for example `'A'` or `'\n'`.
-- String literals use double quotes, support escaped characters, and produce a NUL-terminated `u8 *`.
-- String literals can initialize inferred or explicitly sized `u8` arrays, for example
-  `u8 message[] = "Hello";` or `u8 message[6] = "Hello";`.
-- An explicitly sized array must include space for the terminating NUL. `u8` array
-  storage is packed, while string data used as a pointer is emitted as read-only
-  byte data.
+- **Syntax Highlighting**:
+  - Keywords: `if`, `else`, `while`, `return`
+  - Types: `u8`, `u16`, `u32`, `void`, and pointers (`u8 *`, `u16 *`, `u32 *`)
+  - Built-ins:
+    - Core: `poke(addr, val)`, `peek(addr)`, `wait(cycles)`, `cyc()`, `vblank()`
+    - FoxOS: `os_start(address)`, `os_return()`
+    - Extended I/O: `in_port(port)`, `out_port(port, value)` (ports 0–65535 in `em2_am1` mode)
+    - V2.0 addressing & mode control: `am()`, `set_am(val)`, `em()`, `set_em(val)`
+  - Operators: Arithmetic, bitwise, comparison, logical, assignment, address-of (`&`), and dereference (`*`)
+  - Literals: Single-byte character literals (`'A'`), string literals (`"Hello"`), and decimal integers
+  - Comments: `//` line comments and `/* */` block comments
+- **IntelliSense & Autocomplete**:
+  - Type completions (`u8`, `u16`, `u32`, `void`) with descriptions
+  - Built-in functions with parameter signatures and return types
+  - Document symbol completions for declared variables and functions
+  - Snippets: `if`, `ifelse`, `while`, `main`, `return`, `u32var`
+- **Hover Documentation**:
+  - Detailed hover tooltips for all built-in functions including parameters and mode requirements
+  - Hover information for data types explaining bit widths, storage, and mode constraints
+  - Hover tooltips for user-defined functions
+- **Lightweight Validation**:
+  - Missing semicolons, unmatched braces, duplicate declarations
+  - Signature and argument count checking on built-in calls
+  - Validation of `main()` entry point signature
 
-## Install locally
+## Installation
 
-1. Open the Extensions view in VS Code.
-2. Use `Developer: Install Extension from Location...`.
-3. Select the `vscode-foxc` folder in this repository.
-4. Reload VS Code.
+Run the workspace reinstall script:
 
-## Notes
+```fish
+./reinstall-vscode-extensions.fish
+```
 
-The extension is intentionally lightweight. It mirrors the FoxC language subset documented in `FoxC/grammar.ebnf` and the compiler in `FoxC/internal/foxc`.
+Or manually package and install:
+
+```bash
+cd vscode-foxc
+npx @vscode/vsce package
+code --install-extension foxc-tools-*.vsix
+```

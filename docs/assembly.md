@@ -17,7 +17,7 @@ This will compile `file.f16` and produce `vfox16.bin` in the same directory.
 - `-o, --output <rom>` - Output ROM file (default: `vfox16.bin`)
 - `--tokens` - Show token debug output during compilation
 - `--labels` - Show label resolution debug output during compilation
-- `--mode <legacy|extended>` - Select the machine mode for this build (default: `legacy`). Use `--mode extended` to enable extension mode (`EM=0x0001`).
+- `--mode <legacy|extended|em2_am1>` - Select the machine mode for this build (default: `legacy`). Use `--mode extended` for 16-bit extended mode (`EM=0x0001`), or `--mode em2_am1` (aliases: `extended2`, `v2`, `em2`) for the ISA V2.0 instruction set with 32-bit address space and 32-bit registers. The assembler does not itself choose an addressing granularity; the program sets `AM` at run time (`AM=1` for byte addressing, `AM=0` for word addressing).
 - `--strict-format` - Enforce the ROM payload limit for the selected mode
 - `--load-address <addr>` - Load the ROM payload at a non-zero address, such
   as `0x4000` for a FoxOS foreground program
@@ -92,12 +92,13 @@ control to a foreground program address.
 
 Frame pacing instructions include `WAIT` for cycle-based delays and `VBLANK` for waiting until the next rendered frame refresh. The assembler also accepts the shorter alias `VBL`.
 
-Extension mode adds the `EM` machine register and the `IN`/`OUT` port I/O instructions in the machine spec. When writing assembly that targets V1.10-capable ROMs, use `EM` to switch between modes:
+Extension mode adds the `EM` and `AM` machine registers and the `IN`/`OUT` port I/O instructions in the machine spec. When writing assembly that targets extended-capable ROMs, use `EM` and `AM` to switch between modes:
 
 - Legacy (default, `EM = 0x0000`): active-register instruction forms are permitted.
-- Extended (new, `EM = 0x0001`): active-register instruction forms are disabled; the ISA exposes port I/O via `IN`/`OUT` and named port identifiers. Multi-operand, comparison/jump, ALU, stack, and port instructions require `--mode extended`.
+- Extended (`EM = 0x0001`): active-register instruction forms are disabled; the ISA exposes port I/O via `IN`/`OUT` and named port identifiers. Multi-operand, comparison/jump, ALU, stack, and port instructions require `--mode extended`.
+- Modern V2.0 (`EM = 0x0002`): 32-bit address bus for memory addressing, 32-bit registers (`R0`–`R7`, `X`, `Y`, `PC`, `SP`, `CYC`) and high/low sub-registers (`R0L`/`R0H`, etc.). Select via `--mode em2_am1`. The program chooses `AM=1` for 8-bit byte addressing or `AM=0` for 16-bit word addressing; both are valid with `EM=2`.
 
-In extended mode ports `0x0000` through `0x0007` are available as 16-bit bidirectional endpoints and return the current device state at the time of execution. The assembler accepts symbolic port names `PORT0`..`PORT7` (case-insensitive) which encode to immediate values `0x0000`..`0x0007` when used as port operands.
+In extended modes, the full 16-bit port space `0x0000` through `0xFFFF` is accessible. The assembler accepts symbolic port names `PORT0`..`PORT65535` (case-insensitive) as well as immediate values `%0`..`%65535` or `$0`..`$FFFF` when used as port operands.
 
 Example (extended mode):
 
@@ -107,6 +108,10 @@ IN PORT1 X
 
 ; Write register Y out to PORT0
 OUT Y PORT0
+
+; Read from higher port into 32-bit sub-register
+IN PORT100 R0L
+OUT R0H PORT100
 ```
 
 To denote the type of data, the following prefixes are used:
@@ -169,10 +174,15 @@ All preprocessor directives (lines starting with `@`) are removed before compila
 
 ## Machine Mode Notes
 
-- `EM` is a machine register used to select the active mode.
-- `0x0000` keeps legacy behavior enabled.
-- `0x0001` enables extension mode and port I/O.
-- `--mode` is the assembler flag used to select the machine mode; use `--mode extended` to enable extension mode for a build.
+- `EM` is a machine register used to select the active mode:
+  - `0x0000` (legacy mode): active-register instruction forms permitted, 16-bit address space.
+  - `0x0001` (extended mode): port I/O enabled, active-register forms disabled, 16-bit address space.
+  - `0x0002` (32-bit memory address space): unlocks 32-bit address bus for memory addressing.
+- `AM` is a machine register used to select addressing granularity:
+  - `0` (`0x0000`): 16-bit word addressing.
+  - `1` (`0x0001`): 8-bit byte addressing.
+- `AM=1` and `EM=2` can be used independently. Use `AM=1` for a byte-addressed memory model and `AM=0` for a word-addressed model. Some toolchains (for example FoxC) keep `AM=0` because their labels, globals and pointers are word-based.
+- `--mode` is the assembler flag used to select the instruction set/machine mode; use `--mode extended` for 16-bit extension mode or `--mode em2_am1` for ISA V2.0. The program is responsible for writing `EM` and `AM` at startup.
 - `--strict-format` limits ROM payloads to 4K words in legacy mode and 32K words in extension mode.
 - Ports do not latch, queue, clear, or acknowledge input.
 
@@ -181,22 +191,26 @@ All preprocessor directives (lines starting with `@`) are removed before compila
 To simplify assembly, the following register and port constants are recognised by the assembler and map to the canonical machine IDs used by the CPU spec:
 
 - Registers:
-	- `X` : `0x0` (general-purpose)
-	- `Y` : `0x1` (general-purpose)
-	- `PC` : `0x2` (program counter, not writable)
+	- `X` : `0x0` (general-purpose, 32-bit; aliased by `XL` `0x10` and `XH` `0x11`)
+	- `Y` : `0x1` (general-purpose, 32-bit; aliased by `YL` `0x12` and `YH` `0x13`)
+	- `PC` : `0x2` (program counter, 32-bit, not writable; aliased by `PCL` `0x14` and `PCH` `0x15`)
 	- `STATUS` : `0x3` (flags register)
-	- `SP` : `0x4` (stack pointer)
-	- `CYC` : `0x5` (cycle counter, read-only)
-	- `EM` : `0x6` (extension mode register, defaults to `0x0000`)
+	- `SP` : `0x4` (stack pointer, 32-bit; aliased by `SPL` `0x16` and `SPH` `0x17`)
+	- `CYC` : `0x5` (cycle counter, 32-bit, read-only; aliased by `CYCL` `0x18` and `CYCH` `0x19`)
+	- `EM` : `0x6` (extension mode register: `0` = legacy, `1` = extended 16-bit, `2` = 32-bit memory address space)
+	- `R0` - `R7` : `0x7` - `0xE` (general-purpose 32-bit registers; aliased by `R0L`/`R0H` through `R7L`/`R7H` `0x20` - `0x2F`)
+	- `AM` : `0xF` (addressing mode register: `0` = 16-bit word addressing, `1` = 8-bit byte addressing)
 
 - Ports (symbolic immediate encodings):
-	- `PORT0` = `0x0000`
-	- `PORT1` = `0x0001`
-	- `PORT2` = `0x0002`
-	- `PORT3` = `0x0003`
-	- `PORT4` = `0x0004`
-	- `PORT5` = `0x0005`
-	- `PORT6` = `0x0006`
-	- `PORT7` = `0x0007`
+	- `PORT0` - `PORT65535` = `0x0000` - `0xFFFF` (symbolic port aliases for immediate port operands)
+	- Default emulator mapping:
+		- `PORT0` = `0x0000` (VF16Pad Player 1)
+		- `PORT1` = `0x0001` (VF16Pad Player 2)
+		- `PORT2` = `0x0002` (VF16Keyboard)
+		- `PORT3` = `0x0003` (VF16Mouse)
+		- `PORT4` = `0x0004` (VF16TTY)
+		- `PORT5` = `0x0005` (VF16Flash)
+		- `PORT6` - `PORT7` = `0x0006` - `0x0007` (reserved/custom devices)
+		- `PORT8` - `PORT65535` = `0x0008` - `0xFFFF` (user and expansion ports)
 
 These names can be used in instruction operands where appropriate (for example `IN PORT1 X` in extended mode). Port-to-device mappings remain implementation-defined and are assigned by the emulator.

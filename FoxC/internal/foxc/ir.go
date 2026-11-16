@@ -23,7 +23,7 @@ const (
 
 type knownValue struct {
 	ok  bool
-	val uint16
+	val uint32
 }
 
 func parseIRLine(line string) irInst {
@@ -193,7 +193,7 @@ func foldConstantBranches(in []irInst) []irInst {
 				}
 			}
 			cmp = cmpUnknown
-		case "ADD", "SUB", "MUL", "DIV", "AND":
+		case "ADD", "SUB", "MUL", "DIV", "AND", "OR", "XOR", "SHL", "SHR":
 			if len(inst.args) == 2 {
 				dst := inst.args[1]
 				dv := getReg(dst)
@@ -282,7 +282,7 @@ func foldConstantBranches(in []irInst) []irInst {
 	return out
 }
 
-func operandValue(op string, reg map[string]knownValue) (uint16, bool) {
+func operandValue(op string, reg map[string]knownValue) (uint32, bool) {
 	if imm, ok := parseImm(op); ok {
 		return imm, true
 	}
@@ -292,7 +292,7 @@ func operandValue(op string, reg map[string]knownValue) (uint16, bool) {
 	return 0, false
 }
 
-func evalALU(op string, dst, src uint16) (uint16, bool) {
+func evalALU(op string, dst, src uint32) (uint32, bool) {
 	switch op {
 	case "ADD":
 		return dst + src, true
@@ -307,6 +307,20 @@ func evalALU(op string, dst, src uint16) (uint16, bool) {
 		return dst / src, true
 	case "AND":
 		return dst & src, true
+	case "OR":
+		return dst | src, true
+	case "XOR":
+		return dst ^ src, true
+	case "SHL":
+		if src >= 32 {
+			return 0, false
+		}
+		return dst << src, true
+	case "SHR":
+		if src >= 32 {
+			return 0, false
+		}
+		return dst >> src, true
 	default:
 		return 0, false
 	}
@@ -348,11 +362,6 @@ func peepholeIR(in []irInst) []irInst {
 		}
 		if (inst.op == "MUL" || inst.op == "DIV") && len(inst.args) == 2 {
 			if imm, ok := parseImm(inst.args[0]); ok && imm == 1 {
-				continue
-			}
-		}
-		if inst.op == "AND" && len(inst.args) == 2 {
-			if imm, ok := parseImm(inst.args[0]); ok && imm == 0xFFFF {
 				continue
 			}
 		}
@@ -441,15 +450,15 @@ func isBranch(op string) bool {
 	}
 }
 
-func parseImm(s string) (uint16, bool) {
+func parseImm(s string) (uint32, bool) {
 	if !strings.HasPrefix(s, "%") {
 		return 0, false
 	}
-	n, err := strconv.ParseUint(strings.TrimPrefix(s, "%"), 10, 16)
+	n, err := strconv.ParseUint(strings.TrimPrefix(s, "%"), 10, 32)
 	if err != nil {
 		return 0, false
 	}
-	return uint16(n), true
+	return uint32(n), true
 }
 
 func (i irInst) String() string {

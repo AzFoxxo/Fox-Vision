@@ -1,34 +1,17 @@
 {
+    "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
     "name": "FoxC",
     "scopeName": "source.foxc",
     "patterns": [
-        {
-            "include": "#comments"
-        },
-        {
-            "include": "#keywords"
-        },
-        {
-            "include": "#types"
-        },
-        {
-            "include": "#builtins"
-        },
-        {
-            "include": "#literals"
-        },
-        {
-            "include": "#numbers"
-        },
-        {
-            "include": "#operators"
-        },
-        {
-            "include": "#punctuation"
-        },
-        {
-            "include": "#functionCalls"
-        }
+        { "include": "#comments" },
+        { "include": "#keywords" },
+        { "include": "#types" },
+        { "include": "#builtins" },
+        { "include": "#literals" },
+        { "include": "#numbers" },
+        { "include": "#operators" },
+        { "include": "#punctuation" },
+        { "include": "#functionCalls" }
     ],
     "repository": {
         "comments": {
@@ -50,6 +33,11 @@
         "types": {
             "patterns": [
                 {
+                    "comment": "u32 gets its own scope so themes can distinguish it from u8/u16",
+                    "name": "storage.type.u32.foxc",
+                    "match": "\\bu32\\b"
+                },
+                {
                     "name": "storage.type.foxc",
                     "match": "\\b(?:u8|u16|void)\\b"
                 }
@@ -58,8 +46,19 @@
         "builtins": {
             "patterns": [
                 {
+                    "comment": "V2.0 em2_am1-only builtins",
+                    "name": "support.function.builtin.v2.foxc",
+                    "match": "\\b(?:am|set_am|em|set_em)\\b"
+                },
+                {
+                    "comment": "Extended-mode port builtins",
+                    "name": "support.function.builtin.port.foxc",
+                    "match": "\\b(?:in_port|out_port)\\b"
+                },
+                {
+                    "comment": "Core builtins (all modes)",
                     "name": "support.function.builtin.foxc",
-                    "match": "\\b(?:poke|peek|wait|cyc|vblank|in_port|out_port|os_start|os_return)\\b"
+                    "match": "\\b(?:poke|peek|wait|cyc|vblank|os_start|os_return)\\b"
                 }
             ]
         },
@@ -86,12 +85,24 @@
         "operators": {
             "patterns": [
                 {
-                    "name": "keyword.operator.foxc",
-                    "match": "==|!=|<=|>=|<<|>>|&&|\\|\\|"
+                    "name": "keyword.operator.comparison.foxc",
+                    "match": "==|!=|<=|>=|<|>"
+                },
+                {
+                    "name": "keyword.operator.logical.foxc",
+                    "match": "&&|\\|\\|"
+                },
+                {
+                    "name": "keyword.operator.bitshift.foxc",
+                    "match": "<<|>>"
                 },
                 {
                     "name": "keyword.operator.arithmetic.foxc",
-                    "match": "[+\\-*/&|^~=<>]"
+                    "match": "[+\\-*/&|^~]"
+                },
+                {
+                    "name": "keyword.operator.assignment.foxc",
+                    "match": "="
                 }
             ]
         },
@@ -116,6 +127,10 @@
                 {
                     "name": "punctuation.terminator.statement.foxc",
                     "match": ";"
+                },
+                {
+                    "name": "storage.modifier.pointer.foxc",
+                    "match": "(?<=\\b(?:u8|u16|u32|void)(?:\\s*\\*)*\\s*)\\*"
                 }
             ]
         },

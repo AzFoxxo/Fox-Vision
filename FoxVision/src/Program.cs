@@ -1,4 +1,4 @@
-﻿using System.Diagnostics;
+using System.Diagnostics;
 using System.Buffers.Binary;
 using System.Reflection;
 using System.Text;
@@ -16,6 +16,7 @@ namespace FoxVision
         private const int ExtendedRomSizeFieldLength = 2;
         private const int LegacyRomLimitWords = 0x1000;
         private const int ExtendedRomLimitWords = 0x8000;
+        private const long RomByte8_32LimitWords = 0x100000000L;
         private const string LegacyRomMagic = ".VISOFOX16";
         private const string ExtendedRomMagic = ".VFOX16EXT";
         private const byte OperandTypeRegister = 0b00;
@@ -105,6 +106,11 @@ namespace FoxVision
                 startInfo.EnvironmentVariables["FOXVISION_CONTROLLER_SELECT_KEY"] = options.ControllerSelectKey.ToString();
                 startInfo.EnvironmentVariables["FOXVISION_TTY_PORT_INDEX"] = options.FixedTtyPortIndex.ToString();
                 startInfo.EnvironmentVariables["FOXVISION_KEYBOARD_LAYOUT"] = options.KeyboardLayout ?? string.Empty;
+                startInfo.EnvironmentVariables["FOXVISION_BUILD_MODE"] = options.BuildMode.ToString();
+                if (options.BuildMapper.HasValue)
+                    startInfo.EnvironmentVariables["FOXVISION_BUILD_MAPPER"] = options.BuildMapper.Value.ToString();
+                startInfo.EnvironmentVariables["FOXVISION_BUILD_STRICT_FORMAT"] = options.BuildStrictFormat.ToString();
+                startInfo.EnvironmentVariables["FOXVISION_BUILD_LOAD_ADDRESS"] = options.BuildLoadAddress ?? string.Empty;
                 for (int port = 0; port < options.PortDevices.Length; port++)
                 {
                     startInfo.EnvironmentVariables[$"FOXVISION_PORT{port}_DEVICE"] = options.PortDevices[port].ToString();
@@ -147,7 +153,11 @@ namespace FoxVision
                 ControllerSelectKey = options.ControllerSelectKey,
                 FixedTtyPortIndex = options.FixedTtyPortIndex,
                 PortDevices = options.PortDevices.ToArray(),
-                BuildExtended = options.BuildExtended
+                FlashSavePaths = options.FlashSavePaths?.ToArray() ?? new string[EmulatorOptions.PortCount],
+                BuildMode = options.BuildMode,
+                BuildMapper = options.BuildMapper,
+                BuildStrictFormat = options.BuildStrictFormat,
+                BuildLoadAddress = options.BuildLoadAddress
             };
 
             return TryLaunchRomProcess(updatedOptions.RomPath, updatedOptions);
@@ -265,22 +275,22 @@ namespace FoxVision
                     foxcStartInfo.ArgumentList.Add(assemblySourcePath);
                     // Request foxc to only emit assembly; assembler will be run explicitly
                     foxcStartInfo.ArgumentList.Add("--asm");
-                    // Enforce strict-format for GUI-invoked builds
-                    foxcStartInfo.ArgumentList.Add("--strict-format");
-                    // Pass extended mode to foxc when requested from the GUI
-                    if (options.BuildExtended)
+                    if (options.BuildStrictFormat)
                     {
-                        foxcStartInfo.ArgumentList.Add("--mode");
-                        foxcStartInfo.ArgumentList.Add("extended");
+                        foxcStartInfo.ArgumentList.Add("--strict-format");
                     }
-                    // Pass extended mode to foxc when requested from the GUI
-                    if (options.BuildExtended)
+                    if (!string.IsNullOrWhiteSpace(options.BuildLoadAddress))
                     {
-                        foxcStartInfo.ArgumentList.Add("--mode");
-                        foxcStartInfo.ArgumentList.Add("extended");
+                        foxcStartInfo.ArgumentList.Add("--load-address");
+                        foxcStartInfo.ArgumentList.Add(options.BuildLoadAddress.Trim());
                     }
-                    // Enforce strict-format for builds invoked from the GUI
-                    foxcStartInfo.ArgumentList.Add("--strict-format");
+                    foxcStartInfo.ArgumentList.Add("--mode");
+                    foxcStartInfo.ArgumentList.Add(options.BuildMode switch
+                    {
+                        BuildTargetMode.Em2Am1 => "em2_am1",
+                        BuildTargetMode.Extended => "extended",
+                        _ => "legacy"
+                    });
 
                     using var foxcProcess = Process.Start(foxcStartInfo);
                     if (foxcProcess is null)
@@ -334,11 +344,26 @@ namespace FoxVision
                 startInfo.ArgumentList.Add("--project");
                 startInfo.ArgumentList.Add(assemblerProjectPath);
                 startInfo.ArgumentList.Add("--");
-                startInfo.ArgumentList.Add("--strict-format");
-                if (options.BuildExtended)
+                if (options.BuildStrictFormat)
                 {
-                    startInfo.ArgumentList.Add("--mode");
-                    startInfo.ArgumentList.Add("extended");
+                    startInfo.ArgumentList.Add("--strict-format");
+                }
+                if (!string.IsNullOrWhiteSpace(options.BuildLoadAddress))
+                {
+                    startInfo.ArgumentList.Add("--load-address");
+                    startInfo.ArgumentList.Add(options.BuildLoadAddress.Trim());
+                }
+                startInfo.ArgumentList.Add("--mode");
+                startInfo.ArgumentList.Add(options.BuildMode switch
+                {
+                    BuildTargetMode.Em2Am1 => "em2_am1",
+                    BuildTargetMode.Extended => "extended",
+                    _ => "legacy"
+                });
+                if (options.BuildMapper.HasValue)
+                {
+                    startInfo.ArgumentList.Add("--mapper");
+                    startInfo.ArgumentList.Add(options.BuildMapper.Value.ToString());
                 }
                 startInfo.ArgumentList.Add("-i");
                 startInfo.ArgumentList.Add(assemblySourcePath);
@@ -429,6 +454,15 @@ namespace FoxVision
                         options.RomPath = args[++i];
                         break;
 
+                    case "--headless":
+                        options.Headless = true;
+                        break;
+
+                    case "--log":
+                    case "--log-instructions":
+                        options.LogInstruction = true;
+                        break;
+
                     case "-h":
                     case "--help":
                         PrintUsage();
@@ -450,6 +484,8 @@ namespace FoxVision
         {
             Console.WriteLine("FoxVision options:");
             Console.WriteLine("  -r, --rom <path>    Load ROM binary at startup");
+            Console.WriteLine("  --headless          Run without GUI until halt");
+            Console.WriteLine("  --log               Enable instruction logging");
             Console.WriteLine("  -h, --help          Show this help message");
         }
 
@@ -478,15 +514,15 @@ namespace FoxVision
             if (magic == ExtendedRomMagic)
             {
                 byte version = rawRom[10];
-                if (version != 1 && version != 2)
-                {
-                    Console.ForegroundColor = ConsoleColor.Red;
-                    Console.WriteLine($"Unsupported extended ROM version: {version}");
-                    Console.ForegroundColor = ConsoleColor.White;
-                    return false;
-                }
+                    if (version != 1 && version != 2 && version != 3)
+                    {
+                        Console.ForegroundColor = ConsoleColor.Red;
+                        Console.WriteLine($"Unsupported extended ROM version: {version}");
+                        Console.ForegroundColor = ConsoleColor.White;
+                        return false;
+                    }
 
-                int headerLength = GetExtendedRomHeaderLength(version);
+                int headerLength = GetExtendedRomHeaderLength(rawRom, version);
                 if (rawRom.Length < headerLength)
                 {
                     Console.ForegroundColor = ConsoleColor.Red;
@@ -495,21 +531,46 @@ namespace FoxVision
                     return false;
                 }
 
-                int mapperOffset = LegacyRomHeaderLength + ExtendedRomVersionFieldLength;
-                int romStartOffset = mapperOffset + ExtendedRomMapperFieldLength;
-                int resetVectorOffset = romStartOffset + ExtendedRomStartFieldLength;
-                int romSizeOffset = resetVectorOffset + (version == 1 ? 0 : ExtendedRomResetVectorFieldLength);
+                ushort mapper;
+                uint romStart;
+                uint resetVector;
+                ulong expectedWords;
 
-                ushort mapper = BinaryPrimitives.ReadUInt16BigEndian(rawRom.AsSpan(mapperOffset, ExtendedRomMapperFieldLength));
-                ushort romStart = BinaryPrimitives.ReadUInt16BigEndian(rawRom.AsSpan(romStartOffset, ExtendedRomStartFieldLength));
-                ushort resetVector = version == 1
-                    ? romStart
-                    : BinaryPrimitives.ReadUInt16BigEndian(rawRom.AsSpan(resetVectorOffset, ExtendedRomResetVectorFieldLength));
-                ushort expectedWords = BinaryPrimitives.ReadUInt16BigEndian(rawRom.AsSpan(romSizeOffset, ExtendedRomSizeFieldLength));
-                int romLimitWords = mapper switch
+                if (version == 3)
+                {
+                    int mapperLen = headerLength == 27 ? 4 : 2;
+                    int mapperOffset = LegacyRomHeaderLength + ExtendedRomVersionFieldLength;
+                    int romStartOffset = mapperOffset + mapperLen;
+                    int resetVectorOffset = romStartOffset + 4;
+                    int romSizeOffset = resetVectorOffset + 4;
+
+                    mapper = (ushort)(mapperLen == 4
+                        ? BinaryPrimitives.ReadUInt32BigEndian(rawRom.AsSpan(mapperOffset, 4))
+                        : BinaryPrimitives.ReadUInt16BigEndian(rawRom.AsSpan(mapperOffset, 2)));
+                    romStart = BinaryPrimitives.ReadUInt32BigEndian(rawRom.AsSpan(romStartOffset, 4));
+                    resetVector = BinaryPrimitives.ReadUInt32BigEndian(rawRom.AsSpan(resetVectorOffset, 4));
+                    expectedWords = BinaryPrimitives.ReadUInt32BigEndian(rawRom.AsSpan(romSizeOffset, 4));
+                }
+                else
+                {
+                    int mapperOffset = LegacyRomHeaderLength + ExtendedRomVersionFieldLength;
+                    int romStartOffset = mapperOffset + ExtendedRomMapperFieldLength;
+                    int resetVectorOffset = romStartOffset + ExtendedRomStartFieldLength;
+                    int romSizeOffset = resetVectorOffset + (version == 1 ? 0 : ExtendedRomResetVectorFieldLength);
+
+                    mapper = BinaryPrimitives.ReadUInt16BigEndian(rawRom.AsSpan(mapperOffset, ExtendedRomMapperFieldLength));
+                    romStart = BinaryPrimitives.ReadUInt16BigEndian(rawRom.AsSpan(romStartOffset, ExtendedRomStartFieldLength));
+                    resetVector = version == 1
+                        ? romStart
+                        : BinaryPrimitives.ReadUInt16BigEndian(rawRom.AsSpan(resetVectorOffset, ExtendedRomResetVectorFieldLength));
+                    expectedWords = BinaryPrimitives.ReadUInt16BigEndian(rawRom.AsSpan(romSizeOffset, ExtendedRomSizeFieldLength));
+                }
+
+                long romLimitWords = mapper switch
                 {
                     0 => LegacyRomLimitWords,
                     1 => ExtendedRomLimitWords,
+                    2 => RomByte8_32LimitWords,
                     _ => LegacyRomLimitWords
                 };
 
@@ -530,13 +591,13 @@ namespace FoxVision
                     payloadLengthBytes++;
                 }
 
-                if (payloadLengthBytes / 2 != expectedWords)
-                {
-                    Console.ForegroundColor = ConsoleColor.Red;
-                    Console.WriteLine($"Extended ROM size mismatch. Header says {expectedWords} words but payload contains {payloadLengthBytes / 2} words.");
-                    Console.ForegroundColor = ConsoleColor.White;
-                    return false;
-                }
+                    if ((ulong)(payloadLengthBytes / 2) != expectedWords)
+                    {
+                        Console.ForegroundColor = ConsoleColor.Red;
+                        Console.WriteLine($"Extended ROM size mismatch. Header says {expectedWords} words but payload contains {payloadLengthBytes / 2} words.");
+                        Console.ForegroundColor = ConsoleColor.White;
+                        return false;
+                    }
 
                 var payload = new byte[payloadLengthBytes];
                 Array.Copy(rawRom, headerLength, payload, 0, rawRom.Length - headerLength);
@@ -546,7 +607,7 @@ namespace FoxVision
                     rom[i] = BinaryPrimitives.ReadUInt16BigEndian(payload.AsSpan(i * 2, 2));
                 }
 
-                image = new RomImage(rom, romStart, resetVector, romLimitWords);
+                image = new RomImage(rom, romStart, resetVector, romLimitWords, mapper);
                 return true;
             }
 
@@ -590,13 +651,26 @@ namespace FoxVision
             return true;
         }
 
-        private static int GetExtendedRomHeaderLength(byte version)
-            => LegacyRomHeaderLength
-               + ExtendedRomVersionFieldLength
-               + ExtendedRomMapperFieldLength
-               + ExtendedRomStartFieldLength
-               + (version == 1 ? 0 : ExtendedRomResetVectorFieldLength)
-               + ExtendedRomSizeFieldLength;
+        private static int GetExtendedRomHeaderLength(ReadOnlySpan<byte> rawRom, byte version)
+        {
+            if (version == 1)
+                return 17;
+            if (version == 2)
+                return 19;
+            if (version == 3)
+            {
+                if (rawRom.Length >= 27)
+                {
+                    uint words4 = BinaryPrimitives.ReadUInt32BigEndian(rawRom.Slice(23, 4));
+                    int payloadBytes4 = rawRom.Length - 27;
+                    if ((payloadBytes4 & 1) != 0) payloadBytes4++;
+                    if ((ulong)(payloadBytes4 / 2) == words4)
+                        return 27;
+                }
+                return 25;
+            }
+            return 19;
+        }
 
         /// <summary>
         /// Load the ROM file
@@ -642,9 +716,9 @@ namespace FoxVision
                 if (string.IsNullOrWhiteSpace(decompilerProj))
                 {
                     // Fallback to internal printing if decompiler project not found
-                    Console.WriteLine($"ROM contents: start=${rom.StartAddress:X4} reset=${rom.ResetAddress:X4} words={rom.Words.Length}");
+                    Console.WriteLine($"ROM contents: start=${rom.StartAddress:X8} reset=${rom.ResetAddress:X8} words={rom.Words.Length}");
                     var codeStartIndex = rom.ResetAddress >= rom.StartAddress
-                        ? rom.ResetAddress - rom.StartAddress
+                        ? (int)Math.Min((long)rom.Words.Length, (long)(rom.ResetAddress - rom.StartAddress))
                         : 0;
 
                     for (var i = codeStartIndex; i < rom.Words.Length; i++)
@@ -665,14 +739,14 @@ namespace FoxVision
                 var temp = Path.Combine(Path.GetTempPath(), $"vf16_decomp_{Guid.NewGuid():N}.bin");
                 using (var fs = File.Create(temp))
                 {
-                    // write extended v2 header so the decompiler can show ROM start/reset metadata
+                    // write extended v3 header so the decompiler can show ROM start/reset metadata
                     var hdr = System.Text.Encoding.ASCII.GetBytes(".VFOX16EXT");
                     fs.Write(hdr, 0, hdr.Length);
-                    fs.WriteByte(2);
-                    WriteBigEndianUInt16(fs, 1);
-                    WriteBigEndianUInt16(fs, rom.StartAddress);
-                    WriteBigEndianUInt16(fs, rom.ResetAddress);
-                    WriteBigEndianUInt16(fs, (ushort)rom.Words.Length);
+                    fs.WriteByte(3);
+                    WriteBigEndianUInt16(fs, rom.Mapper);
+                    WriteBigEndianUInt32(fs, rom.StartAddress);
+                    WriteBigEndianUInt32(fs, rom.ResetAddress);
+                    WriteBigEndianUInt32(fs, (uint)rom.Words.Length);
 
                     // write payload as big-endian words
                     foreach (var w in rom.Words)
@@ -724,25 +798,28 @@ namespace FoxVision
             stream.WriteByte((byte)(value & 0xFF));
         }
 
-        internal static void DebugLogInstructionFromMemory(ContiguousMemory ram, ushort address)
+        private static void WriteBigEndianUInt32(Stream stream, uint value)
+        {
+            stream.WriteByte((byte)(value >> 24));
+            stream.WriteByte((byte)((value >> 16) & 0xFF));
+            stream.WriteByte((byte)((value >> 8) & 0xFF));
+            stream.WriteByte((byte)(value & 0xFF));
+        }
+
+        internal static void DebugLogInstructionFromMemory(ContiguousMemory ram, uint address)
         {
             WriteInstructionLineColored(
                 address,
                 offset =>
                 {
-                    int target = address + offset;
-                    if (target > ram.MaxAddress)
-                    {
-                        return null;
-                    }
-
-                    return ram.ReadUnchecked((ushort)target);
+                    uint target = (uint)(address + offset);
+                    return ram.ReadWord(target);
                 });
         }
 
         // Writes a single disassembled instruction line to Console with lightweight colorization.
         // Returns the number of operand words consumed (excluding the opcode word).
-        private static int WriteInstructionLineColored(ushort address, Func<int, ushort?> readWord)
+        private static int WriteInstructionLineColored(uint address, Func<int, ushort?> readWord)
         {
             ushort opcodeWord = readWord(0) ?? 0;
             ushort opcodeValue = DecodeDisplayOpcodeValue(opcodeWord);
@@ -751,7 +828,8 @@ namespace FoxVision
             // Address and raw opcode word
             var prev = Console.ForegroundColor;
             Console.ForegroundColor = ConsoleColor.DarkGray;
-            Console.Write($"${address:X4} {opcodeWord:X4}");
+            string addrStr = address > 0xFFFF ? $"${address:X8}" : $"${address:X4}";
+            Console.Write($"{addrStr} {opcodeWord:X4}");
             Console.ForegroundColor = prev;
 
             Console.Write("→");
@@ -1044,6 +1122,11 @@ namespace FoxVision
             {
                 0x0000 => "X",
                 0x0001 => "Y",
+                0x0002 => "PC",
+                0x0003 => "STATUS",
+                0x0004 => "SP",
+                0x0005 => "CYC",
+                0x0006 => "EM",
                 0x0007 => "R0",
                 0x0008 => "R1",
                 0x0009 => "R2",
@@ -1052,9 +1135,33 @@ namespace FoxVision
                 0x000C => "R5",
                 0x000D => "R6",
                 0x000E => "R7",
-                0x0003 => "STATUS",
-                0x0004 => "SP",
-                0x0006 => "EM",
+                0x000F => "AM",
+                0x0010 => "XL",
+                0x0011 => "XH",
+                0x0012 => "YL",
+                0x0013 => "YH",
+                0x0014 => "PCL",
+                0x0015 => "PCH",
+                0x0016 => "SPL",
+                0x0017 => "SPH",
+                0x0018 => "CYCL",
+                0x0019 => "CYCH",
+                0x0020 => "R0L",
+                0x0021 => "R0H",
+                0x0022 => "R1L",
+                0x0023 => "R1H",
+                0x0024 => "R2L",
+                0x0025 => "R2H",
+                0x0026 => "R3L",
+                0x0027 => "R3H",
+                0x0028 => "R4L",
+                0x0029 => "R4H",
+                0x002A => "R5L",
+                0x002B => "R5H",
+                0x002C => "R6L",
+                0x002D => "R6H",
+                0x002E => "R7L",
+                0x002F => "R7H",
                 _ => $"${value:X4}"
             };
 
@@ -1100,4 +1207,4 @@ namespace FoxVision
     }
 }
 
-internal readonly record struct RomImage(ushort[] Words, ushort StartAddress, ushort ResetAddress, int MaximumWords);
+internal readonly record struct RomImage(ushort[] Words, uint StartAddress, uint ResetAddress, long MaximumWords, ushort Mapper = 0);

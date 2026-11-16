@@ -222,13 +222,11 @@ namespace FoxVision.Components
 
             var buildRootItem = new Gtk.MenuItem("Build");
             var buildMenu = new Gtk.Menu();
-            var buildLegacyItem = new Gtk.MenuItem("Build Legacy");
-            buildLegacyItem.Activated += (_, _) => BuildRomFromDialog(false);
-            buildMenu.Append(buildLegacyItem);
+            var buildWithOptionsItem = new Gtk.MenuItem("Build with Options...");
+            buildWithOptionsItem.Activated += (_, _) => ShowBuildWithOptionsDialog();
+            buildMenu.Append(buildWithOptionsItem);
 
-            var buildExtendedItem = new Gtk.MenuItem("Build Extended");
-            buildExtendedItem.Activated += (_, _) => BuildRomFromDialog(true);
-            buildMenu.Append(buildExtendedItem);
+            buildMenu.Append(new SeparatorMenuItem());
 
             var clearBuildRecentsItem = new Gtk.MenuItem("Clear");
             clearBuildRecentsItem.Activated += (_, _) => ClearRecentBuildSources();
@@ -590,43 +588,135 @@ namespace FoxVision.Components
             dialog.Destroy();
         }
 
-        private void BuildRomFromDialog(bool buildExtended)
+
+
+        private void ShowBuildWithOptionsDialog()
         {
-            var dialog = new FileChooserDialog(
-                "Build ROM From Source",
-                _window,
-                FileChooserAction.Open,
-                "Cancel",
-                ResponseType.Cancel,
-                "Build & Run",
-                ResponseType.Accept);
-
-            var sourceFilter = new FileFilter
+            var dialog = new Dialog("Build with Options", _window, DialogFlags.Modal)
             {
-                Name = "Fox sources (*.f16, *.fc)"
+                Resizable = false,
+                DefaultWidth = 520
             };
-            sourceFilter.AddPattern("*.f16");
-            sourceFilter.AddPattern("*.fc");
-            dialog.AddFilter(sourceFilter);
 
-            dialog.SetCurrentFolder(Environment.CurrentDirectory);
+            dialog.AddButton("Cancel", ResponseType.Cancel);
+            dialog.AddButton("Build & Run", ResponseType.Ok);
+
+            var content = dialog.ContentArea;
+            content.MarginStart = 16;
+            content.MarginEnd = 16;
+            content.MarginTop = 16;
+            content.MarginBottom = 16;
+
+            var grid = new Grid
+            {
+                RowSpacing = 12,
+                ColumnSpacing = 12
+            };
+
+            // 1. Source file picker
+            var fileLabel = new Label("Source file:") { Xalign = 0 };
+            grid.Attach(fileLabel, 0, 0, 1, 1);
+
+            var fileChooserBtn = new FileChooserButton("Select Fox Vision source", FileChooserAction.Open)
+            {
+                Hexpand = true
+            };
+            var filter = new FileFilter { Name = "Fox Vision Source (*.f16, *.fc)" };
+            filter.AddPattern("*.f16");
+            filter.AddPattern("*.fc");
+            fileChooserBtn.AddFilter(filter);
+            var allFilter = new FileFilter { Name = "All Files" };
+            allFilter.AddPattern("*");
+            fileChooserBtn.AddFilter(allFilter);
+
+            if (_recentBuildSources.Count > 0 && System.IO.File.Exists(_recentBuildSources[0].Path))
+            {
+                fileChooserBtn.SetFilename(_recentBuildSources[0].Path);
+            }
+            else
+            {
+                fileChooserBtn.SetCurrentFolder(Environment.CurrentDirectory);
+            }
+            grid.Attach(fileChooserBtn, 1, 0, 1, 1);
+
+            // 2. Machine mode combo
+            var modeLabel = new Label("Target Mode:") { Xalign = 0 };
+            grid.Attach(modeLabel, 0, 1, 1, 1);
+
+            var modeCombo = new ComboBoxText { Hexpand = true };
+            modeCombo.AppendText("Legacy (EM=0, 16-bit)");
+            modeCombo.AppendText("Extended (EM=1, 16-bit with R0-R7)");
+            modeCombo.AppendText("V2.0 em2_am1 (EM=2, AM=1, 32-bit & byte addressing)");
+            modeCombo.Active = (int)_currentOptions.BuildMode;
+            grid.Attach(modeCombo, 1, 1, 1, 1);
+
+            // 2b. ROM Mapper combo
+            var mapperLabel = new Label("ROM Mapper:") { Xalign = 0 };
+            grid.Attach(mapperLabel, 0, 2, 1, 1);
+
+            var mapperCombo = new ComboBoxText { Hexpand = true };
+            mapperCombo.AppendText("Default (Mode-dependent)");
+            mapperCombo.AppendText("ROM4K (0 - 4K words)");
+            mapperCombo.AppendText("ROM32K (1 - 32K words)");
+            mapperCombo.AppendText("ROMByte8_32 (2 - up to 32-bit limit, bit/byte addressing)");
+            mapperCombo.Active = _currentOptions.BuildMapper.HasValue ? (_currentOptions.BuildMapper.Value + 1) : 0;
+            grid.Attach(mapperCombo, 1, 2, 1, 1);
+
+            // 3. Strict format checkbox
+            var strictCheck = new CheckButton("Enforce strict format compliance (--strict-format)")
+            {
+                Active = _currentOptions.BuildStrictFormat
+            };
+            grid.Attach(strictCheck, 1, 3, 1, 1);
+
+            // 4. Load address entry
+            var loadAddrLabel = new Label("Load address:") { Xalign = 0 };
+            grid.Attach(loadAddrLabel, 0, 4, 1, 1);
+
+            var loadAddrEntry = new Entry(_currentOptions.BuildLoadAddress)
+            {
+                PlaceholderText = "e.g. $0000 or $4000 (blank for default)",
+                Hexpand = true
+            };
+            grid.Attach(loadAddrEntry, 1, 4, 1, 1);
+
+            content.Add(grid);
+            dialog.ShowAll();
 
             var response = (ResponseType)dialog.Run();
-            if (response == ResponseType.Accept)
+            if (response == ResponseType.Ok)
             {
-                var selectedPath = dialog.Filename;
-                if (!string.IsNullOrWhiteSpace(selectedPath))
+                var selectedPath = fileChooserBtn.Filename;
+                if (string.IsNullOrWhiteSpace(selectedPath) || !System.IO.File.Exists(selectedPath))
                 {
-                    var updatedOptions = CloneOptions(_currentOptions);
-                    updatedOptions.BuildExtended = buildExtended;
-                    if (_buildAndLaunchRomRequested(selectedPath, updatedOptions))
-                    {
-                        AddRecentBuildSource(selectedPath, buildExtended);
-                        _currentOptions.RomPath = System.IO.Path.Combine(
-                            System.IO.Path.GetDirectoryName(System.IO.Path.GetFullPath(selectedPath)) ?? Environment.CurrentDirectory,
-                            "vfox16.bin");
-                        AddRecentRunRom(_currentOptions.RomPath);
-                    }
+                    ShowError(_window, "Please select an existing source file (.f16 or .fc).");
+                    dialog.Destroy();
+                    return;
+                }
+
+                var mode = (BuildTargetMode)Math.Clamp(modeCombo.Active, 0, 2);
+                ushort? mapper = mapperCombo.Active > 0 ? (ushort?)(mapperCombo.Active - 1) : null;
+                bool strict = strictCheck.Active;
+                string loadAddr = loadAddrEntry.Text?.Trim() ?? string.Empty;
+
+                var updatedOptions = CloneOptions(_currentOptions);
+                updatedOptions.BuildMode = mode;
+                updatedOptions.BuildMapper = mapper;
+                updatedOptions.BuildStrictFormat = strict;
+                updatedOptions.BuildLoadAddress = loadAddr;
+
+                _currentOptions.BuildMode = mode;
+                _currentOptions.BuildMapper = mapper;
+                _currentOptions.BuildStrictFormat = strict;
+                _currentOptions.BuildLoadAddress = loadAddr;
+
+                if (_buildAndLaunchRomRequested(selectedPath, updatedOptions))
+                {
+                    AddRecentBuildSource(selectedPath, mode, mapper, strict, loadAddr);
+                    _currentOptions.RomPath = System.IO.Path.Combine(
+                        System.IO.Path.GetDirectoryName(System.IO.Path.GetFullPath(selectedPath)) ?? Environment.CurrentDirectory,
+                        "vfox16.bin");
+                    AddRecentRunRom(_currentOptions.RomPath);
                 }
             }
 
@@ -1793,18 +1883,29 @@ namespace FoxVision.Components
                 FixedTtyPortIndex = options.FixedTtyPortIndex,
                 PortDevices = options.PortDevices.ToArray(),
                 FlashSavePaths = options.FlashSavePaths?.ToArray() ?? new string[EmulatorOptions.PortCount],
-                BuildExtended = options.BuildExtended
+                BuildMode = options.BuildMode,
+                BuildMapper = options.BuildMapper,
+                BuildStrictFormat = options.BuildStrictFormat,
+                BuildLoadAddress = options.BuildLoadAddress
             };
         }
 
-        private void AddRecentBuildSource(string sourcePath, bool buildExtended)
+        private void AddRecentBuildSource(string sourcePath, BuildTargetMode mode, ushort? mapper = null, bool strictFormat = true, string loadAddress = "")
         {
             if (string.IsNullOrWhiteSpace(sourcePath))
                 return;
 
             string normalizedPath = System.IO.Path.GetFullPath(sourcePath);
             _recentBuildSources.RemoveAll(e => string.Equals(e.Path, normalizedPath, StringComparison.OrdinalIgnoreCase));
-            _recentBuildSources.Insert(0, new RecentBuildEntry { Path = normalizedPath, BuildExtended = buildExtended });
+            _recentBuildSources.Insert(0, new RecentBuildEntry
+            {
+                Path = normalizedPath,
+                Mode = mode,
+                Mapper = mapper,
+                BuildExtended = mode != BuildTargetMode.Legacy,
+                StrictFormat = strictFormat,
+                LoadAddress = loadAddress
+            });
             if (_recentBuildSources.Count > MaxRecentFiles)
                 _recentBuildSources.RemoveRange(MaxRecentFiles, _recentBuildSources.Count - MaxRecentFiles);
 
@@ -1885,16 +1986,27 @@ namespace FoxVision.Components
             {
                 var entry = _recentBuildSources[i];
                 string fileName = System.IO.Path.GetFileName(entry.Path);
-                string label = entry.BuildExtended ? $"{i + 1}. {fileName} [EXT]" : $"{i + 1}. {fileName}";
+                string modeTag = entry.Mode switch
+                {
+                    BuildTargetMode.Em2Am1 => "[V2]",
+                    BuildTargetMode.Extended => "[EXT]",
+                    _ => ""
+                };
+                string label = string.IsNullOrEmpty(modeTag)
+                    ? $"{i + 1}. {fileName}"
+                    : $"{i + 1}. {fileName} {modeTag}";
                 var recentItem = new Gtk.MenuItem(label);
                 recentItem.TooltipText = entry.Path;
                 recentItem.Activated += (_, _) =>
                 {
                     var updatedOptions = CloneOptions(_currentOptions);
-                    updatedOptions.BuildExtended = entry.BuildExtended;
+                    updatedOptions.BuildMode = entry.Mode;
+                    updatedOptions.BuildMapper = entry.Mapper;
+                    updatedOptions.BuildStrictFormat = entry.StrictFormat;
+                    updatedOptions.BuildLoadAddress = entry.LoadAddress;
                     if (_buildAndLaunchRomRequested(entry.Path, updatedOptions))
                     {
-                        AddRecentBuildSource(entry.Path, entry.BuildExtended);
+                        AddRecentBuildSource(entry.Path, entry.Mode, entry.Mapper, entry.StrictFormat, entry.LoadAddress);
                         _currentOptions.RomPath = System.IO.Path.Combine(
                             System.IO.Path.GetDirectoryName(System.IO.Path.GetFullPath(entry.Path)) ?? Environment.CurrentDirectory,
                             "vfox16.bin");
@@ -1983,6 +2095,13 @@ namespace FoxVision.Components
                 var json = System.IO.File.ReadAllText(configPath);
                 var data = JsonSerializer.Deserialize<RecentFilesConfig>(json);
                 var buildSources = data?.BuildSources ?? new List<RecentBuildEntry>();
+                foreach (var entry in buildSources)
+                {
+                    if (entry.Mode == BuildTargetMode.Legacy && entry.BuildExtended)
+                    {
+                        entry.Mode = BuildTargetMode.Extended;
+                    }
+                }
                 var runRoms = data?.RunRoms ?? new List<string>();
 
                 if (buildSources.Count > MaxRecentFiles)
@@ -2052,6 +2171,10 @@ namespace FoxVision.Components
         {
             public string Path { get; set; } = string.Empty;
             public bool BuildExtended { get; set; } = false;
+            public BuildTargetMode Mode { get; set; } = BuildTargetMode.Legacy;
+            public ushort? Mapper { get; set; } = null;
+            public bool StrictFormat { get; set; } = true;
+            public string LoadAddress { get; set; } = string.Empty;
         }
 
         private static void ShowError(Window parent, string message)

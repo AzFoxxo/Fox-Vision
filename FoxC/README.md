@@ -4,7 +4,7 @@ FoxC is a compiler written in Go for a practical C-like subset that targets Fox1
 
 ## Implemented language subset
 
-- Types: `u8`, `u16`, `void`, pointers (`u8 *`, `u16 *`)
+- Types: `u8`, `u16`, `u32`, `void`, pointers (`u8 *`, `u16 *`, `u32 *`)
 - Variables: global and local declarations with optional initialization, including fixed-size arrays and pointer variables
 - Literals: decimal numbers, character literals (`'A'`), and string literals for NUL-terminated `u8` array initialization
 - Functions: user-defined functions, parameters, `return`
@@ -27,8 +27,12 @@ FoxC is a compiler written in Go for a practical C-like subset that targets Fox1
     - `wait(cycles)` block execution for `cycles` using CPU `WAIT`
     - `cyc()` read the CPU cycle counter (`CYC` register)
     - `vblank()` block until the next frame VBlank
-    - `in_port(port)` read from a port (V1.10 extended mode, port 0-7)
-    - `out_port(port, value)` write to a port (V1.10 extended mode, port 0-7)
+    - `in_port(port)` read from a port (extended mode; port 0–65535 in `em2_am1` mode, 0–7 in `extended`)
+    - `out_port(port, value)` write to a port (extended mode; same port range)
+    - `am()` read the `AM` register (addressing-mode; `em2_am1` mode only)
+    - `set_am(value)` write the `AM` register (`em2_am1` mode only)
+    - `em()` read the `EM` register (extended-memory mode; `em2_am1` mode only)
+    - `set_em(value)` write the `EM` register (`em2_am1` mode only)
     - `os_start(address)` start a FoxOS foreground program at a constant address
     - `os_return()` emit the `OSRET` instruction to return to FoxOS
 
@@ -84,7 +88,10 @@ go build ./cmd/foxc
 
 - `-i <file>` - Input FoxC source file (required)
 - `-o <file>` - Output path (default: `out.f16` for assembly, `out.bin` for ROM)
-- `--mode legacy|extended` - Target machine mode (default: `legacy`)
+- `--mode legacy|extended|em2_am1` - Target machine mode (default: `legacy`).
+  - `legacy` — 16-bit address space, no extended registers
+  - `extended` — 16-bit address space, `R0`–`R7` registers, ports 0–7
+  - `em2_am1` — ISA V2.0: 32-bit address space, 32-bit registers, ports 0–65535; enables the `u32` type and `am()`/`em()` builtins (aliases: `extended2`, `v2`, `em2`). The compiler starts with `EM=2` and word addressing (`AM=0`) because FoxC's labels, globals, stack slots and pointers are word-based; call `set_am(1)` at run time to switch to byte addressing.
 - `--load-address <addr>` - Load the ROM at a non-zero address, such as
   `0x4000` for a FoxOS foreground program
 - `--strict-format` - Enforce ROM size compliance for the selected mode
@@ -117,7 +124,73 @@ text files in port-mapped VF16Flash storage. See [docs/foxos.md](../docs/foxos.m
 for the flash layout, port protocol, build command, and supported shell
 commands.
 
-Type note: implicit widening (`u8 -> u16`) is allowed; implicit narrowing (`u16 -> u8`) is rejected to avoid unintended truncation.
+Type note: implicit widening (`u8 -> u16 -> u32`) is allowed; narrowing (`u32 -> u16`, `u16 -> u8`) is rejected to avoid unintended truncation.
+
+## u32 (32-bit unsigned integers)
+
+`u32` is available in `--mode em2_am1` (and `extended2` / `v2`). It requires the Fox Vision V2.0 ISA with 32-bit registers.
+
+> [!IMPORTANT]
+> `u32` is **not** available in `legacy` or `extended` modes. The compiler will
+> reject any `u32` variable, parameter, or return type outside `em2_am1` mode.
+
+### Storage
+
+- A `u32` local or global occupies **two consecutive 16-bit words** in the software stack/data area. The low word is stored first (little-endian word order), followed by the high word.
+- In register-allocated paths the compiler uses full 32-bit registers (`R0`–`R7`, `X`, `Y`) and their `H`/`L` sub-registers to load wide immediates.
+- Arrays of `u32` elements allocate 2 words per element, and indexing scales by two.
+
+### Arithmetic
+
+All the same operators that work on `u16` work on `u32`:
+
+```c
+u32 a = 100000;
+u32 b = 200000;
+u32 c = a + b;    // 300000
+u32 d = c - a;    // 200000
+u32 e = a * 3;
+u32 f = c / 7;
+u32 g = a & 0xFFFF;
+u32 h = a | 0x10000;
+u32 i = a ^ 0xAAAA;
+u32 j = a << 1;
+u32 k = a >> 1;
+```
+
+### Widening and narrowing
+
+Widening is implicit:
+
+```c
+u16 w = 1000;
+u32 big = w;      // OK: u16 widens to u32
+u8  b2  = 42;
+u32 b32 = b2;     // OK: u8 widens to u32
+```
+
+Narrowing is **rejected**:
+
+```c
+u32 big = 100000;
+u16 small = big;  // compile error: cannot assign u32 to u16
+```
+
+### Pointers (`u32 *`)
+
+`u32 *` is a pointer to a 32-bit value. Because each `u32` occupies two words, pointer arithmetic on `u32 *` advances the word address by **2** per step.
+
+### am() / em() builtins (em2_am1 mode)
+
+```c
+u16 cur_em = em();     // read EM register (should be 2 in em2_am1 mode)
+u16 cur_am = am();     // read AM register (0 = word addressing, the compiler default)
+set_em(2);             // write EM register
+set_am(1);             // switch to byte addressing
+set_am(0);             // return to word addressing
+```
+
+
 
 Pointer note: the pointer model is word-based, so pointer-sized values are 16-bit words even when the pointed-to type is `u8`.
 
@@ -262,6 +335,13 @@ void main() {
   - Live cached/scalar temporaries are spilled to the hardware stack around real
     function calls, because callees may use any `R` register.
   - Extended mode also uses the V1.11 two-operand `CMP SRC DST` form.
+- In `--mode em2_am1` (V2.0), codegen extends the `extended` strategy:
+  - Startup emits `MOV %2 EM` / `MOV %0 AM` to enable the 32-bit address space while keeping word addressing, which matches FoxC's word-based label, global and pointer model. Programs can call `set_am(1)` when they need byte accesses.
+  - `u32` variables use full 32-bit registers (`R0`–`R7`) and their H/L sub-registers for wide immediate loads.
+  - `u32` values, globals, frame slots and array elements are stored as two words (low word first); `u32 *` pointer arithmetic scales by two.
+  - Existing `u8`/`u16` arithmetic is masked back to 16 bits after ALU operations, while `u32` arithmetic keeps all 32 bits.
+  - Port operands accept the full 16-bit range (0–65535) instead of 0–7.
+  - `am()`, `set_am()`, `em()`, `set_em()` builtins are available.
 - In `--mode legacy` the compiler keeps the original `X`/`Y` plus stack
   evaluation strategy and does not emit `R` registers.
 - User functions are emitted as callable labels and return using a return-id dispatch sequence.

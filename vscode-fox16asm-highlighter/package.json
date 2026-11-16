@@ -1,14 +1,17 @@
 {
     "name": "fox16asm-highlighter",
     "displayName": "Fox16ASM Highlighter",
-    "description": "Very simple syntax highlighting for Fox Vision .f16 assembly files.",
-    "version": "0.0.1",
+    "description": "Syntax highlighting, completions, hover docs, and validation for Fox Vision .f16 assembly files. Supports legacy, extended (V1.10), and V2.0 em2_am1 modes including 32-bit sub-registers and full port range.",
+    "version": "0.1.0",
     "publisher": "azfoxxo",
     "license": "MIT",
     "engines": {
         "vscode": "^1.75.0"
     },
     "main": "./extension.js",
+    "activationEvents": [
+        "onLanguage:fox16asm"
+    ],
     "categories": [
         "Programming Languages"
     ],

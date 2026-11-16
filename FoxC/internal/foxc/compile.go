@@ -31,7 +31,12 @@ func CompileWithOptions(src string, opts CompileOptions) (string, error) {
 }
 
 func isExtendedMode(mode string) bool {
-	return strings.EqualFold(strings.TrimSpace(mode), "extended")
+	return strings.EqualFold(strings.TrimSpace(mode), "extended") || isEm2Am1Mode(mode)
+}
+
+func isEm2Am1Mode(mode string) bool {
+	m := strings.ToLower(strings.TrimSpace(mode))
+	return m == "em2_am1" || m == "am1_em2" || m == "em2" || m == "v2" || m == "extended2"
 }
 
 func ParseLoadAddress(value string) (uint16, error) {

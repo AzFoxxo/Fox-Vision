@@ -15,6 +15,7 @@ namespace VF16Decompiler
         private const int ExtendedRomSizeFieldLength = 2;
         private const int LegacyRomLimitWords = 0x1000;
         private const int ExtendedRomLimitWords = 0x8000;
+        private const long RomByte8_32LimitWords = 0x100000000L;
         private const string LegacyRomMagic = ".VISOFOX16";
         private const string ExtendedRomMagic = ".VFOX16EXT";
 
@@ -42,15 +43,17 @@ namespace VF16Decompiler
                     return 3;
                 }
 
-                Console.WriteLine($"; ROM start ${words.StartAddress:X4} reset ${words.ResetAddress:X4} size {words.Words.Length} words");
+                Console.WriteLine($"; ROM start ${words.StartAddress:X8} reset ${words.ResetAddress:X8} size {words.Words.Length} words");
 
-                int codeStartIndex = Math.Max(0, words.ResetAddress - words.StartAddress);
+                int codeStartIndex = words.ResetAddress >= words.StartAddress
+                    ? (int)Math.Min((long)words.Words.Length, (long)(words.ResetAddress - words.StartAddress))
+                    : 0;
 
                 // Disassemble from the reset vector so leading data segments do not appear as opcodes.
                 for (int i = codeStartIndex; i < words.Words.Length; i++)
                 {
                     int currentIndex = i;
-                    ushort currentAddress = (ushort)(words.StartAddress + currentIndex);
+                    int currentAddress = (int)(words.StartAddress + (uint)currentIndex);
                     int consumed = WriteInstructionLine(currentAddress, offset =>
                     {
                         int relativeIndex = currentIndex + offset;
@@ -78,40 +81,83 @@ namespace VF16Decompiler
             if (magic == ExtendedRomMagic)
             {
                 byte version = rawRom[10];
-                if (version != 1 && version != 2)
-                    return false;
+                    if (version != 1 && version != 2 && version != 3)
+                        return false;
 
-                int headerLength = LegacyRomHeaderLength
-                    + ExtendedRomVersionFieldLength
-                    + ExtendedRomMapperFieldLength
-                    + ExtendedRomStartFieldLength
-                    + (version == 1 ? 0 : ExtendedRomResetVectorFieldLength)
-                    + ExtendedRomSizeFieldLength;
+                int headerLength;
+                ushort mapper;
+                uint romStart;
+                uint resetVector;
+                ulong expectedWords;
 
-                if (rawRom.Length < headerLength)
-                    return false;
+                if (version == 3)
+                {
+                    headerLength = 25;
+                    int mapperLen = 2;
+                    if (rawRom.Length >= 27)
+                    {
+                        uint words4 = BinaryPrimitives.ReadUInt32BigEndian(rawRom.AsSpan(23, 4));
+                        int payloadBytes4 = rawRom.Length - 27;
+                        if ((payloadBytes4 & 1) != 0) payloadBytes4++;
+                        if ((ulong)(payloadBytes4 / 2) == words4)
+                        {
+                            headerLength = 27;
+                            mapperLen = 4;
+                        }
+                    }
 
-                int mapperOffset = LegacyRomHeaderLength + ExtendedRomVersionFieldLength;
-                int romStartOffset = mapperOffset + ExtendedRomMapperFieldLength;
-                int resetVectorOffset = romStartOffset + ExtendedRomStartFieldLength;
-                int romSizeOffset = resetVectorOffset + (version == 1 ? 0 : ExtendedRomResetVectorFieldLength);
+                    if (rawRom.Length < headerLength)
+                        return false;
 
-                ushort mapper = BinaryPrimitives.ReadUInt16BigEndian(rawRom.AsSpan(mapperOffset, ExtendedRomMapperFieldLength));
-                ushort romStart = BinaryPrimitives.ReadUInt16BigEndian(rawRom.AsSpan(romStartOffset, ExtendedRomStartFieldLength));
-                ushort resetVector = version == 1
-                    ? romStart
-                    : BinaryPrimitives.ReadUInt16BigEndian(rawRom.AsSpan(resetVectorOffset, ExtendedRomResetVectorFieldLength));
-                ushort expectedWords = BinaryPrimitives.ReadUInt16BigEndian(rawRom.AsSpan(romSizeOffset, ExtendedRomSizeFieldLength));
-                int romLimitWords = mapper switch
+    
+                        int mapperOffset = LegacyRomHeaderLength + ExtendedRomVersionFieldLength;
+                    int romStartOffset = mapperOffset + mapperLen;
+                    int resetVectorOffset = romStartOffset + 4;
+                    int romSizeOffset = resetVectorOffset + 4;
+
+                    mapper = (ushort)(mapperLen == 4
+                        ? BinaryPrimitives.ReadUInt32BigEndian(rawRom.AsSpan(mapperOffset, 4))
+                        : BinaryPrimitives.ReadUInt16BigEndian(rawRom.AsSpan(mapperOffset, 2)));
+                    romStart = BinaryPrimitives.ReadUInt32BigEndian(rawRom.AsSpan(romStartOffset, 4));
+                    resetVector = BinaryPrimitives.ReadUInt32BigEndian(rawRom.AsSpan(resetVectorOffset, 4));
+                    expectedWords = BinaryPrimitives.ReadUInt32BigEndian(rawRom.AsSpan(romSizeOffset, 4));
+                }
+                else
+                {
+                    headerLength = LegacyRomHeaderLength
+                        + ExtendedRomVersionFieldLength
+                        + ExtendedRomMapperFieldLength
+                        + ExtendedRomStartFieldLength
+                        + (version == 1 ? 0 : ExtendedRomResetVectorFieldLength)
+                        + ExtendedRomSizeFieldLength;
+
+                    if (rawRom.Length < headerLength)
+                        return false;
+
+                    int mapperOffset = LegacyRomHeaderLength + ExtendedRomVersionFieldLength;
+                    int romStartOffset = mapperOffset + ExtendedRomMapperFieldLength;
+                    int resetVectorOffset = romStartOffset + ExtendedRomStartFieldLength;
+                    int romSizeOffset = resetVectorOffset + (version == 1 ? 0 : ExtendedRomResetVectorFieldLength);
+
+                    mapper = BinaryPrimitives.ReadUInt16BigEndian(rawRom.AsSpan(mapperOffset, ExtendedRomMapperFieldLength));
+                    romStart = BinaryPrimitives.ReadUInt16BigEndian(rawRom.AsSpan(romStartOffset, ExtendedRomStartFieldLength));
+                    resetVector = version == 1
+                        ? romStart
+                        : BinaryPrimitives.ReadUInt16BigEndian(rawRom.AsSpan(resetVectorOffset, ExtendedRomResetVectorFieldLength));
+                    expectedWords = BinaryPrimitives.ReadUInt16BigEndian(rawRom.AsSpan(romSizeOffset, ExtendedRomSizeFieldLength));
+                }
+
+                long romLimitWords = mapper switch
                 {
                     0 => LegacyRomLimitWords,
                     1 => ExtendedRomLimitWords,
+                    2 => RomByte8_32LimitWords,
                     _ => LegacyRomLimitWords
                 };
 
                 var payloadLengthBytes = rawRom.Length - headerLength;
                 if ((payloadLengthBytes & 1) != 0) payloadLengthBytes++;
-                if (payloadLengthBytes / 2 != expectedWords) return false;
+                if ((ulong)(payloadLengthBytes / 2) != expectedWords) return false;
 
                 var payload = new byte[payloadLengthBytes];
                 Array.Copy(rawRom, headerLength, payload, 0, rawRom.Length - headerLength);
@@ -121,7 +167,7 @@ namespace VF16Decompiler
                     rom[i] = BinaryPrimitives.ReadUInt16BigEndian(payload.AsSpan(i * 2, 2));
                 }
 
-                image = new RomImage(rom, romStart, resetVector, romLimitWords);
+                image = new RomImage(rom, romStart, resetVector, romLimitWords, mapper);
                 return true;
             }
 
@@ -296,6 +342,11 @@ namespace VF16Decompiler
             {
                 0x0000 => "X",
                 0x0001 => "Y",
+                0x0002 => "PC",
+                0x0003 => "STATUS",
+                0x0004 => "SP",
+                0x0005 => "CYC",
+                0x0006 => "EM",
                 0x0007 => "R0",
                 0x0008 => "R1",
                 0x0009 => "R2",
@@ -304,9 +355,33 @@ namespace VF16Decompiler
                 0x000C => "R5",
                 0x000D => "R6",
                 0x000E => "R7",
-                0x0003 => "STATUS",
-                0x0004 => "SP",
-                0x0006 => "EM",
+                0x000F => "AM",
+                0x0010 => "XL",
+                0x0011 => "XH",
+                0x0012 => "YL",
+                0x0013 => "YH",
+                0x0014 => "PCL",
+                0x0015 => "PCH",
+                0x0016 => "SPL",
+                0x0017 => "SPH",
+                0x0018 => "CYCL",
+                0x0019 => "CYCH",
+                0x0020 => "R0L",
+                0x0021 => "R0H",
+                0x0022 => "R1L",
+                0x0023 => "R1H",
+                0x0024 => "R2L",
+                0x0025 => "R2H",
+                0x0026 => "R3L",
+                0x0027 => "R3H",
+                0x0028 => "R4L",
+                0x0029 => "R4H",
+                0x002A => "R5L",
+                0x002B => "R5H",
+                0x002C => "R6L",
+                0x002D => "R6H",
+                0x002E => "R7L",
+                0x002F => "R7H",
                 _ => $"${value:X4}"
             };
 
@@ -347,5 +422,5 @@ namespace VF16Decompiler
         }
     }
 
-    internal readonly record struct RomImage(ushort[] Words, ushort StartAddress, ushort ResetAddress, int MaximumWords);
+    internal readonly record struct RomImage(ushort[] Words, uint StartAddress, uint ResetAddress, long MaximumWords, ushort Mapper = 0);
 }

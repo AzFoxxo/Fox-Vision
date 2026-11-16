@@ -1,0 +1,130 @@
+; EM=2, AM=1 smoke test for ISA V2.0
+
+:main
+; Enable EM=2 (32-bit memory address space)
+MOV %2 EM
+
+; Enable AM=1 (8-bit byte addressing)
+MOV %1 AM
+
+; -------------------------------------------------------------
+; 1) 32-bit Sub-Register Packing & CMP
+; -------------------------------------------------------------
+MOV %0 R0
+MOV $ABCD R0H
+MOV $1234 R0L
+
+MOV %0 R1
+MOV $ABCD R1H
+MOV $1235 R1L
+
+; R0 = 0xABCD1234, R1 = 0xABCD1235
+; Compare 32-bit registers directly
+CMP R0 R1
+JNE ne1_ok
+JMP fail
+
+:ne1_ok
+JLT lt1_ok
+JMP fail
+
+:lt1_ok
+; Test upper word difference with lower word identical
+MOV $1234 R1L
+MOV $ABCE R1H
+; R0 = 0xABCD1234, R1 = 0xABCE1234
+CMP R0 R1
+JLT lt2_ok
+JMP fail
+
+:lt2_ok
+; -------------------------------------------------------------
+; 2) 32-bit Memory Operations in AM=1 (Byte Addressing)
+; -------------------------------------------------------------
+; Byte address: 0x00010000
+MOV $0001 R1H
+MOV $0000 R1L
+
+; Store byte 0xAA at 0x00010000
+MOV $00AA X
+STR X R1
+
+; Store byte 0xBB at 0x00010001
+MOV $0001 R1L
+MOV $00BB X
+STR X R1
+
+; Verify byte 0xAA at 0x00010000
+MOV $0000 R1L
+LOD Y R1
+MOV $00AA X
+CMP
+JNE fail
+
+; Verify byte 0xBB at 0x00010001
+MOV $0001 R1L
+LOD Y R1
+MOV $00BB X
+CMP
+JNE fail
+
+; -------------------------------------------------------------
+; 3) 32-bit Memory Operations in AM=0 (Word Addressing)
+; -------------------------------------------------------------
+MOV %0 AM
+
+; In AM=0, byte addresses 0x00010000 and 0x00010001 correspond to word address:
+; 0x00010000 >> 1 = 0x00008000
+MOV $0000 R1H
+MOV $8000 R1L
+LOD Y R1
+MOV $BBAA X
+CMP
+JNE fail
+
+; In AM=0, write word 0x1234 at word address 0x00010002
+MOV $0001 R1H
+MOV $0002 R1L
+MOV $1234 X
+STR X R1
+LOD Y R1
+CMP
+JNE fail
+
+; -------------------------------------------------------------
+; 4) Switch back to AM=1 and verify little-endian word packing
+; -------------------------------------------------------------
+MOV %1 AM
+
+; In AM=1, word address 0x00010002 corresponds to byte addresses:
+; 0x00010002 << 1 = 0x00020004 (low byte: 0x34)
+; 0x00020005 (high byte: 0x12)
+MOV $0002 R1H
+MOV $0004 R1L
+LOD Y R1
+MOV $0034 X
+CMP
+JNE fail
+
+MOV $0005 R1L
+LOD Y R1
+MOV $0012 X
+CMP
+JNE fail
+
+; -------------------------------------------------------------
+; 5) 32-bit Register Indirect Jump
+; -------------------------------------------------------------
+MOV %0 R2
+MOV jump_ok R2L
+JMP R2
+JMP fail
+
+:jump_ok
+; All tests passed! Put 0x42 into R7 as success indicator
+MOV %42 R7
+HLT
+
+:fail
+MOV %99 R7
+HLT

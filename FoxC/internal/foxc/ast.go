@@ -6,6 +6,7 @@ const (
 	TypeInvalid TypeKind = iota
 	TypeU8
 	TypeU16
+	TypeU32
 	TypeVoid
 )
 
@@ -22,6 +23,8 @@ func (t Type) String() string {
 		s = "u8"
 	case TypeU16:
 		s = "u16"
+	case TypeU32:
+		s = "u32"
 	case TypeVoid:
 		s = "void"
 	}

@@ -23,8 +23,23 @@ namespace FoxVision
             bool loadedRom = LoadRomIntoMemory(_currentRom);
 
             // Create the CPU
-            _processor = new(_unprotectedMemory, _options.ExecutionSpeedHz, _options.LogInstruction, _currentRom.ResetAddress, _options.PortDevices);
+            _processor = new(_unprotectedMemory, _options.ExecutionSpeedHz, _options.LogInstruction, _currentRom.ResetAddress, _options.PortDevices, _currentRom.Mapper);
             _processor.SetFlashSavePaths(_options.FlashSavePaths);
+
+            if (_options.Headless)
+            {
+                if (loadedRom)
+                {
+                    while (!_processor.ExecuteCycle())
+                    {
+                    }
+                }
+
+                Console.WriteLine("Processor has been halted");
+                Console.WriteLine($"Cycle count: {_processor.GetCycleCount()}");
+                Console.WriteLine("Now exiting");
+                return;
+            }
 
             if (loadedRom)
             {
@@ -119,7 +134,7 @@ namespace FoxVision
                     return false;
                 }
 
-                _processor = new Processor(_unprotectedMemory, updated.ExecutionSpeedHz, updated.LogInstruction, romImage.ResetAddress);
+                _processor = new Processor(_unprotectedMemory, updated.ExecutionSpeedHz, updated.LogInstruction, romImage.ResetAddress, null, romImage.Mapper);
                 _processor.SetPortConfiguration(updated.PortDevices);
                 if (updated.FlashSavePaths is not null && updated.FlashSavePaths.Length == EmulatorOptions.PortCount)
                 {
@@ -159,7 +174,8 @@ namespace FoxVision
                 return false;
             }
 
-            if ((uint)rom.StartAddress + (uint)rom.Words.Length > (uint)_unprotectedMemory.MaxAddress + 1)
+            ulong maxAddress = rom.MaximumWords > 0x8000 ? 0x100000000UL : ((ulong)_unprotectedMemory.MaxAddress + 1);
+            if ((ulong)rom.StartAddress + (ulong)rom.Words.Length > maxAddress)
             {
                 Console.ForegroundColor = ConsoleColor.Red;
                 Console.WriteLine("ROM payload does not fit in RAM at the requested start address.");
@@ -175,11 +191,11 @@ namespace FoxVision
             int previewWords = Math.Min(size, _options.RomPreviewWords);
             for (int i = 0; i < size; i++)
             {
-                ushort address = (ushort)(rom.StartAddress + i);
-                _unprotectedMemory.WriteUnchecked(address, rom.Words[i]);
+                uint address = (uint)(rom.StartAddress + (uint)i);
+                _unprotectedMemory.WriteWord(address, rom.Words[i]);
 
                 if (i < previewWords)
-                    Console.Write(_unprotectedMemory.ReadUnchecked(address).ToString("X4") + " ");
+                    Console.Write(_unprotectedMemory.ReadWord(address).ToString("X4") + " ");
             }
 
             if (size > previewWords)
