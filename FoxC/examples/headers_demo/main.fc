@@ -1,0 +1,41 @@
+// FoxC headers demo
+// -----------------
+// math.fh  - signature-only header (prototypes)
+// util.fh  - whole-code header (globals + definitions)
+//
+// Build from the FoxC root:
+//   foxc --mode extended -I examples/headers_demo \
+//        -i examples/headers_demo/main.fc -o headers_demo.bin -a
+
+#include <math.fh>
+#include "util.fh"
+#include "util.fh"   // included twice on purpose: headers are included once
+
+void main()
+{
+    if (check(add(2, 3), 5) == 0) { return; }
+    if (check(scale(4, 5), 20) == 0) { return; }
+    if (check(square(6), 36) == 0) { return; }
+    if (check(twice(21), 42) == 0) { return; }
+    if (check(pass_count, 4) == 0) { return; }
+
+    out_port(4, 80); // 'P'
+    out_port(4, 65); // 'A'
+    out_port(4, 83); // 'S'
+    out_port(4, 83); // 'S'
+}
+
+u16 add(u16 a, u16 b)
+{
+    return a + b;
+}
+
+u16 scale(u16 value, u16 factor)
+{
+    return value * factor;
+}
+
+u16 square(u16 value)
+{
+    return value * value;
+}

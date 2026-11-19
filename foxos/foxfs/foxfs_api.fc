@@ -1,0 +1,425 @@
+// FoxFS public API — filesystem services available to applications.
+//
+// Included by <foxos.fh> for foreground programs, and by foxfs.fc for the
+// resident kernel, shell and test images. Formatting, listing and the standard
+// root layout are internal to the OS and live in foxfs_internal.fc.
+
+// ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
+u32 ENTRY_COUNT      = 512;
+u32 ROOT_SLOT        = 512;
+u32 NOT_FOUND        = 513;
+
+u32 ENTRY_TABLE      = 4;
+u32 ENTRY_WORDS      = 4;
+u32 ENTRY_TYPE       = 0;
+u32 ENTRY_PARENT     = 1;
+u32 ENTRY_NAMELEN    = 2;
+u32 ENTRY_SIZE       = 3;
+u32 NAME_TABLE_BASE  = 2052;
+u32 NAMES_PER_SLOT   = 16;
+u32 DATA_BASE        = 10244;
+
+// 512 slots * 0x1FF000 words + 10244 metadata words still fit inside the
+// 2^30 32-bit words (4 GiB) provided by VF32HardDisk. Each slot can hold
+// 0x1FF000 words (just under 8 MiB) of file data.
+u32 FILE_CHUNK_WORDS = 0x1FF000;
+
+// ---------------------------------------------------------------------------
+// State
+// ---------------------------------------------------------------------------
+
+u32 fs_current_dir = 512;
+
+// Lowest slot that might still be free. New entries are allocated from here,
+// which keeps creating many files linear instead of rescanning the whole table
+// from slot 0 for every create.
+u32 fs_next_slot = 0;
+
+// Entry record loaded by fs_read_entry().
+u32 fs_e_type    = 0;
+u32 fs_e_parent  = 0;
+u32 fs_e_namelen = 0;
+u32 fs_e_size    = 0;
+
+// Last path component produced by fs_split().
+u16 fs_comp_start = 0;
+u16 fs_comp_len   = 0;
+
+// ---------------------------------------------------------------------------
+// Entry record access
+// ---------------------------------------------------------------------------
+
+u32 fs_entry_base(u32 slot)
+{
+    return ENTRY_TABLE + slot * ENTRY_WORDS;
+}
+
+// Read one entry record into the fs_e_* globals in a single transaction.
+void fs_read_entry(u32 slot)
+{
+    disk_read_begin(fs_entry_base(slot), ENTRY_WORDS);
+    fs_e_type    = in_port32(6);
+    fs_e_parent  = in_port32(6);
+    fs_e_namelen = in_port32(6);
+    fs_e_size    = in_port32(6);
+}
+
+// Write one complete entry record in a single transaction.
+void fs_write_entry(u32 slot, u32 type, u32 parent, u32 namelen, u32 size)
+{
+    disk_write_begin(fs_entry_base(slot), ENTRY_WORDS);
+    out_port32(6, type);
+    out_port32(6, parent);
+    out_port32(6, namelen);
+    out_port32(6, size);
+}
+// ---------------------------------------------------------------------------
+// Name helpers – operate on global line[] at a given offset
+// ---------------------------------------------------------------------------
+
+// Return 1 if the disk name for slot matches line[buf_start .. buf_start+length-1].
+u16 fs_name_matches(u32 slot, u16 buf_start, u16 length)
+{
+    u32 base = NAME_TABLE_BASE + slot * NAMES_PER_SLOT;
+    u16 i = 0;
+    u16 match = 1;
+    u32 c = 0;
+
+    if (length > NAMES_PER_SLOT) { return 0; }
+
+    // Read the whole name record so the device transaction always completes.
+    disk_read_begin(base, NAMES_PER_SLOT);
+    while (i < NAMES_PER_SLOT)
+    {
+        c = in_port32(6);
+        if (i < length)
+        {
+            if (c != line[buf_start + i]) { match = 0; }
+        }
+        i = i + 1;
+    }
+    return match;
+}
+
+// Write line[start..start+length-1] as the name for slot.
+void fs_name_write(u32 slot, u16 start, u16 length)
+{
+    u32 base = NAME_TABLE_BASE + slot * NAMES_PER_SLOT;
+    u16 i = 0;
+
+    disk_write_begin(base, NAMES_PER_SLOT);
+    while (i < NAMES_PER_SLOT)
+    {
+        if (i < length) { out_port32(6, line[start + i]); }
+        else            { out_port32(6, 0); }
+        i = i + 1;
+    }
+}
+
+// Print an entry name to the terminal.
+void fs_name_print(u32 slot)
+{
+    u32 base = NAME_TABLE_BASE + slot * NAMES_PER_SLOT;
+    u32 len = disk_read(fs_entry_base(slot) + ENTRY_NAMELEN);
+    u32 c = 0;
+    u16 i = 0;
+
+    if (len > NAMES_PER_SLOT) { len = NAMES_PER_SLOT; }
+    disk_read_begin(base, NAMES_PER_SLOT);
+    while (i < NAMES_PER_SLOT)
+    {
+        c = in_port32(6);
+        if (i < len) { tty_putc32(c); }
+        i = i + 1;
+    }
+}
+
+// Clear one name record.
+void fs_clear_name(u32 slot)
+{
+    u32 base = NAME_TABLE_BASE + slot * NAMES_PER_SLOT;
+    u16 i = 0;
+
+    disk_write_begin(base, NAMES_PER_SLOT);
+    while (i < NAMES_PER_SLOT)
+    {
+        out_port32(6, 0);
+        i = i + 1;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Slot allocation
+// ---------------------------------------------------------------------------
+
+u32 fs_alloc_slot()
+{
+    u32 slot = fs_next_slot;
+    if (slot >= ENTRY_COUNT) { return NOT_FOUND; }
+    while (slot < ENTRY_COUNT)
+    {
+        fs_read_entry(slot);
+        if (fs_e_type == 0)
+        {
+            fs_next_slot = slot + 1;
+            return slot;
+        }
+        slot = slot + 1;
+    }
+    fs_next_slot = ENTRY_COUNT;
+    return NOT_FOUND;
+}
+
+u32 fs_data_base(u32 slot)
+{
+    return DATA_BASE + slot * FILE_CHUNK_WORDS;
+}
+
+// ---------------------------------------------------------------------------
+// Path helpers – all use global line[]
+// ---------------------------------------------------------------------------
+
+// Return 1 when line[start..end-1] contains only '/' characters.
+u16 fs_path_is_root(u16 start, u16 end)
+{
+    u16 i = start;
+    if (start >= end) { return 0; }
+    while (i < end)
+    {
+        if (line[i] != '/') { return 0; }
+        i = i + 1;
+    }
+    return 1;
+}
+
+// Split line[start..end-1] into its parent prefix and last component.
+// The last component is stored in fs_comp_start / fs_comp_len.
+void fs_split(u16 start, u16 end)
+{
+    u16 i = end;
+
+    while (i > start && line[i - 1] == '/') { i = i - 1; }
+    fs_comp_start = i;
+    while (fs_comp_start > start && line[fs_comp_start - 1] != '/')
+    {
+        fs_comp_start = fs_comp_start - 1;
+    }
+    fs_comp_len = i - fs_comp_start;
+}
+
+// Reject empty names, names that are too long and the special "."/".." names.
+u16 fs_name_valid(u16 start, u16 length)
+{
+    if (length == 0) { return 0; }
+    if (length > NAMES_PER_SLOT) { return 0; }
+    if (length == 1 && line[start] == '.') { return 0; }
+    if (length == 2 && line[start] == '.' && line[start + 1] == '.')
+    {
+        return 0;
+    }
+    return 1;
+}
+
+// Find child of parent whose name equals line[start..start+length-1].
+// Returns the slot index or NOT_FOUND.
+u32 fs_find_child(u32 parent, u16 start, u16 length)
+{
+    u32 slot = 0;
+
+    if (length == 0 || length > NAMES_PER_SLOT) { return NOT_FOUND; }
+    while (slot < ENTRY_COUNT)
+    {
+        fs_read_entry(slot);
+        if (fs_e_type != 0 && fs_e_parent == parent && fs_e_namelen == length)
+        {
+            if (fs_name_matches(slot, start, length))
+            {
+                return slot;
+            }
+        }
+        slot = slot + 1;
+    }
+    return NOT_FOUND;
+}
+
+// Resolve line[start..end-1] as a directory path.
+// Returns the directory slot or NOT_FOUND.
+u32 fs_resolve_dir(u16 start, u16 end)
+{
+    u32 dir   = fs_current_dir;
+    u16 i     = start;
+    u16 cs    = 0;
+    u16 cl    = 0;
+    u32 child = 0;
+
+    if (start < end && line[start] == '/')
+    {
+        dir = ROOT_SLOT;
+        i = i + 1;
+    }
+    while (i < end)
+    {
+        while (i < end && line[i] == '/') { i = i + 1; }
+        if (i == end) { return dir; }
+        cs = i;
+        while (i < end && line[i] != '/') { i = i + 1; }
+        cl = i - cs;
+
+        if (cl == 1 && line[cs] == '.')
+        {
+            // stay in current dir
+        }
+        else
+        {
+            if (cl == 2 && line[cs] == '.' && line[cs + 1] == '.')
+            {
+                if (dir != ROOT_SLOT)
+                {
+                    dir = disk_read(fs_entry_base(dir) + ENTRY_PARENT);
+                }
+            }
+            else
+            {
+                child = fs_find_child(dir, cs, cl);
+                if (child == NOT_FOUND) { return NOT_FOUND; }
+                fs_read_entry(child);
+                if (fs_e_type != 2) { return NOT_FOUND; }
+                dir = child;
+            }
+        }
+    }
+    return dir;
+}
+
+// Resolve line[start..end-1] as a full path, returning the entry slot.
+u32 fs_resolve_path(u16 start, u16 end)
+{
+    u32 dir   = 0;
+    u32 child = 0;
+
+    if (start >= end) { return NOT_FOUND; }
+    if (fs_path_is_root(start, end)) { return ROOT_SLOT; }
+
+    fs_split(start, end);
+    if (fs_comp_len == 0) { return NOT_FOUND; }
+
+    // "." and ".." are directories, not removable entries. Refusing them
+    // here keeps "rm ." and "rm .." from touching the working directory.
+    if (fs_comp_len == 1 && line[fs_comp_start] == '.') { return NOT_FOUND; }
+    if (fs_comp_len == 2 && line[fs_comp_start] == '.' &&
+        line[fs_comp_start + 1] == '.')
+    {
+        return NOT_FOUND;
+    }
+
+    dir = fs_resolve_dir(start, fs_comp_start);
+    if (dir == NOT_FOUND) { return NOT_FOUND; }
+
+    child = fs_find_child(dir, fs_comp_start, fs_comp_len);
+    return child;
+}
+// ---------------------------------------------------------------------------
+// Create / remove entries – name taken from line[start..end-1]
+// ---------------------------------------------------------------------------
+
+// Create a file (type 1) or directory (type 2). Returns the new slot or
+// NOT_FOUND. Error messages are printed here; successful creation is silent so
+// callers can decide what to report.
+u32 fs_create(u16 start, u16 end, u32 type)
+{
+    u32 dir  = 0;
+    u32 slot = 0;
+
+    if (type != 1 && type != 2)
+    {
+        tty_puts("invalid entry type\r\n");
+        return NOT_FOUND;
+    }
+    if (start >= end)
+    {
+        tty_puts("invalid name\r\n");
+        return NOT_FOUND;
+    }
+
+    fs_split(start, end);
+    if (fs_name_valid(fs_comp_start, fs_comp_len) == 0)
+    {
+        tty_puts("invalid name\r\n");
+        return NOT_FOUND;
+    }
+
+    dir = fs_resolve_dir(start, fs_comp_start);
+    if (dir == NOT_FOUND)
+    {
+        tty_puts("parent not found\r\n");
+        return NOT_FOUND;
+    }
+    if (fs_find_child(dir, fs_comp_start, fs_comp_len) != NOT_FOUND)
+    {
+        tty_puts("already exists\r\n");
+        return NOT_FOUND;
+    }
+    slot = fs_alloc_slot();
+    if (slot == NOT_FOUND)
+    {
+        tty_puts("filesystem full\r\n");
+        return NOT_FOUND;
+    }
+
+    fs_write_entry(slot, type, dir, fs_comp_len, 0);
+    fs_name_write(slot, fs_comp_start, fs_comp_len);
+    return slot;
+}
+
+// Free a slot and clear its metadata and name.
+void fs_clear_slot(u32 slot)
+{
+    fs_write_entry(slot, 0, ROOT_SLOT, 0, 0);
+    fs_clear_name(slot);
+    if (slot < fs_next_slot) { fs_next_slot = slot; }
+}
+
+// Remove a file or empty directory. Returns 1 on success, 0 on failure.
+// Error messages are printed here; success is silent.
+u16 fs_remove(u16 start, u16 end)
+{
+    u32 slot  = fs_resolve_path(start, end);
+    u32 type  = 0;
+    u32 child = 0;
+
+    if (slot == ROOT_SLOT || slot == NOT_FOUND)
+    {
+        tty_puts("not found\r\n");
+        return 0;
+    }
+    fs_read_entry(slot);
+    type = fs_e_type;
+    if (type == 0)
+    {
+        tty_puts("not found\r\n");
+        return 0;
+    }
+    if (type == 2)
+    {
+        if (slot == fs_current_dir)
+        {
+            tty_puts("cannot remove current directory\r\n");
+            return 0;
+        }
+        child = 0;
+        while (child < ENTRY_COUNT)
+        {
+            fs_read_entry(child);
+            if (fs_e_type != 0 && fs_e_parent == slot)
+            {
+                tty_puts("directory not empty\r\n");
+                return 0;
+            }
+            child = child + 1;
+        }
+    }
+    fs_clear_slot(slot);
+    return 1;
+}

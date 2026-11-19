@@ -7,7 +7,8 @@ FoxC is a compiler written in Go for a practical C-like subset that targets Fox1
 - Types: `u8`, `u16`, `u32`, `void`, pointers (`u8 *`, `u16 *`, `u32 *`)
 - Variables: global and local declarations with optional initialization, including fixed-size arrays and pointer variables
 - Literals: decimal numbers, character literals (`'A'`), and string literals for NUL-terminated `u8` array initialization
-- Functions: user-defined functions, parameters, `return`
+- Functions: user-defined functions, parameters, `return`, and function prototypes (signatures)
+- Headers: `#include "file.fh"` / `#include <file.fh>` with `-I` search paths; headers may contain signatures or complete definitions
 - Control flow: `if`/`else`, `while`
 - Operators: 
   - Arithmetic: `+`, `-`, `*`, `/`
@@ -26,6 +27,7 @@ FoxC is a compiler written in Go for a practical C-like subset that targets Fox1
     - `peek(addr)` read a word from memory
     - `wait(cycles)` block execution for `cycles` using CPU `WAIT`
     - `cyc()` read the CPU cycle counter (`CYC` register)
+    - `get_memory_size()` read the RAM size in KiB (`MS` register; ISA V2.1; `em2_am1` mode only)
     - `vblank()` block until the next frame VBlank
     - `in_port(port)` read from a port (extended mode; port 0–65535 in `em2_am1` mode, 0–7 in `extended`)
     - `out_port(port, value)` write to a port (extended mode; same port range)
@@ -94,8 +96,71 @@ go build ./cmd/foxc
   - `em2_am1` — ISA V2.0: 32-bit address space, 32-bit registers, ports 0–65535; enables the `u32` type and `am()`/`em()` builtins (aliases: `extended2`, `v2`, `em2`). The compiler starts with `EM=2` and word addressing (`AM=0`) because FoxC's labels, globals, stack slots and pointers are word-based; call `set_am(1)` at run time to switch to byte addressing.
 - `--load-address <addr>` - Load the ROM at a non-zero address, such as
   `0x4000` for a FoxOS foreground program
+- `-I <dir>`, `--include-dir <dir>` - Add a header search directory (repeatable)
 - `--strict-format` - Enforce ROM size compliance for the selected mode
 - `-a, --asm` - Assemble only: output Fox16ASM instead of binary ROM (skips assembler invocation)
+
+## Headers
+
+FoxC supports C-style include directives. They are expanded before lexing, so a
+header may contain either **function signatures** or **whole code** (globals and
+complete function definitions).
+
+```c
+#include "local_header.fh"   // searched relative to the including file first
+#include <shared_header.fh>  // searched in -I directories first
+```
+
+Headers are included at most once per translation unit, so a header containing
+definitions can safely be included from multiple files. `#pragma once` is
+accepted for compatibility. Recursive includes are reported as errors.
+
+### Signature headers
+
+A declaration ending in `;` is a prototype. Parameter names are optional in
+prototypes; a definition must still name every parameter. `f(void)` is accepted
+as an explicit empty parameter list.
+
+```c
+// math.fh
+u16 add(u16, u16);
+u16 scale(u16 value, u16 factor);
+```
+
+```c
+// main.fc
+#include "math.fh"
+
+void main() {
+    u16 x = add(2, 3);
+}
+
+u16 add(u16 a, u16 b) { return a + b; }
+u16 scale(u16 value, u16 factor) { return value * factor; }
+```
+
+FoxC validates that each definition matches its prototype, reports conflicting
+prototypes, and still requires exactly one `void main()` definition.
+
+### Whole-code headers
+
+A header can also define functions or globals directly:
+
+```c
+// util.fh
+#pragma once
+
+u16 twice(u16 value) {
+    return value * 2;
+}
+```
+
+Including that header pastes the complete definition into the translation unit.
+Use `-I DIR` (or `--include-dir DIR`) to add search directories for angle-bracket
+includes.
+
+A runnable example of both header styles is in
+[`examples/headers_demo/`](examples/headers_demo/).
 
 ## Example
 
@@ -189,6 +254,16 @@ set_em(2);             // write EM register
 set_am(1);             // switch to byte addressing
 set_am(0);             // return to word addressing
 ```
+
+### get_memory_size() builtin (ISA V2.1, em2_am1 mode)
+
+```c
+u32 ram_kib = get_memory_size();  // MS register: installed RAM in 1 KiB units
+```
+
+The value is the configured FoxVision RAM size divided by 1024 — for example,
+`0x00000080` for 128 KiB or `0x00400000` for 4 GiB. `MS` is read-only in both
+assembly and FoxC.
 
 
 
@@ -342,6 +417,10 @@ void main() {
   - Existing `u8`/`u16` arithmetic is masked back to 16 bits after ALU operations, while `u32` arithmetic keeps all 32 bits.
   - Port operands accept the full 16-bit range (0–65535) instead of 0–7.
   - `am()`, `set_am()`, `em()`, `set_em()` builtins are available.
+  - The 32-bit memory layout leaves `0x0000`–`0x97FF` for code and constant
+    data, starts the software stack at `0x9800`, and places globals at
+    `0xA000` (VRAM begins at `0xEC78`). This gives large OS images about
+    39K words of code space.
 - In `--mode legacy` the compiler keeps the original `X`/`Y` plus stack
   evaluation strategy and does not emit `R` registers.
 - User functions are emitted as callable labels and return using a return-id dispatch sequence.

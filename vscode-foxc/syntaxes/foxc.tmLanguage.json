@@ -3,6 +3,7 @@
     "name": "FoxC",
     "scopeName": "source.foxc",
     "patterns": [
+        { "include": "#preprocessor" },
         { "include": "#comments" },
         { "include": "#keywords" },
         { "include": "#types" },
@@ -14,6 +15,18 @@
         { "include": "#functionCalls" }
     ],
     "repository": {
+        "preprocessor": {
+            "patterns": [
+                {
+                    "name": "keyword.control.directive.include.foxc",
+                    "match": "^\\s*#\\s*include\\b.*$"
+                },
+                {
+                    "name": "keyword.control.directive.pragma.foxc",
+                    "match": "^\\s*#\\s*pragma\\b.*$"
+                }
+            ]
+        },
         "comments": {
             "patterns": [
                 {

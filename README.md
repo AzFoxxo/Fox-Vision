@@ -25,6 +25,19 @@ The project is composed of four main components:
 - [X] Decompiler
 - [X] Virtual machine
 
+## Configuring Emulator Memory
+
+The virtual machine exposes up to 4 GB of RAM. The amount of memory can be configured at startup with `--memory`, or with the `FOXVISION_MEMORY_SIZE` environment variable, using sizes between 128 KB and 4 GB. Sizes are given in bytes and accept `K`, `M`, or `G` suffixes:
+
+```sh
+foxvision --rom program.bin --memory 64M
+FOXVISION_MEMORY_SIZE=512M foxvision --rom program.bin
+```
+
+The memory size can also be changed at runtime from **Settings → Memory size** in the GUI. Shrinking memory discards data above the new limit.
+
+Guest programs in extended modes can read the configured size from the read-only `MS` register (introduced in ISA V2.1, in KiB units), or from FoxC with `get_memory_size()`.
+
 ## Technical Specification
 
 For a full list of technical specifications, see [ISA](docs/isa.md).

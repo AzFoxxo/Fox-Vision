@@ -1,8 +1,13 @@
-// FoxOS boot entry – resident kernel image (kernel + foxfs)
+// FoxOS 32-bit boot entry – resident kernel image (kernel + foxfs)
 //
 // This file supplies main() for the kernel image only. The interactive
 // shell lives in foxsh/foxsh.fc and is built as a separate image
 // (foxsh.bin), so it is never linked into the resident kernel.
+// The full kernel and FoxFS modules supply the resident-kernel support code
+// (including the formatter, which the application header does not expose).
+
+#include <kernel/kernel.fc>
+#include <foxfs/foxfs.fc>
 
 void main()
 {
@@ -10,13 +15,13 @@ void main()
 
     if (fs_valid() == 0)
     {
-        tty_puts("Filesystem not found - formatting flash...\r\n");
+        tty_puts("Filesystem not found - formatting VF32HardDisk...\r\n");
         fs_format();
         tty_puts("Done.\r\n");
     }
     else
     {
-        tty_puts("Flash filesystem OK.\r\n");
+        tty_puts("VF32HardDisk filesystem OK.\r\n");
     }
 
     // If foxos_pack embedded a foreground program, hand control to it.

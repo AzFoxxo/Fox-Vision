@@ -20,7 +20,7 @@ This will compile `file.f16` and produce `vfox16.bin` in the same directory.
 - `--mode <legacy|extended|em2_am1>` - Select the machine mode for this build (default: `legacy`). Use `--mode extended` for 16-bit extended mode (`EM=0x0001`), or `--mode em2_am1` (aliases: `extended2`, `v2`, `em2`) for the ISA V2.0 instruction set with 32-bit address space and 32-bit registers. The assembler does not itself choose an addressing granularity; the program sets `AM` at run time (`AM=1` for byte addressing, `AM=0` for word addressing).
 - `--strict-format` - Enforce the ROM payload limit for the selected mode
 - `--load-address <addr>` - Load the ROM payload at a non-zero address, such
-  as `0x4000` for a FoxOS foreground program
+  as `0x100000` for a 32-bit FoxOS foreground program
 - `-h, --help` - Display help information
 
 ### Examples
@@ -40,9 +40,9 @@ fox16asm -i myprogram.f16 --strict-format
 # Compile with extension mode enabled and the larger ROM payload limit
 fox16asm -i myprogram.f16 --mode extended --strict-format
 
-# Build a program for FoxOS's user-program area
-fox16asm -i myprogram.f16 -o myprogram.bin --mode extended \
-  --load-address 0x4000 --strict-format
+# Build a program for FoxOS's 32-bit user-program area
+fox16asm -i myprogram.f16 -o myprogram.bin --mode em2_am1 \
+  --load-address 0x100000 --strict-format
 ```
 
 FoxOS foreground programs can return to the resident shell with the
@@ -54,17 +54,25 @@ OSRET
 ```
 
 To start a foreground program from a resident OS image, jump to its loaded
-address. The assembler has no separate `OSSTART` opcode; use the normal
-absolute-address jump form:
+address. The assembler has no separate `OSSTART` opcode. In `--mode em2_am1`,
+Fox16ASM automatically widens a jump whose label resolves above `0xFFFF` to a
+three-word instruction carrying the full 32-bit target, so a normal
+`JMP label` works even for programs loaded at `0x100000`.
+
+Hand-written code can also materialise the address in a 32-bit register and
+jump through it:
 
 ```assembly
-JMP $4000
+; Jump to the 0x100000 program area
+MOV $0000 X
+MOV $0010 XH
+JMP X
 ```
 
-The equivalent FoxC built-ins are `os_start(0x4000)` (the address must be a
-16-bit constant and is emitted as `JMP`) and `os_return()` (emitted as
-`OSRET`). A foreground program should be assembled or compiled with its load
-address and finish with `OSRET`.
+The equivalent FoxC built-ins are `os_start(0x100000)` (in `--mode em2_am1`
+the address may be any `u32` and is emitted as `JMP X`) and `os_return()`
+(emitted as `OSRET`). A foreground program should be assembled or compiled
+with its load address and finish with `OSRET`.
 
 ## Basic structure
 Each program must start with a `:main` definition, this must be the first piece of code within the program as address zero is used as the start of execution.
@@ -97,6 +105,7 @@ Extension mode adds the `EM` and `AM` machine registers and the `IN`/`OUT` port 
 - Legacy (default, `EM = 0x0000`): active-register instruction forms are permitted.
 - Extended (`EM = 0x0001`): active-register instruction forms are disabled; the ISA exposes port I/O via `IN`/`OUT` and named port identifiers. Multi-operand, comparison/jump, ALU, stack, and port instructions require `--mode extended`.
 - Modern V2.0 (`EM = 0x0002`): 32-bit address bus for memory addressing, 32-bit registers (`R0`–`R7`, `X`, `Y`, `PC`, `SP`, `CYC`) and high/low sub-registers (`R0L`/`R0H`, etc.). Select via `--mode em2_am1`. The program chooses `AM=1` for 8-bit byte addressing or `AM=0` for 16-bit word addressing; both are valid with `EM=2`.
+- ISA V2.1: additive extension to V2.0 that introduces the read-only 32-bit `MS` register, which reports installed RAM in KiB units.
 
 In extended modes, the full 16-bit port space `0x0000` through `0xFFFF` is accessible. The assembler accepts symbolic port names `PORT0`..`PORT65535` (case-insensitive) as well as immediate values `%0`..`%65535` or `$0`..`$FFFF` when used as port operands.
 
@@ -112,6 +121,17 @@ OUT Y PORT0
 ; Read from higher port into 32-bit sub-register
 IN PORT100 R0L
 OUT R0H PORT100
+```
+
+In `EM=2`, port transfers become 32-bit when the register operand is a primary 32-bit register. This is how 32-bit cartridges such as `VF32HardDisk` are accessed:
+
+```assembly
+MOV %2 EM
+MOV $0000 R0       ; full 32-bit address in R0
+OUT R0 PORT6
+MOV %1 R1          ; command word
+OUT R1 PORT6
+IN PORT6 R0        ; one 32-bit bus word
 ```
 
 To denote the type of data, the following prefixes are used:
@@ -197,6 +217,7 @@ To simplify assembly, the following register and port constants are recognised b
 	- `STATUS` : `0x3` (flags register)
 	- `SP` : `0x4` (stack pointer, 32-bit; aliased by `SPL` `0x16` and `SPH` `0x17`)
 	- `CYC` : `0x5` (cycle counter, 32-bit, read-only; aliased by `CYCL` `0x18` and `CYCH` `0x19`)
+	- `MS` : `0x1A` (memory size, 32-bit, read-only; introduced in ISA V2.1; installed RAM in 1 KiB units; available when `EM != 0`)
 	- `EM` : `0x6` (extension mode register: `0` = legacy, `1` = extended 16-bit, `2` = 32-bit memory address space)
 	- `R0` - `R7` : `0x7` - `0xE` (general-purpose 32-bit registers; aliased by `R0L`/`R0H` through `R7L`/`R7H` `0x20` - `0x2F`)
 	- `AM` : `0xF` (addressing mode register: `0` = 16-bit word addressing, `1` = 8-bit byte addressing)
@@ -210,7 +231,8 @@ To simplify assembly, the following register and port constants are recognised b
 		- `PORT3` = `0x0003` (VF16Mouse)
 		- `PORT4` = `0x0004` (VF16TTY)
 		- `PORT5` = `0x0005` (VF16Flash)
-		- `PORT6` - `PORT7` = `0x0006` - `0x0007` (reserved/custom devices)
+		- `PORT6` = `0x0006` (VF32HardDisk)
+		- `PORT7` = `0x0007` (reserved/custom devices)
 		- `PORT8` - `PORT65535` = `0x0008` - `0xFFFF` (user and expansion ports)
 
 These names can be used in instruction operands where appropriate (for example `IN PORT1 X` in extended mode). Port-to-device mappings remain implementation-defined and are assigned by the emulator.

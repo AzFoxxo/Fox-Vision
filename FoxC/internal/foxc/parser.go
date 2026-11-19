@@ -51,32 +51,51 @@ func (p *parser) parseFunction(ret Type, name string) (*FuncDecl, error) {
 		return nil, err
 	}
 	var params []Param
+	namelessParam := false
 	if !p.at(tokRParen) {
-		for {
-			base, err := p.parseType()
-			if err != nil {
-				return nil, err
+		// `f(void)` is an explicit empty parameter list.
+		if p.at(tokType) && p.curr().text == "void" && p.peek(1).kind == tokRParen {
+			p.next()
+		} else {
+			for {
+				base, err := p.parseType()
+				if err != nil {
+					return nil, err
+				}
+				// allow pointer declarator in parameter
+				ptr := 0
+				for p.at(tokStar) {
+					p.next()
+					ptr++
+				}
+				// Prototypes may omit parameter names; definitions may not.
+				paramName := ""
+				if p.at(tokIdent) {
+					paramName = p.next().text
+				} else {
+					namelessParam = true
+				}
+				params = append(params, Param{Name: paramName, Type: Type{Base: base, Ptr: ptr}})
+				if p.at(tokComma) {
+					p.next()
+					continue
+				}
+				break
 			}
-			// allow pointer declarator in parameter
-			ptr := 0
-			for p.at(tokStar) {
-				p.next()
-				ptr++
-			}
-			paramName, err := p.expect(tokIdent, "expected parameter name")
-			if err != nil {
-				return nil, err
-			}
-			params = append(params, Param{Name: paramName.text, Type: Type{Base: base, Ptr: ptr}})
-			if p.at(tokComma) {
-				p.next()
-				continue
-			}
-			break
 		}
 	}
 	if _, err := p.expect(tokRParen, "expected ')'"); err != nil {
 		return nil, err
+	}
+
+	// A prototype ends at ';'. A definition must provide a body and name all
+	// of its parameters so the semantic/codegen phases can bind them.
+	if p.at(tokSemi) {
+		p.next()
+		return &FuncDecl{Name: name, Ret: ret, Params: params, IsPrototype: true}, nil
+	}
+	if namelessParam {
+		return nil, fmt.Errorf("parameter name required in definition of %s", name)
 	}
 	body, err := p.parseBlock()
 	if err != nil {

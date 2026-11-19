@@ -4,7 +4,7 @@ namespace Fox16ASM;
 
 public static class VF16ObjWriter
 {
-    public static void WriteObject(string path, byte[] textSectionData, Dictionary<string, ushort> labels, uint loadAddress = 0)
+    public static void WriteObject(string path, byte[] textSectionData, Dictionary<string, uint> labels, uint loadAddress = 0)
     {
         var sectionData = StripRomHeader(textSectionData);
 

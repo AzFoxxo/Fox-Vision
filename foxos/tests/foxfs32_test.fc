@@ -1,0 +1,248 @@
+// FoxFS 32-bit regression test
+//
+// Built from this file with the full kernel + FoxFS modules (the test needs
+// the formatter, which <foxos.fh> does not expose). Formats a fresh
+// VF32HardDisk image, exercises the 32-bit metadata, path handling, directory
+// rules and block I/O, then prints PASS or FAIL.
+//
+// Run with: make check
+
+#include <kernel/kernel.fc>
+#include <foxfs/foxfs.fc>
+
+u16 ok = 1;
+u16 check_no = 0;
+
+void check(u16 condition)
+{
+    check_no = check_no + 1;
+    if (condition == 0)
+    {
+        ok = 0;
+        tty_puts("check ");
+        tty_putu32(check_no);
+        tty_puts(" failed\r\n");
+    }
+}
+
+// Copy a string literal into the shared line[] buffer.
+void set_line(u8 *text, u16 length)
+{
+    u16 i = 0;
+    while (i < length)
+    {
+        line[i] = *text;
+        text = text + 1;
+        i = i + 1;
+    }
+    line_len = length;
+}
+
+// Build a three-character name fNN in line[].
+void make_name(u16 n)
+{
+    u16 tens = n / 10;
+    line[0] = 'f';
+    line[1] = '0' + tens;
+    line[2] = '0' + (n - tens * 10);
+    line_len = 3;
+}
+
+// Build a sixteen-character name in line[].
+void make_long_name()
+{
+    u16 i = 0;
+    while (i < 16)
+    {
+        line[i] = 'a' + i;
+        i = i + 1;
+    }
+    line_len = 16;
+}
+
+void main()
+{
+    u32 bin_slot  = 0;
+    u32 slot      = 0;
+    u32 other     = 0;
+    u32 base      = 0;
+    u32 resolved  = 0;
+    u32 a_slot    = 0;
+    u32 b_slot    = 0;
+    u16 i         = 0;
+
+    kernel_banner();
+    fs_format();
+
+    check(fs_valid());
+    check(disk_read(2) == ENTRY_COUNT);
+    check(disk_read(3) == DATA_BASE);
+    check(ENTRY_COUNT >= 256);
+
+    // fs_format() installs the standard root hierarchy: /bin, /home, /temp, /etc.
+    set_line("/bin", 4);
+    bin_slot = fs_resolve_path(0, 4);
+    check(bin_slot != NOT_FOUND);
+    fs_read_entry(bin_slot);
+    check(fs_e_type == 2);
+    check(fs_e_parent == ROOT_SLOT);
+
+    set_line("/home", 5);
+    check(fs_resolve_dir(0, 5) != NOT_FOUND);
+    set_line("/temp", 5);
+    check(fs_resolve_dir(0, 5) != NOT_FOUND);
+    set_line("/etc", 4);
+    check(fs_resolve_dir(0, 4) != NOT_FOUND);
+
+    // Create /bin/test in one absolute-path operation.
+    set_line("/bin/test", 9);
+    slot = fs_create(0, 9, 1);
+    check(slot != NOT_FOUND);
+    check(fs_find_child(bin_slot, 5, 4) == slot);
+    fs_read_entry(slot);
+    check(fs_e_type == 1);
+    check(fs_e_parent == bin_slot);
+    check(fs_e_namelen == 4);
+    check(fs_e_size == 0);
+    check(fs_name_matches(slot, 5, 4));
+
+    // Single-word 32-bit metadata/data accesses.
+    base = fs_data_base(slot);
+    disk_write(base, 0xDEADBEEF);
+    check(disk_read(base) == 0xDEADBEEF);
+    disk_write(base + 1, 0x11223344);
+    check(disk_read(base + 1) == 0x11223344);
+
+    // Blocks in different slots must not overlap.
+    set_line("/bin/other", 10);
+    other = fs_create(0, 10, 1);
+    check(other != NOT_FOUND);
+    check(fs_data_base(other) == base + FILE_CHUNK_WORDS);
+    disk_write(fs_data_base(other), 0x55667788);
+    check(disk_read(base) == 0xDEADBEEF);
+    check(disk_read(fs_data_base(other)) == 0x55667788);
+
+    // Block write and read through the 32-bit bus.
+    disk_write_begin(base + 4, 3);
+    out_port32(6, 0x11111111);
+    out_port32(6, 0x22222222);
+    out_port32(6, 0x33333333);
+    disk_read_begin(base + 4, 3);
+    check(in_port32(6) == 0x11111111);
+    check(in_port32(6) == 0x22222222);
+    check(in_port32(6) == 0x33333333);
+
+    // Resolve the same absolute paths.
+    set_line("/bin/test", 9);
+    check(fs_resolve_path(0, 9) == slot);
+    set_line("/bin/other", 10);
+    check(fs_resolve_path(0, 10) == other);
+
+    // Names can use the full sixteen-character field.
+    make_long_name();
+    resolved = fs_create(0, 16, 1);
+    check(resolved != NOT_FOUND);
+    check(fs_resolve_path(0, 16) == resolved);
+    fs_read_entry(resolved);
+    check(fs_e_namelen == 16);
+    set_line("a", 1);
+    check(fs_name_matches(resolved, 0, 1));
+
+    // Seventeen-character names are rejected.
+    i = 0;
+    while (i < 17) { line[i] = 'z'; i = i + 1; }
+    check(fs_create(0, 17, 1) == NOT_FOUND);
+
+    // "." and ".." are not valid entry names.
+    set_line(".", 1);
+    check(fs_create(0, 1, 1) == NOT_FOUND);
+    set_line("..", 2);
+    check(fs_create(0, 2, 1) == NOT_FOUND);
+
+    // Duplicate names are rejected.
+    set_line("dup", 3);
+    check(fs_create(0, 3, 1) != NOT_FOUND);
+    check(fs_create(0, 3, 1) == NOT_FOUND);
+
+    // Create many entries to exercise a slot table much larger than 32.
+    i = 0;
+    while (i < 32)
+    {
+        make_name(i);
+        check(fs_create(0, 3, 1) != NOT_FOUND);
+        i = i + 1;
+    }
+    make_name(0);
+    check(fs_resolve_path(0, 3) != NOT_FOUND);
+    make_name(31);
+    check(fs_resolve_path(0, 3) != NOT_FOUND);
+
+    // Remove them again; the slot table must stay usable.
+    i = 0;
+    while (i < 32)
+    {
+        make_name(i);
+        check(fs_remove(0, 3) == 1);
+        i = i + 1;
+    }
+    make_name(0);
+    check(fs_resolve_path(0, 3) == NOT_FOUND);
+
+    // Non-empty directories cannot be removed.
+    set_line("dir", 3);
+    a_slot = fs_create(0, 3, 2);
+    check(a_slot != NOT_FOUND);
+    set_line("/dir/child", 10);
+    check(fs_create(0, 10, 1) != NOT_FOUND);
+    set_line("/dir", 4);
+    check(fs_remove(0, 4) == 0);
+    set_line("/dir/child", 10);
+    check(fs_remove(0, 10) == 1);
+    check(fs_remove(0, 4) == 1);
+
+    // A trailing slash still resolves.
+    set_line("/trail", 6);
+    slot = fs_create(0, 6, 2);
+    check(slot != NOT_FOUND);
+    set_line("/trail/", 7);
+    check(fs_resolve_path(0, 7) == slot);
+    check(fs_remove(0, 7) == 1);
+
+    // ".." walks back to the parent; "/" is always the root.
+    set_line("a", 1);
+    a_slot = fs_create(0, 1, 2);
+    check(a_slot != NOT_FOUND);
+    set_line("/a/b", 4);
+    b_slot = fs_create(0, 4, 2);
+    check(b_slot != NOT_FOUND);
+    fs_current_dir = b_slot;
+    set_line("..", 2);
+    check(fs_resolve_dir(0, 2) == a_slot);
+    set_line("/", 1);
+    check(fs_resolve_dir(0, 1) == ROOT_SLOT);
+    check(fs_resolve_path(0, 1) == ROOT_SLOT);
+
+    // The current working directory cannot be removed.
+    set_line("/a/b", 4);
+    check(fs_remove(0, 4) == 0);
+    fs_current_dir = ROOT_SLOT;
+    check(fs_remove(0, 4) == 1);
+    set_line("/a", 2);
+    check(fs_remove(0, 2) == 1);
+
+    // A removed file can be created again and reuses the freed slot.
+    set_line("/bin/test", 9);
+    slot = fs_resolve_path(0, 9);
+    check(slot != NOT_FOUND);
+    check(fs_remove(0, 9) == 1);
+    check(fs_resolve_path(0, 9) == NOT_FOUND);
+    check(fs_create(0, 9, 1) == slot);
+    check(fs_resolve_path(0, 9) != NOT_FOUND);
+
+    // Empty directories resolve.
+    set_line("/bin", 4);
+    check(fs_resolve_dir(0, 4) == bin_slot);
+
+    if (ok) { tty_puts("PASS\r\n"); }
+    else    { tty_puts("FAIL\r\n"); }
+}

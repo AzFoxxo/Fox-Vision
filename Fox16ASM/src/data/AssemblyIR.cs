@@ -6,6 +6,10 @@ enum IROperandKind
     Register,
     Label,
     Constant,
+    // Low or high 16-bit half of a label address, used to build 32-bit
+    // pointers without truncating labels that live above 0xFFFF.
+    LabelLow,
+    LabelHigh,
 }
 
 readonly record struct IROperand(IROperandKind Kind, ushort Value, string? Symbol, int Line, int Column)
@@ -21,6 +25,12 @@ readonly record struct IROperand(IROperandKind Kind, ushort Value, string? Symbo
 
     public static IROperand Constant(string symbol, int line, int column)
         => new(IROperandKind.Constant, 0, symbol, line, column);
+
+    public static IROperand LabelLow(string symbol, int line, int column)
+        => new(IROperandKind.LabelLow, 0, symbol, line, column);
+
+    public static IROperand LabelHigh(string symbol, int line, int column)
+        => new(IROperandKind.LabelHigh, 0, symbol, line, column);
 }
 
 readonly record struct IRInstruction(string Opcode, IReadOnlyList<IROperand> Operands, int Line, int Column, string SourceLine);

@@ -63,7 +63,7 @@ echo "Combined ROM : $COMBINED"
 echo ""
 echo "To launch manually:"
 echo "  FOXVISION_PORT4_DEVICE=VF16TTY \\"
-echo "  FOXVISION_PORT5_DEVICE=VF16Flash \\"
+echo "  FOXVISION_PORT6_DEVICE=VF32HardDisk \\"
 echo "  $INSTALL_DIR/foxvision --rom \"$COMBINED\""
 echo ""
 echo "At the FoxOS prompt:"
@@ -76,6 +76,6 @@ if [[ $DO_RUN -eq 1 ]]; then
     echo "  STEP 3 – Launching FoxVision"
     echo "============================================"
     FOXVISION_PORT4_DEVICE=VF16TTY \
-    FOXVISION_PORT5_DEVICE=VF16Flash \
+    FOXVISION_PORT6_DEVICE=VF32HardDisk \
     "$INSTALL_DIR/foxvision" --rom "$COMBINED"
 fi

@@ -388,6 +388,34 @@ class IRBuilder
             return true;
         }
 
+        // @lo(label) and @hi(label) select one 16-bit half of a label address.
+        // A 32-bit pointer is built with two MOVs, for example:
+        //   MOV @hi(str_1) XH
+        //   MOV @lo(str_1) XL
+        if ((part.StartsWith("@lo(", StringComparison.OrdinalIgnoreCase)
+             || part.StartsWith("@hi(", StringComparison.OrdinalIgnoreCase))
+            && part.EndsWith(")", StringComparison.Ordinal))
+        {
+            var high = part.StartsWith("@hi(", StringComparison.OrdinalIgnoreCase);
+            var halfSymbol = part.Substring(4, part.Length - 5);
+            if (!LabelIdentifier.IsMatch(halfSymbol))
+            {
+                diagnostics.Add(Diagnostic.Error(
+                    $"Invalid label half operand '{part}'.",
+                    sourceFile,
+                    sourceLine.LineNumber,
+                    column,
+                    sourceLine.Text));
+                operand = default;
+                return false;
+            }
+
+            operand = high
+                ? IROperand.LabelHigh(halfSymbol, sourceLine.LineNumber, column)
+                : IROperand.LabelLow(halfSymbol, sourceLine.LineNumber, column);
+            return true;
+        }
+
         if (!char.IsLetter(part[0]) && part[0] != '_')
         {
             diagnostics.Add(Diagnostic.Error(
@@ -518,6 +546,8 @@ class IRBuilder
             IROperandKind.Register => $"REG({operand.Value:X4})",
             IROperandKind.Label => operand.Symbol ?? string.Empty,
             IROperandKind.Constant => $"<{operand.Symbol ?? string.Empty}>",
+            IROperandKind.LabelLow => $"@lo({operand.Symbol ?? string.Empty})",
+            IROperandKind.LabelHigh => $"@hi({operand.Symbol ?? string.Empty})",
             _ => string.Empty,
         };
     }

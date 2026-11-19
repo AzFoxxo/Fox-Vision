@@ -1,18 +1,97 @@
-namespace FoxVision.Components
+﻿namespace FoxVision.Components
 {
     internal class ContiguousMemory
     {
-        private ushort[] _memory;
+        internal const ulong MinimumSizeBytes = 128UL * 1024UL;
+        internal const ulong MaximumSizeBytes = 4UL * 1024UL * 1024UL * 1024UL;
+        internal const ulong DefaultSizeBytes = MaximumSizeBytes;
+        private const int BaseWordCount = 65536;
+        private const int PageWordCount = 65536;
+
+        private readonly ushort[] _memory;
         private readonly Dictionary<uint, ushort[]> _extendedPages = new();
         private readonly object _memoryLock = new();
-        internal ushort MaxAddress { get; private set; }
+        private ulong _sizeBytes;
+        private uint _maxWordAddress;
 
-        internal ContiguousMemory(ushort size)
+        internal ushort MaxAddress => (ushort)(BaseWordCount - 1);
+        internal ulong SizeBytes
         {
-            _memory = new ushort[size + 1];
-            this.MaxAddress = size;
+            get
+            {
+                lock (_memoryLock)
+                    return _sizeBytes;
+            }
+        }
 
-            Console.WriteLine($"Created contiguous memory with addresses 0x0000 to 0x{size:X4}");
+        internal uint MaxWordAddress
+        {
+            get
+            {
+                lock (_memoryLock)
+                    return _maxWordAddress;
+            }
+        }
+
+        internal ContiguousMemory(ulong sizeBytes)
+        {
+            _memory = new ushort[BaseWordCount];
+            _sizeBytes = NormalizeSizeBytes(sizeBytes);
+            _maxWordAddress = (uint)(_sizeBytes / 2 - 1);
+
+            Console.WriteLine($"Created contiguous memory: {FormatSize(_sizeBytes)} (word addresses 0x00000000 to 0x{_maxWordAddress:X8})");
+        }
+
+        internal static ulong NormalizeSizeBytes(ulong sizeBytes)
+        {
+            if (sizeBytes > MaximumSizeBytes)
+                sizeBytes = MaximumSizeBytes;
+
+            // Memory is word-addressable, so keep the configured size aligned to
+            // a whole number of 16-bit words.
+            sizeBytes &= ~1UL;
+
+            if (sizeBytes < MinimumSizeBytes)
+                sizeBytes = MinimumSizeBytes;
+
+            return sizeBytes;
+        }
+
+        internal static string FormatSize(ulong sizeBytes)
+        {
+            const ulong kibibyte = 1024UL;
+            const ulong mebibyte = kibibyte * 1024UL;
+            const ulong gibibyte = mebibyte * 1024UL;
+
+            if (sizeBytes >= gibibyte && sizeBytes % gibibyte == 0)
+                return $"{sizeBytes / gibibyte} GB";
+            if (sizeBytes >= mebibyte && sizeBytes % mebibyte == 0)
+                return $"{sizeBytes / mebibyte} MB";
+            if (sizeBytes >= kibibyte && sizeBytes % kibibyte == 0)
+                return $"{sizeBytes / kibibyte} KB";
+
+            return $"{sizeBytes} bytes";
+        }
+
+        internal void Resize(ulong sizeBytes)
+        {
+            sizeBytes = NormalizeSizeBytes(sizeBytes);
+
+            lock (_memoryLock)
+            {
+                _sizeBytes = sizeBytes;
+                _maxWordAddress = (uint)(sizeBytes / 2 - 1);
+
+                uint maxPageIndex = _maxWordAddress >> 16;
+                if (_extendedPages.Count > 0)
+                {
+                    var pagesToRemove = _extendedPages.Keys.Where(pageIndex => pageIndex > maxPageIndex).ToArray();
+                    foreach (uint pageIndex in pagesToRemove)
+                    {
+                        _extendedPages.Remove(pageIndex);
+                    }
+                }
+            }
         }
 
         internal void WriteUnchecked(ushort address, ushort data)
@@ -35,19 +114,7 @@ namespace FoxVision.Components
         {
             lock (_memoryLock)
             {
-                uint pageIndex = wordAddress >> 16;
-                ushort offset = (ushort)(wordAddress & 0xFFFF);
-                if (pageIndex == 0)
-                {
-                    return offset < _memory.Length ? _memory[offset] : (ushort)0;
-                }
-
-                if (_extendedPages.TryGetValue(pageIndex, out var page))
-                {
-                    return page[offset];
-                }
-
-                return 0;
+                return ReadWordUnchecked(wordAddress);
             }
         }
 
@@ -55,38 +122,75 @@ namespace FoxVision.Components
         {
             lock (_memoryLock)
             {
-                uint pageIndex = wordAddress >> 16;
-                ushort offset = (ushort)(wordAddress & 0xFFFF);
-                if (pageIndex == 0)
-                {
-                    if (offset < _memory.Length)
-                        _memory[offset] = data;
-                    return;
-                }
-
-                if (!_extendedPages.TryGetValue(pageIndex, out var page))
-                {
-                    page = new ushort[65536];
-                    _extendedPages[pageIndex] = page;
-                }
-
-                page[offset] = data;
+                WriteWordUnchecked(wordAddress, data);
             }
+        }
+
+        private ushort ReadWordUnchecked(uint wordAddress)
+        {
+            if (wordAddress > _maxWordAddress)
+                return 0;
+
+            uint pageIndex = wordAddress >> 16;
+            ushort offset = (ushort)(wordAddress & 0xFFFF);
+            if (pageIndex == 0)
+            {
+                return offset < _memory.Length ? _memory[offset] : (ushort)0;
+            }
+
+            if (_extendedPages.TryGetValue(pageIndex, out var page))
+            {
+                return page[offset];
+            }
+
+            return 0;
+        }
+
+        private void WriteWordUnchecked(uint wordAddress, ushort data)
+        {
+            if (wordAddress > _maxWordAddress)
+                return;
+
+            uint pageIndex = wordAddress >> 16;
+            ushort offset = (ushort)(wordAddress & 0xFFFF);
+            if (pageIndex == 0)
+            {
+                if (offset < _memory.Length)
+                    _memory[offset] = data;
+                return;
+            }
+
+            if (!_extendedPages.TryGetValue(pageIndex, out var page))
+            {
+                page = new ushort[PageWordCount];
+                _extendedPages[pageIndex] = page;
+            }
+
+            page[offset] = data;
         }
 
         internal byte ReadByte(uint byteAddress)
         {
-            uint wordAddress = byteAddress >> 1;
-            ushort word = ReadWord(wordAddress);
-            return (byte)((byteAddress & 1) == 0 ? (word & 0xFF) : ((word >> 8) & 0xFF));
+            lock (_memoryLock)
+            {
+                uint wordAddress = byteAddress >> 1;
+                if (wordAddress > _maxWordAddress)
+                    return 0;
+
+                ushort word = ReadWordUnchecked(wordAddress);
+                return (byte)((byteAddress & 1) == 0 ? (word & 0xFF) : ((word >> 8) & 0xFF));
+            }
         }
 
         internal void WriteByte(uint byteAddress, byte data)
         {
-            uint wordAddress = byteAddress >> 1;
             lock (_memoryLock)
             {
-                ushort word = ReadWord(wordAddress);
+                uint wordAddress = byteAddress >> 1;
+                if (wordAddress > _maxWordAddress)
+                    return;
+
+                ushort word = ReadWordUnchecked(wordAddress);
                 if ((byteAddress & 1) == 0)
                 {
                     word = (ushort)((word & 0xFF00) | data);
@@ -95,7 +199,7 @@ namespace FoxVision.Components
                 {
                     word = (ushort)((word & 0x00FF) | (data << 8));
                 }
-                WriteWord(wordAddress, word);
+                WriteWordUnchecked(wordAddress, word);
             }
         }
 

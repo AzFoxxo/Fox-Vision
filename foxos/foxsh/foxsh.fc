@@ -1,11 +1,14 @@
-// FoxSH – the FoxOS interactive shell
+// FoxSH – the FoxOS 32-bit interactive shell
 // Runs on boot from /bin/foxsh on the virtual machine.
 // Depends on: kernel/kernel.fc  foxfs/foxfs.fc
 //
-// This file is the top-level translation unit for the shell image. The
-// kernel and filesystem sources are concatenated in front of it by the
-// Makefile so the compiler sees their symbols first. The resident kernel
+// This file is the top-level translation unit for the shell image. It uses
+// the full kernel and FoxFS modules, including the OS-only helpers that the
+// application header <foxos.fh> deliberately leaves out. The resident kernel
 // image (foxos.bin) does not include this file.
+
+#include <kernel/kernel.fc>
+#include <foxfs/foxfs.fc>
 
 // ---------------------------------------------------------------------------
 // Read a line from the terminal into line[] / line_len
@@ -68,24 +71,35 @@ u16 cmd_match(u8 *expected, u16 length)
 }
 
 // ---------------------------------------------------------------------------
-// run – load a program from the flash filesystem and execute it
+// run – load a program from the 32-bit filesystem and execute it
 // ---------------------------------------------------------------------------
 
-void shell_run(u16 path_start)
+// Validate a file slot and transfer control to it.
+void shell_exec_slot(u32 slot)
 {
-    u16 slot = fs_resolve_path(path_start, line_len);
-    u16 word_count = 0;
-    u16 data_base = 0;
+    u32 word_count = 0;
+    u32 data_base = 0;
 
-    if (slot == ROOT_SLOT || slot == NOT_FOUND || flash_read(slot + 34) != 1)
+    if (slot == ROOT_SLOT || slot == NOT_FOUND)
     {
         tty_puts("not found\r\n");
         return;
     }
-    word_count = flash_read(slot + 2);
+    fs_read_entry(slot);
+    if (fs_e_type != 1)
+    {
+        tty_puts("not found\r\n");
+        return;
+    }
+    word_count = fs_e_size;
     if (word_count == 0)
     {
         tty_puts("empty program\r\n");
+        return;
+    }
+    if (word_count > FILE_CHUNK_WORDS)
+    {
+        tty_puts("invalid program size\r\n");
         return;
     }
     data_base = fs_data_base(slot);
@@ -93,75 +107,180 @@ void shell_run(u16 path_start)
     kernel_exec(data_base, word_count);
 }
 
-// ---------------------------------------------------------------------------
-// install – copy embedded ROM program into /bin/<name>
-// ---------------------------------------------------------------------------
-
-void shell_install()
+// Try line[start..end-1] as a runnable file. Returns 1 when the path named a
+// file (even if shell_exec_slot rejected it), otherwise 0.
+u16 shell_try_run_path(u16 start, u16 end)
 {
-    u16 word_count = 0;
-    u16 src        = 0;
-    u16 i          = 0;
-    u16 name_len   = 0;
-    u16 slot       = 0;
-    u16 bin_slot   = 0;
-    u16 dest       = 0;
-    u16 scan       = 0;
+    u32 slot = fs_resolve_path(start, end);
 
-    // Check embedded region (ROM contents are read with peek()).
-    if (peek(EMBED_BASE) != EMBED_MAGIC)
+    if (slot == ROOT_SLOT || slot == NOT_FOUND)
     {
-        tty_puts("no embedded program\r\n");
+        return 0;
+    }
+    fs_read_entry(slot);
+    if (fs_e_type != 1)
+    {
+        return 0;
+    }
+    shell_exec_slot(slot);
+    return 1;
+}
+
+u16 shell_has_separator(u16 start, u16 end)
+{
+    u16 i = start;
+    while (i < end)
+    {
+        if (line[i] == '/') { return 1; }
+        i = i + 1;
+    }
+    return 0;
+}
+
+// Rewrite line[start..end-1] as /bin/<name> and return the new end offset.
+// Returns 0 when the name is empty or would not fit in line[].
+u16 shell_make_bin_path(u16 start, u16 end)
+{
+    u16 length = end - start;
+    u16 i = length;
+
+    if (length == 0 || length + 5 > LINE_MAX) { return 0; }
+
+    // Move the name right to make room for the "/bin/" prefix. Copying from
+    // the end keeps the source intact while the ranges overlap.
+    while (i > 0)
+    {
+        i = i - 1;
+        line[5 + i] = line[start + i];
+    }
+    line[0] = '/';
+    line[1] = 'b';
+    line[2] = 'i';
+    line[3] = 'n';
+    line[4] = '/';
+    return 5 + length;
+}
+
+// Run a path. A bare program name is first looked up relative to the current
+// directory and then in /bin, so installed programs can be started by name.
+void shell_run(u16 start, u16 end)
+{
+    u16 bin_end = 0;
+
+    while (end > start && line[end - 1] == ' ') { end = end - 1; }
+    if (end <= start)
+    {
+        tty_puts("not found\r\n");
         return;
     }
 
-    name_len   = peek(EMBED_BASE + 1);
-    word_count = peek(EMBED_BASE + EMBED_LEN_OFFSET);
-    src        = EMBED_BASE + EMBED_DATA_OFFSET;
+    if (shell_try_run_path(start, end)) { return; }
 
-    if (name_len == 0 || name_len > NAMES_PER_SLOT)
+    if (shell_has_separator(start, end))
+    {
+        tty_puts("not found\r\n");
+        return;
+    }
+
+    bin_end = shell_make_bin_path(start, end);
+    if (bin_end != 0 && shell_try_run_path(0, bin_end)) { return; }
+
+    tty_puts("not found\r\n");
+}
+
+// ---------------------------------------------------------------------------
+// install – copy embedded ROM programs into /bin/<name>
+//
+// foxos_pack.py stores one record per program, each immediately followed by
+// the next. A record is:
+//
+//   word 0      EMBED_MAGIC
+//   word 1      name length
+//   words 2-9   name, padded with zeroes
+//   word 10     program word count
+//   words 11+   program words
+//
+// install_record() returns 1 on success and 0 on a fatal error.
+// ---------------------------------------------------------------------------
+
+u16 install_record(u32 rec)
+{
+    u32 word_count = 0;
+    u32 src        = 0;
+    u32 i          = 0;
+    u16 name_len   = 0;
+    u32 slot       = 0;
+    u32 bin_slot   = 0;
+    u32 dest       = 0;
+    u32 scan       = 0;
+
+    name_len   = peek(rec + 1);
+    word_count = peek(rec + EMBED_LEN_OFFSET);
+    src        = rec + EMBED_DATA_OFFSET;
+
+    // Embedded records store at most EMBED_NAME_MAX (= 8) name words.
+    if (name_len == 0 || name_len > EMBED_NAME_MAX)
     {
         tty_puts("invalid embedded name\r\n");
-        return;
+        return 0;
+    }
+    if (word_count == 0 || word_count > FILE_CHUNK_WORDS)
+    {
+        tty_puts("invalid embedded program size\r\n");
+        return 0;
     }
 
-    // Ensure /bin directory exists; create it if not.
-    line[0] = 'b';
-    line[1] = 'i';
-    line[2] = 'n';
-    bin_slot = fs_find_child(ROOT_SLOT, 0, 3);
-    if (bin_slot == ROOT_SLOT)
+    // Ensure /bin directory exists; create it if not. Use an absolute path
+    // so install works from any current directory.
+    line[0] = '/';
+    line[1] = 'b';
+    line[2] = 'i';
+    line[3] = 'n';
+    bin_slot = fs_find_child(ROOT_SLOT, 1, 3);
+    if (bin_slot == NOT_FOUND)
     {
         // Create /bin as a directory under root.
-        fs_create(0, 3, 2);
-        bin_slot = fs_find_child(ROOT_SLOT, 0, 3);
+        if (fs_create(0, 4, 2) == NOT_FOUND) { return 0; }
+        bin_slot = fs_find_child(ROOT_SLOT, 1, 3);
+        if (bin_slot == NOT_FOUND) { return 0; }
+    }
+    fs_read_entry(bin_slot);
+    if (fs_e_type != 2)
+    {
+        tty_puts("/bin is not a directory\r\n");
+        return 0;
     }
 
     // Restore the embedded program name for the /bin lookup.
     i = 0;
     while (i < name_len)
     {
-        line[i] = peek(EMBED_BASE + 2 + i);
+        line[i] = peek(rec + 2 + i);
         i = i + 1;
     }
 
     // Reuse an existing /bin/<name> entry instead of creating a new slot
     // every time install runs.
     slot = fs_find_child(bin_slot, 0, name_len);
-    if (slot != ROOT_SLOT && flash_read(slot + 34) != 1)
+    if (slot != NOT_FOUND)
     {
-        tty_puts("target is a directory\r\n");
-        return;
+        fs_read_entry(slot);
+        if (fs_e_type != 1)
+        {
+            tty_puts("target is a directory\r\n");
+            return 0;
+        }
     }
 
     // Remove duplicate copies left behind by older installs.
     scan = 0;
     while (scan < ENTRY_COUNT)
     {
+        fs_read_entry(scan);
         if (scan != slot &&
-            flash_read(scan + 34) != 0 &&
-            flash_read(scan + 98) == bin_slot &&
-            flash_read(scan + 66) == name_len &&
+            fs_e_type != 0 &&
+            fs_e_parent == bin_slot &&
+            fs_e_namelen == name_len &&
             fs_name_matches(scan, 0, name_len))
         {
             fs_clear_slot(scan);
@@ -169,65 +288,164 @@ void shell_install()
         scan = scan + 1;
     }
 
-    if (slot == ROOT_SLOT)
+    if (slot == NOT_FOUND)
     {
         slot = fs_alloc_slot();
         if (slot == NOT_FOUND)
         {
             tty_puts("no free slot\r\n");
-            return;
+            return 0;
         }
     }
 
     // Write the slot metadata.
-    flash_write(slot + 2,  word_count);
-    flash_write(slot + 34, 1);            // type = file
-    flash_write(slot + 66, name_len);
-    flash_write(slot + 98, bin_slot);
+    fs_write_entry(slot, 1, bin_slot, name_len, word_count);
 
     // Copy name words.
     i = 0;
     while (i < name_len)
     {
-        flash_write(NAME_TABLE_BASE + slot * NAMES_PER_SLOT + i,
-                    peek(EMBED_BASE + 2 + i));
+        disk_write(NAME_TABLE_BASE + slot * NAMES_PER_SLOT + i,
+                   peek(rec + 2 + i));
         i = i + 1;
     }
     while (i < NAMES_PER_SLOT)
     {
-        flash_write(NAME_TABLE_BASE + slot * NAMES_PER_SLOT + i, 0);
+        disk_write(NAME_TABLE_BASE + slot * NAMES_PER_SLOT + i, 0);
         i = i + 1;
     }
 
-    // Copy program words.
+    // Copy program words in one 32-bit block transaction.
     dest = fs_data_base(slot);
+    disk_write_begin(dest, word_count);
     i = 0;
     while (i < word_count)
     {
-        flash_write(dest + i, peek(src + i));
+        out_port32(6, peek(src + i));
         i = i + 1;
     }
 
     tty_puts("installed /bin/");
     fs_name_print(slot);
     tty_newline();
+    return 1;
+}
+
+void shell_install()
+{
+    u32 rec = EMBED_BASE;
+    u32 len = 0;
+
+    // Make sure the standard root layout exists, even on an image that was
+    // formatted by an older FoxOS build.
+    fs_init_root_dirs();
+
+    // Check embedded region (ROM contents are read with peek()).
+    if (peek(rec) != EMBED_MAGIC)
+    {
+        tty_puts("no embedded program\r\n");
+        return;
+    }
+
+    while (peek(rec) == EMBED_MAGIC)
+    {
+        len = peek(rec + EMBED_LEN_OFFSET);
+        if (install_record(rec) == 0) { return; }
+        rec = rec + EMBED_DATA_OFFSET + len;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// disp – display contents of a file
+// ---------------------------------------------------------------------------
+
+void shell_disp(u16 start, u16 end)
+{
+    u32 slot      = 0;
+    u32 count     = 0;
+    u32 i         = 0;
+    u32 w         = 0;
+    u32 last_char = 10;
+
+    while (start < end && line[start] == ' ') { start = start + 1; }
+    while (end > start && line[end - 1] == ' ') { end = end - 1; }
+    if (start >= end)
+    {
+        tty_puts("usage: disp PATH\r\n");
+        return;
+    }
+
+    slot = fs_resolve_path(start, end);
+    if (slot == ROOT_SLOT || slot == NOT_FOUND)
+    {
+        tty_puts("not found\r\n");
+        return;
+    }
+
+    fs_read_entry(slot);
+    if (fs_e_type == 2)
+    {
+        tty_puts("that is a directory\r\n");
+        return;
+    }
+    if (fs_e_type != 1)
+    {
+        tty_puts("not found\r\n");
+        return;
+    }
+
+    count = fs_e_size;
+    if (count == 0)
+    {
+        return;
+    }
+    if (count > FILE_CHUNK_WORDS)
+    {
+        tty_puts("file too large\r\n");
+        return;
+    }
+
+    disk_read_begin(fs_data_base(slot), count);
+    while (i < count)
+    {
+        w = in_port32(6);
+        if (w == 10)
+        {
+            tty_newline();
+            last_char = 10;
+        }
+        else
+        {
+            if (w != 13)
+            {
+                tty_putc32(w);
+                last_char = w;
+            }
+        }
+        i = i + 1;
+    }
+
+    if (last_char != 10)
+    {
+        tty_newline();
+    }
 }
 
 // ---------------------------------------------------------------------------
 // Prompt helpers
 // ---------------------------------------------------------------------------
 
-void print_path(u16 directory)
+void print_path(u32 directory)
 {
-    u16 name_i  = 0;
-    u16 name_len = 0;
+    u32 name_i  = 0;
+    u32 name_len = 0;
     if (directory == ROOT_SLOT) { return; }
-    print_path(flash_read(directory + 98));
+    print_path(disk_read(fs_entry_base(directory) + ENTRY_PARENT));
     tty_putc('/');
-    name_len = flash_read(directory + 66);
+    name_len = disk_read(fs_entry_base(directory) + ENTRY_NAMELEN);
     while (name_i < name_len)
     {
-        tty_putc(flash_read(NAME_TABLE_BASE + directory * NAMES_PER_SLOT + name_i));
+        tty_putc32(disk_read(NAME_TABLE_BASE + directory * NAMES_PER_SLOT + name_i));
         name_i = name_i + 1;
     }
 }
@@ -241,24 +459,37 @@ void print_prompt()
 }
 
 // ---------------------------------------------------------------------------
+// Version
+// ---------------------------------------------------------------------------
+
+void shell_version()
+{
+    kernel_banner();
+}
+
+// ---------------------------------------------------------------------------
 // Help
 // ---------------------------------------------------------------------------
 
 void shell_help()
 {
-    tty_puts("FoxSH commands:\r\n");
+    tty_puts("FoxSH 32-bit commands:\r\n");
     tty_puts("  help           this message\r\n");
+    tty_puts("  version        display the FoxOS version\r\n");
     tty_puts("  clear          clear screen\r\n");
     tty_puts("  pwd            print working directory\r\n");
     tty_puts("  ls             list directory\r\n");
+    tty_puts("  ls -l          list directory with sizes\r\n");
     tty_puts("  df             disk usage\r\n");
-    tty_puts("  cd PATH        change directory\r\n");
+    tty_puts("  cd [PATH]      change directory (no PATH goes to /)\r\n");
     tty_puts("  mkdir PATH     create directory\r\n");
     tty_puts("  touch PATH     create empty file\r\n");
-    tty_puts("  rm PATH        remove entry\r\n");
-    tty_puts("  run PATH       execute program\r\n");
-    tty_puts("  install        install embedded ROM program into /bin\r\n");
-    tty_puts("  format         format the flash filesystem\r\n");
+    tty_puts("  disp PATH      display contents of file\r\n");
+    tty_puts("  rm PATH        remove file or empty directory\r\n");
+    tty_puts("  run PATH       execute program (or type its name)\r\n");
+    tty_puts("  <program>      run a program from /bin by name\r\n");
+    tty_puts("  install        create root dirs and install ROM programs\r\n");
+    tty_puts("  format         format the 4 GiB VF32HardDisk filesystem\r\n");
     tty_puts("  logo           display the FoxOS logo\r\n");
 }
 
@@ -297,6 +528,7 @@ void dispatch()
     if (line_len == 0) { return; }
 
     if (line_len == 4 && cmd_match("help", 4)) { shell_help(); return; }
+    if (line_len == 7 && cmd_match("version", 7)) { shell_version(); return; }
     if (line_len == 4 && cmd_match("logo", 4)) { shell_logo(); return; }
     if (line_len == 5 && cmd_match("clear", 5))
     {
@@ -309,27 +541,56 @@ void dispatch()
         tty_newline();
         return;
     }
-    if (line_len == 2 && cmd_match("ls", 2)) { fs_list(fs_current_dir); return; }
+    if (line_len == 2 && cmd_match("ls", 2)) { fs_list(fs_current_dir, 0); return; }
+    if (line_len == 5 && cmd_match("ls -l", 5)) { fs_list(fs_current_dir, 1); return; }
     if (line_len == 2 && cmd_match("df", 2)) { fs_df(); return; }
     if (line_len == 6 && cmd_match("format", 6)) { fs_format(); tty_puts("OK\r\n"); return; }
     if (line_len == 7 && cmd_match("install", 7)) { shell_install(); return; }
 
+    if (line_len == 2 && cmd_match("cd", 2))
+    {
+        fs_current_dir = ROOT_SLOT;
+        tty_puts("ok\r\n");
+        return;
+    }
     if (cmd_match("cd ", 3) && line_len > 3)
     {
-        u16 slot = fs_resolve_path(3, line_len);
-        if (slot == ROOT_SLOT)       { fs_current_dir = ROOT_SLOT; tty_puts("ok\r\n"); return; }
-        if (slot == NOT_FOUND || flash_read(slot + 34) != 2)
+        u32 slot = fs_resolve_dir(3, line_len);
+        if (slot == NOT_FOUND)
         { tty_puts("not a directory\r\n"); return; }
         fs_current_dir = slot;
         tty_puts("ok\r\n");
         return;
     }
-    if (cmd_match("mkdir ", 6) && line_len > 6) { fs_create(6, line_len, 2); return; }
-    if (cmd_match("touch ", 6) && line_len > 6) { fs_create(6, line_len, 1); return; }
-    if (cmd_match("rm ", 3)    && line_len > 3) { fs_remove(3, line_len);    return; }
-    if (cmd_match("run ", 4)   && line_len > 4) { shell_run(4); return; }
+    if (cmd_match("mkdir ", 6) && line_len > 6)
+    {
+        if (fs_create(6, line_len, 2) != NOT_FOUND) { tty_puts("created\r\n"); }
+        return;
+    }
+    if (cmd_match("touch ", 6) && line_len > 6)
+    {
+        if (fs_create(6, line_len, 1) != NOT_FOUND) { tty_puts("created\r\n"); }
+        return;
+    }
+    if (line_len == 4 && cmd_match("disp", 4))
+    {
+        tty_puts("usage: disp PATH\r\n");
+        return;
+    }
+    if (cmd_match("disp ", 5) && line_len > 5)
+    {
+        shell_disp(5, line_len);
+        return;
+    }
+    if (cmd_match("rm ", 3) && line_len > 3)
+    {
+        if (fs_remove(3, line_len)) { tty_puts("removed\r\n"); }
+        return;
+    }
+    if (cmd_match("run ", 4) && line_len > 4) { shell_run(4, line_len); return; }
 
-    tty_puts("unknown command (type 'help')\r\n");
+    // Anything else is treated as a program name. Bare names also search /bin.
+    shell_run(0, line_len);
 }
 
 // ---------------------------------------------------------------------------
@@ -342,13 +603,13 @@ void main()
 
     if (fs_valid() == 0)
     {
-        tty_puts("Filesystem not found – formatting flash...\r\n");
+        tty_puts("Filesystem not found - formatting VF32HardDisk...\r\n");
         fs_format();
         tty_puts("Done.\r\n");
     }
     else
     {
-        tty_puts("Flash filesystem OK.\r\n");
+        tty_puts("VF32HardDisk filesystem OK.\r\n");
     }
 
     shell_logo();

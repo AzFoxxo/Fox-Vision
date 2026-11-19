@@ -1,0 +1,255 @@
+// bf – a simple Brainfuck interpreter for FoxOS
+//
+// Built as a foreground program at 0x100000 and run from the shell:
+//   run /bin/bf
+//
+// Prompts for a filename to run from FoxFS, or prompts for direct code input.
+// Brainfuck commands supported:
+//   >   increment data pointer
+//   <   decrement data pointer
+//   +   increment byte at data pointer (wraps 0-255)
+//   -   decrement byte at data pointer (wraps 0-255)
+//   .   output byte at data pointer as ASCII
+//   ,   input byte and store at data pointer
+//   [   jump past matching ] if byte at pointer is 0
+//   ]   jump back to matching [ if byte at pointer is non-zero
+//
+// Memory tape: 8,000 cells. Code buffer: 8,000 characters.
+//
+// Uses <foxos.fh> for terminal I/O and FoxFS file access.
+
+#include <foxos.fh>
+
+u16 tape[8000];
+u16 code[8000];
+u16 code_len = 0;
+u16 bf_charmap[128];
+
+void bf_init()
+{
+    u16 i = 0;
+    while (i < 8000)
+    {
+        tape[i] = 0;
+        i = i + 1;
+    }
+    i = 0;
+    while (i < 128)
+    {
+        bf_charmap[i] = i;
+        i = i + 1;
+    }
+    code_len = 0;
+}
+
+void bf_read_line()
+{
+    u16 c = 0;
+    line_len = 0;
+    while (1)
+    {
+        c = tty_getc();
+        if (c != 0)
+        {
+            if (c == 13 || c == 10)
+            {
+                tty_newline();
+                return;
+            }
+            if (c == 8 || c == 127)
+            {
+                if (line_len > 0)
+                {
+                    line_len = line_len - 1;
+                    tty_putc(8);
+                    tty_putc(' ');
+                    tty_putc(8);
+                }
+            }
+            else
+            {
+                if (c >= 32 && c < 127)
+                {
+                    if (line_len < LINE_MAX - 1)
+                    {
+                        line[line_len] = c;
+                        line_len = line_len + 1;
+                        tty_putc(c);
+                    }
+                }
+            }
+        }
+    }
+}
+
+u16 bf_load_file(u32 slot)
+{
+    u32 count = 0;
+    u32 i = 0;
+    u32 w = 0;
+    u16 ch = 0;
+
+    fs_read_entry(slot);
+    count = fs_e_size;
+    if (count == 0) { return 0; }
+    if (count > FILE_CHUNK_WORDS) { return 0; }
+
+    code_len = 0;
+    disk_read_begin(fs_data_base(slot), count);
+    while (i < count)
+    {
+        w = in_port32(6);
+        i = i + 1;
+
+        if (w == 10 || (w >= 32 && w <= 126))
+        {
+            if (w == 10) { ch = 10; }
+            else         { ch = bf_charmap[w]; }
+
+            if (code_len < 8000)
+            {
+                code[code_len] = ch;
+                code_len = code_len + 1;
+            }
+        }
+    }
+    return 1;
+}
+
+void bf_interpret()
+{
+    u16 pc = 0;
+    u16 ptr = 0;
+    u16 cmd = 0;
+    u16 depth = 0;
+    u16 in_ch = 0;
+
+    while (pc < code_len)
+    {
+        cmd = code[pc];
+
+        if (cmd == '>')
+        {
+            if (ptr < 7999) { ptr = ptr + 1; }
+        }
+        if (cmd == '<')
+        {
+            if (ptr > 0) { ptr = ptr - 1; }
+        }
+        if (cmd == '+')
+        {
+            tape[ptr] = (tape[ptr] + 1) & 255;
+        }
+        if (cmd == '-')
+        {
+            tape[ptr] = (tape[ptr] + 255) & 255;
+        }
+        if (cmd == '.')
+        {
+            tty_putc(tape[ptr]);
+        }
+        if (cmd == ',')
+        {
+            in_ch = 0;
+            while (in_ch == 0)
+            {
+                in_ch = tty_getc();
+            }
+            if (in_ch == 13) { in_ch = 10; }
+            tape[ptr] = in_ch & 255;
+        }
+        if (cmd == '[')
+        {
+            if (tape[ptr] == 0)
+            {
+                depth = 1;
+                while (depth > 0 && pc + 1 < code_len)
+                {
+                    pc = pc + 1;
+                    if (code[pc] == '[') { depth = depth + 1; }
+                    if (code[pc] == ']') { depth = depth - 1; }
+                }
+            }
+        }
+        if (cmd == ']')
+        {
+            if (tape[ptr] != 0)
+            {
+                depth = 1;
+                while (depth > 0 && pc > 0)
+                {
+                    pc = pc - 1;
+                    if (code[pc] == ']') { depth = depth + 1; }
+                    if (code[pc] == '[') { depth = depth - 1; }
+                }
+            }
+        }
+
+        pc = pc + 1;
+    }
+}
+
+void main()
+{
+    u32 slot = 0;
+    u16 i = 0;
+
+    bf_init();
+
+    tty_puts("FoxOS Brainfuck Interpreter\r\n");
+    tty_puts("Enter filename (or empty for code prompt): ");
+    bf_read_line();
+
+    while (line_len > 0 && line[line_len - 1] == ' ')
+    {
+        line_len = line_len - 1;
+    }
+
+    if (line_len > 0)
+    {
+        slot = fs_resolve_path(0, line_len);
+        if (slot == ROOT_SLOT || slot == NOT_FOUND)
+        {
+            tty_puts("File not found.\r\n");
+            os_return();
+            return;
+        }
+        fs_read_entry(slot);
+        if (fs_e_type != 1)
+        {
+            tty_puts("Not a file.\r\n");
+            os_return();
+            return;
+        }
+
+        if (bf_load_file(slot) == 0)
+        {
+            tty_puts("Empty or unreadable file.\r\n");
+            os_return();
+            return;
+        }
+    }
+    else
+    {
+        tty_puts("Enter Brainfuck code: ");
+        bf_read_line();
+        if (line_len == 0)
+        {
+            os_return();
+            return;
+        }
+        i = 0;
+        while (i < line_len)
+        {
+            code[i] = line[i];
+            i = i + 1;
+        }
+        code_len = line_len;
+    }
+
+    tty_puts("\r\n--- Output ---\r\n");
+    bf_interpret();
+    tty_puts("\r\n--- Done ---\r\n");
+
+    os_return();
+}

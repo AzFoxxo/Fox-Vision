@@ -58,6 +58,7 @@ namespace FoxVision.Components
         private readonly Func<EmulatorOptions, bool> _launchOptionsRequested;
         private readonly Func<string, EmulatorOptions, bool> _buildAndLaunchRomRequested;
         private readonly Func<int, bool> _setExecutionSpeedRequested;
+        private readonly Func<ulong, bool> _setMemorySizeRequested;
         private readonly Func<bool, bool> _setInstructionLoggingRequested;
         private readonly Func<bool, bool> _setPauseRequested;
         private readonly Func<EmulatorOptions, bool> _setPortConfigurationRequested;
@@ -138,6 +139,7 @@ namespace FoxVision.Components
             Func<EmulatorOptions, bool> launchOptionsRequested,
             Func<string, EmulatorOptions, bool> buildAndLaunchRomRequested,
             Func<int, bool> setExecutionSpeedRequested,
+            Func<ulong, bool> setMemorySizeRequested,
             Func<bool, bool> setInstructionLoggingRequested,
             Func<bool, bool> setPauseRequested,
             Func<EmulatorOptions, bool> setPortConfigurationRequested,
@@ -160,6 +162,7 @@ namespace FoxVision.Components
             _launchOptionsRequested = launchOptionsRequested;
             _buildAndLaunchRomRequested = buildAndLaunchRomRequested;
             _setExecutionSpeedRequested = setExecutionSpeedRequested;
+            _setMemorySizeRequested = setMemorySizeRequested;
             _setInstructionLoggingRequested = setInstructionLoggingRequested;
             _setPauseRequested = setPauseRequested;
             _setPortConfigurationRequested = setPortConfigurationRequested;
@@ -364,6 +367,10 @@ namespace FoxVision.Components
             settingsButton.CanFocus = false;
 
             var settingsMenu = new Gtk.Menu();
+
+            var memorySizeItem = new Gtk.MenuItem("Memory size");
+            memorySizeItem.Activated += (_, _) => ShowMemorySizeDialog();
+            settingsMenu.Append(memorySizeItem);
 
             var targetFpsItem = new Gtk.MenuItem("Target FPS");
             targetFpsItem.Activated += (_, _) => ShowTargetFpsDialog();
@@ -721,6 +728,61 @@ namespace FoxVision.Components
             }
 
             dialog.Destroy();
+        }
+
+        private void ShowMemorySizeDialog()
+        {
+            var dialog = new Dialog("Memory Size", _window, DialogFlags.Modal)
+            {
+                Resizable = false,
+                DefaultWidth = 420
+            };
+
+            dialog.AddButton("Cancel", ResponseType.Cancel);
+            dialog.AddButton("Apply", ResponseType.Ok);
+
+            var content = dialog.ContentArea;
+            var grid = new Grid
+            {
+                ColumnSpacing = 10,
+                RowSpacing = 8,
+                MarginTop = 12,
+                MarginBottom = 12,
+                MarginStart = 12,
+                MarginEnd = 12
+            };
+
+            var valueEntry = new Entry(EmulatorOptions.FormatMemorySize(_currentOptions.MemorySizeBytes)) { Hexpand = true };
+            grid.Attach(new Label($"Memory size ({EmulatorOptions.FormatMemorySize(EmulatorOptions.MinimumMemorySizeBytes)}-{EmulatorOptions.FormatMemorySize(EmulatorOptions.MaximumMemorySizeBytes)})") { Halign = Align.Start }, 0, 0, 1, 1);
+            grid.Attach(valueEntry, 1, 0, 1, 1);
+            grid.Attach(new Label("Bytes, or a value with a K/M/G suffix. Shrinking discards memory above the new limit.") { Halign = Align.Start, Wrap = true }, 0, 1, 2, 1);
+
+            content.Add(grid);
+            dialog.ShowAll();
+
+            while (true)
+            {
+                var result = (ResponseType)dialog.Run();
+                if (result != ResponseType.Ok)
+                {
+                    dialog.Destroy();
+                    return;
+                }
+
+                if (!EmulatorOptions.TryParseMemorySize(valueEntry.Text, out var sizeBytes))
+                {
+                    ShowError(dialog, "Enter a memory size between 128K and 4G (for example 128K, 64M or 4G).");
+                    continue;
+                }
+
+                if (_setMemorySizeRequested(sizeBytes))
+                {
+                    _currentOptions.MemorySizeBytes = sizeBytes;
+                }
+
+                dialog.Destroy();
+                return;
+            }
         }
 
         private void ShowTargetFpsDialog()
@@ -1426,6 +1488,17 @@ namespace FoxVision.Components
             };
             menu.Append(vf16FlashItem);
 
+            var vf32HardDiskItem = new RadioMenuItem(noneItem.Group, "VF32HardDisk");
+            vf32HardDiskItem.Active = _currentOptions.PortDevices[portIndex] == PortDeviceKind.VF32HardDisk;
+            vf32HardDiskItem.Activated += (_, _) =>
+            {
+                if (vf32HardDiskItem.Active)
+                {
+                    ApplyPortDeviceSelection(portIndex, PortDeviceKind.VF32HardDisk);
+                }
+            };
+            menu.Append(vf32HardDiskItem);
+
             menu.ShowAll();
             return menu;
         }
@@ -1505,6 +1578,50 @@ namespace FoxVision.Components
                         menu.Append(saveInputItem2);
                         break;
                     }
+                case PortDeviceKind.VF32HardDisk:
+                    {
+                        var setPathItem = new Gtk.MenuItem("Set hard disk image path");
+                        setPathItem.Activated += (_, _) =>
+                        {
+                            var dialog = new FileChooserDialog(
+                                "Set VF32HardDisk Image Path",
+                                _window,
+                                FileChooserAction.Save,
+                                "Cancel",
+                                ResponseType.Cancel,
+                                "Select",
+                                ResponseType.Accept);
+
+                            var response = (ResponseType)dialog.Run();
+                            if (response == ResponseType.Accept)
+                            {
+                                var selectedPath = dialog.Filename;
+                                if (!string.IsNullOrWhiteSpace(selectedPath))
+                                {
+                                    var updatedOptions = CloneOptions(_currentOptions);
+                                    if (updatedOptions.HardDiskSavePaths is null || updatedOptions.HardDiskSavePaths.Length != EmulatorOptions.PortCount)
+                                        updatedOptions.HardDiskSavePaths = EmulatorOptions.CreateDefaultHardDiskSavePaths();
+
+                                    updatedOptions.HardDiskSavePaths[portIndex] = selectedPath;
+                                    if (_setPortConfigurationRequested(updatedOptions))
+                                    {
+                                        _currentOptions.HardDiskSavePaths = updatedOptions.HardDiskSavePaths;
+                                        SaveInputConfiguration();
+                                        RefreshPortDevicesMenu();
+                                    }
+                                }
+                            }
+
+                            dialog.Destroy();
+                        };
+
+                        menu.Append(setPathItem);
+
+                        var saveInputItem = new Gtk.MenuItem("Save input configuration");
+                        saveInputItem.Activated += (_, _) => SaveInputConfiguration();
+                        menu.Append(saveInputItem);
+                        break;
+                    }
             }
 
             bool hasConfigurationEntries = false;
@@ -1554,6 +1671,7 @@ namespace FoxVision.Components
                 PortDeviceKind.VF16Mouse => "VF16Mouse",
                 PortDeviceKind.VF16TTY => "VF16TTY",
                 PortDeviceKind.VF16Flash => "VF16Flash",
+                PortDeviceKind.VF32HardDisk => "VF32HardDisk",
                 _ => deviceKind.ToString()
             };
         }
@@ -1872,6 +1990,7 @@ namespace FoxVision.Components
                 ExecutionSpeedHz = options.ExecutionSpeedHz,
                 LogInstruction = options.LogInstruction,
                 RomPreviewWords = options.RomPreviewWords,
+                MemorySizeBytes = options.MemorySizeBytes,
                 ControllerUpKey = options.ControllerUpKey,
                 ControllerDownKey = options.ControllerDownKey,
                 ControllerLeftKey = options.ControllerLeftKey,
@@ -1883,6 +2002,7 @@ namespace FoxVision.Components
                 FixedTtyPortIndex = options.FixedTtyPortIndex,
                 PortDevices = options.PortDevices.ToArray(),
                 FlashSavePaths = options.FlashSavePaths?.ToArray() ?? new string[EmulatorOptions.PortCount],
+                HardDiskSavePaths = options.HardDiskSavePaths?.ToArray() ?? EmulatorOptions.CreateDefaultHardDiskSavePaths(),
                 BuildMode = options.BuildMode,
                 BuildMapper = options.BuildMapper,
                 BuildStrictFormat = options.BuildStrictFormat,

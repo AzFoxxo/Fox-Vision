@@ -1,0 +1,20 @@
+// Whole-code header: globals and complete function definitions are
+// pasted directly into the translation unit by #include.
+#pragma once
+
+u16 pass_count = 0;
+
+u16 twice(u16 value)
+{
+    return value + value;
+}
+
+u16 check(u16 actual, u16 expected)
+{
+    if (actual != expected)
+    {
+        return 0;
+    }
+    pass_count = pass_count + 1;
+    return 1;
+}

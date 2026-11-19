@@ -17,25 +17,34 @@ MOV %1 AM   ; 8-bit byte addressing
 
 ### Port Characteristics
 
-- 16-bit port space is exposed (`0x0000` to `0xFFFF`, decimal 0 to 65,535)
-- Each port is 16 bits wide
+- 16-bit port address space is exposed (`0x0000` to `0xFFFF`, decimal 0 to 65,535)
+- Port transfer width follows the CPU mode:
+  - `EM = 0x0001`: 16-bit port bus
+  - `EM = 0x0002`: 32-bit port bus when the register operand is a primary 32-bit register (`X`, `Y`, `SP`, `R0`–`R7`)
+  - 16-bit sub-registers (`XL`, `R0H`, …) and 16-bit control registers continue to use a 16-bit transfer
 - Port numbers are encoded as 16-bit immediate values
-- Ports `0x0000` to `0x0007` default to standard emulator devices (VF16Pad, Keyboard, Mouse, TTY, Flash)
+- Ports `0x0000` to `0x0007` default to standard emulator devices (VF16Pad, Keyboard, Mouse, TTY, Flash, VF32HardDisk)
 - Ports `0x0008` to `0xFFFF` are available for user and expansion devices
+- 16-bit devices used through a 32-bit port transfer receive the low 16 bits on writes and return a zero-extended 16-bit value on reads
 - Ports are not memory-mapped
 - Ports do not latch, queue, clear, or acknowledge input. They always return the most recent device state.
 - Device state (including controllers) is maintained continuously by the emulator as a live snapshot
 
 ## Port I/O Instructions (V1.10)
 
-- `0000 0000` `0011 0000` - `IN` `PORT DST` - Read the 16-bit value from port `PORT` into register `DST`
-- `0000 0000` `0011 0001` - `OUT` `SRC PORT` - Write the 16-bit value from register `SRC` to port `PORT`
+- `0000 0000` `0011 0000` - `IN` `PORT DST` - Read from port `PORT` into register `DST`
+- `0000 0000` `0011 0001` - `OUT` `SRC PORT` - Write from register `SRC` to port `PORT`
+
+The transfer width is selected by `EM` and by the register operand:
+
+- In `EM = 0x0001`, or whenever `DST`/`SRC` is a 16-bit sub-register or 16-bit control register, the transfer is 16 bits.
+- In `EM = 0x0002` with a primary 32-bit register (`X`, `Y`, `SP`, `R0`–`R7`), the transfer is a single 32-bit bus transaction.
 
 Each `IN` instruction reads the current state of the connected device at the time of execution.
 
 ## Default Emulator Port Convention
 
-The following mapping is the emulator's convention, not a CPU requirement. Device behaviour remains implementation-defined. Ports `0x0006` through `0x0007` are available for additional emulator-defined devices or custom mappings.
+The following mapping is the emulator's convention, not a CPU requirement. Device behaviour remains implementation-defined. Port `0x0007` is available for an additional emulator-defined device or custom mapping.
 
 - PORT0 (`0x0000`) - VF16Pad Player 1
 - PORT1 (`0x0001`) - VF16Pad Player 2
@@ -43,6 +52,7 @@ The following mapping is the emulator's convention, not a CPU requirement. Devic
 - PORT3 (`0x0003`) - VF16Mouse
 - PORT4 (`0x0004`) - VF16TTY
 - PORT5 (`0x0005`) - VF16Flash
+- PORT6 (`0x0006`) - VF32HardDisk
 
 ---
 
@@ -252,6 +262,88 @@ OUT Y PORT3        ; Write the value
 - Use `IN` to read data (after a read command).
 - Storage is automatically flushed to persistent media by the emulator (frequency is implementation-defined).
 - ROMs should not assume immediate persistence for reliability; treat as best-effort.
+
+---
+
+## VF32HardDisk
+
+Persistent 4 GiB storage cartridge that uses the full 32-bit port bus. It is assigned to `PORT6` by default and requires 32-bit mode (`EM = 0x0002`) with primary 32-bit register operands.
+
+### Bus Width
+
+`VF32HardDisk` is a 32-bit device. Unlike the 16-bit devices above, it does not split values into low/high port words:
+
+- `IN PORT6 R0` reads one full 32-bit bus word into `R0`.
+- `OUT R0 PORT6` writes one full 32-bit bus word from `R0`.
+- A 16-bit sub-register or 16-bit control register is not a valid access and is rejected as an illegal port operation.
+
+### Transaction Format
+
+A block transaction is three parts:
+
+1. **Address word** — 32-bit byte address. The low two bits are ignored, so transfers are 32-bit aligned.
+2. **Command word:**
+   - Bit 0: operation (`0` = read, `1` = write)
+   - Bits 1–31: transfer count minus one (`1` to `2,147,483,648` transfers)
+3. **Data words** — one 32-bit word per transfer. Use `IN PORT6` for reads and `OUT PORT6` for writes. The address advances by four bytes after every transfer.
+
+The address is loaded for every transaction, so a new transaction starts with an address word even after a previous block.
+
+### Capacity and Persistence
+
+- Capacity is 4 GiB (`0x1_0000_0000` bytes), matching the 32-bit address space.
+- Addresses wrap modulo 4 GiB as the address register increments.
+- Reads from unwritten regions return `0x00000000`.
+- The image is stored in a file and is extended to 4 GiB on first write. On file systems that support sparse files it does not consume 4 GiB of physical space.
+- The default image path is `~/vf16/ports/vf32harddisk/port6.img`; it can be changed in the port configuration menu or with `FOXVISION_PORT6_HARDDISK_PATH`.
+- Written blocks are flushed when the write transaction completes.
+
+### Examples
+
+Writing `0xDEADBEEF` to address `0x00000000`:
+
+```assembly
+MOV %2 EM          ; 32-bit mode
+
+MOV $0000 R0       ; address low word
+MOV $0000 R0H      ; address high word -> 0x00000000
+OUT R0 PORT6
+
+MOV %1 R1          ; command: write, one transfer
+OUT R1 PORT6
+
+MOV $BEEF R0       ; data low word
+MOV $DEAD R0H      ; data high word -> 0xDEADBEEF
+OUT R0 PORT6
+```
+
+Reading it back:
+
+```assembly
+MOV $0000 R0
+MOV $0000 R0H
+OUT R0 PORT6
+
+MOV %0 R1          ; command: read, one transfer
+OUT R1 PORT6
+
+IN PORT6 R0        ; R0 = 0xDEADBEEF
+```
+
+Writing to the last word of the cartridge (`0xFFFFFFFC`):
+
+```assembly
+MOV $FFFC R0
+MOV $FFFF R0H
+OUT R0 PORT6
+
+MOV %1 R1          ; write, one transfer
+OUT R1 PORT6
+
+MOV $3344 R0       ; data = 0x11223344
+MOV $1122 R0H
+OUT R0 PORT6
+```
 
 ---
 

@@ -53,10 +53,11 @@ type VarDecl struct {
 }
 
 type FuncDecl struct {
-	Name   string
-	Ret    Type
-	Params []Param
-	Body   []Stmt
+	Name        string
+	Ret         Type
+	Params      []Param
+	Body        []Stmt
+	IsPrototype bool
 }
 
 type Stmt interface {

@@ -1,8 +1,8 @@
 {
     "name": "foxc-tools",
     "displayName": "FoxC Tools",
-    "description": "Syntax highlighting, completions, hover docs, and validation for FoxC source files. Supports u8, u16, u32 types; legacy, extended, and em2_am1 modes; all builtins including am()/em().",
-    "version": "0.1.0",
+    "description": "Syntax highlighting, completions, hover docs, and validation for FoxC source files. Supports headers (#include), prototypes, u8/u16/u32 types; legacy, extended, and em2_am1 modes; all builtins including am()/em().",
+    "version": "0.2.0",
     "publisher": "azfoxxo",
     "license": "MIT",
     "engines": {
@@ -24,7 +24,8 @@
                     "Fox C"
                 ],
                 "extensions": [
-                    ".fc"
+                    ".fc",
+                    ".fh"
                 ],
                 "configuration": "./language-configuration.json"
             }
@@ -35,6 +36,19 @@
                 "scopeName": "source.foxc",
                 "path": "./syntaxes/foxc.tmLanguage.json"
             }
-        ]
+        ],
+        "configuration": {
+            "title": "FoxC",
+            "properties": {
+                "foxc.includePaths": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    },
+                    "default": [],
+                    "description": "Directories searched for #include <header.fh> directives. Relative paths are resolved from the workspace folder. Quoted includes always check the including file's directory first."
+                }
+            }
+        }
     }
 }

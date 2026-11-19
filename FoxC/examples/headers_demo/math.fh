@@ -1,0 +1,6 @@
+// Signature-only header: function prototypes with no bodies.
+// Parameter names are optional in prototypes.
+
+u16 add(u16, u16);
+u16 scale(u16 value, u16 factor);
+u16 square(u16 value);

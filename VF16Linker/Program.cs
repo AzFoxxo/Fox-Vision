@@ -1,7 +1,4 @@
-using System;
-using System.IO;
 using System.Text;
-using System.Collections.Generic;
 
 namespace VF16Linker
 {
@@ -65,9 +62,9 @@ namespace VF16Linker
         // table. In that case the linker must not use symbol offsets to grow a
         // section (doing so pads ROM images built at a non-zero load address).
         public bool AbsoluteSymbols;
-        public List<Section> Sections = new();
-        public List<Symbol> Symbols = new();
-        public List<Relocation> Relocations = new();
+        public List<Section> Sections = [];
+        public List<Symbol> Symbols = [];
+        public List<Relocation> Relocations = [];
 
         public static VF16Object ReadFrom(string path)
         {

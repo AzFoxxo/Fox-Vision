@@ -224,6 +224,19 @@ namespace VF16Decompiler
                         ushort? operand = readWord(1);
                         if (operand.HasValue)
                         {
+                            // A direct-memory jump operand is the wide 32-bit
+                            // form: low word in operand 1, high word next.
+                            if (DecodeOperandType(opcodeWord, 0) == 0b10)
+                            {
+                                ushort? high = readWord(2);
+                                if (high.HasValue)
+                                {
+                                    uint target = ((uint)high.Value << 16) | operand.Value;
+                                    Console.WriteLine($"{operand.Value:X4} {high.Value:X4} (${target:X8} / {target})");
+                                    return 2;
+                                }
+                            }
+
                             Console.WriteLine($"{operand.Value:X4} ({operand.Value})");
                             return 1;
                         }
@@ -366,6 +379,7 @@ namespace VF16Decompiler
                 0x0017 => "SPH",
                 0x0018 => "CYCL",
                 0x0019 => "CYCH",
+                0x001A => "MS",
                 0x0020 => "R0L",
                 0x0021 => "R0H",
                 0x0022 => "R1L",

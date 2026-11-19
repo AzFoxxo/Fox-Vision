@@ -38,6 +38,9 @@ namespace FoxVision
         private readonly bool[] _flashCommandReady = new bool[PortCount];       // Track if command is actually pending
         private readonly object _flashLock = new();
 
+        // VF32HardDisk cartridge (4 GiB, 32-bit bus)
+        private readonly Vf32HardDisk _hardDisk = new();
+
         // Flash save paths and background save management
         private readonly string[] _flashSavePaths;
         private readonly Task[] _flashSaveTasks = new Task[PortCount];
@@ -82,6 +85,8 @@ namespace FoxVision
         private const ushort RegisterIdSPH = 0x0017;
         private const ushort RegisterIdCYCL = 0x0018;
         private const ushort RegisterIdCYCH = 0x0019;
+        // ISA V2.1: read-only memory size in 1 KiB units.
+        private const ushort RegisterIdMS = 0x001A;
 
         private const ushort RegisterIdR0L = 0x0020;
         private const ushort RegisterIdR0H = 0x0021;
@@ -109,6 +114,9 @@ namespace FoxVision
         private long _ticksToWaitPerCycle;
         private int _logInstructionEnabled;
         private int _pauseRequested;
+        private readonly uint[] _histPC = new uint[256];
+        private readonly ushort[] _histOp = new ushort[256];
+        private int _histIndex;
 
         internal Processor(ContiguousMemory RAM, int executionSpeedHz, bool logInstruction)
             : this(RAM, executionSpeedHz, logInstruction, 0, null, 0)
@@ -148,6 +156,7 @@ namespace FoxVision
             _vblankWaitSequence = 0;
             _controllerState = 0;
             _portDevices = ClonePortDevices(portDevices);
+            _hardDisk.SetSavePaths(EmulatorOptions.CreateDefaultHardDiskSavePaths());
             // Initialize flash save task locks
             for (int i = 0; i < PortCount; i++)
             {
@@ -195,6 +204,10 @@ namespace FoxVision
             {
                 ushort[] data = new ushort[] { RAM.ReadWord(regPC), RAM.ReadWord(regPC + 1), RAM.ReadWord(regPC + 2) };
 
+                _histPC[_histIndex] = regPC;
+                _histOp[_histIndex] = data[0];
+                _histIndex = (_histIndex + 1) & 0xFF;
+
                 uint oldPC = regPC;
                 ushort diffPC = DecodeExecuteInstruction(data[0], data[1], data[2]);
 
@@ -236,7 +249,10 @@ namespace FoxVision
             => Interlocked.Exchange(ref _logInstructionEnabled, enabled ? 1 : 0);
 
         internal void SetPortConfiguration(PortDeviceKind[] portDevices)
-            => Interlocked.Exchange(ref _portDevices, ClonePortDevices(portDevices));
+        {
+            Interlocked.Exchange(ref _portDevices, ClonePortDevices(portDevices));
+            _hardDisk.ResetState();
+        }
 
         internal void SignalVBlank()
             => Interlocked.Increment(ref _vblankSequence);
@@ -305,6 +321,21 @@ namespace FoxVision
                 _mouseDX = dx;
                 _mouseDY = dy;
             }
+        }
+
+        private uint ResolveJumpTarget(ushort lowWord, ushort highWord, byte operandType, out ushort consumedWords)
+        {
+            // In 32-bit mode a direct-memory jump operand carries the full
+            // target in two words (low first, then high). The assembler uses
+            // this form whenever a label lies above the 16-bit range.
+            if (Is32BitMemoryEnabled && operandType == OperandTypeDirectMemory)
+            {
+                consumedWords = 3;
+                return ((uint)highWord << 16) | lowWord;
+            }
+
+            consumedWords = 2;
+            return TryResolveMemoryAddressOperand(lowWord, operandType, out var target) ? target : lowWord;
         }
 
         private ushort DecodeExecuteInstruction(ushort opcode, ushort first_operand, ushort second_operand)
@@ -391,20 +422,26 @@ namespace FoxVision
 
                 case 0xA:
                     LogInstructionExecuting("JPZ", first_operand);
-                    if (!IsPredicateSet)
-                        regPC = TryResolveMemoryAddressOperand(first_operand, firstOperandType, out uint targetPC) ? targetPC : first_operand;
-                    return 2;
+                    {
+                        var targetPC = ResolveJumpTarget(first_operand, second_operand, firstOperandType, out var consumed);
+                        if (!IsPredicateSet)
+                            regPC = targetPC;
+                        return consumed;
+                    }
 
                 case 0xB:
                     LogInstructionExecuting("JNZ", first_operand);
-                    if (IsPredicateSet)
-                        regPC = TryResolveMemoryAddressOperand(first_operand, firstOperandType, out uint targetPC) ? targetPC : first_operand;
-                    return 2;
+                    {
+                        var targetPC = ResolveJumpTarget(first_operand, second_operand, firstOperandType, out var consumed);
+                        if (IsPredicateSet)
+                            regPC = targetPC;
+                        return consumed;
+                    }
 
                 case 0xC:
                     LogInstructionExecuting("JMP", first_operand);
-                    regPC = TryResolveMemoryAddressOperand(first_operand, firstOperandType, out uint jmpTarget) ? jmpTarget : first_operand;
-                    return 2;
+                    regPC = ResolveJumpTarget(first_operand, second_operand, firstOperandType, out var jmpConsumed);
+                    return jmpConsumed;
 
                 case 0xD:
                     LogInstructionExecuting("CLR", first_operand);
@@ -608,39 +645,57 @@ namespace FoxVision
                 // JEQ/JNE/JLT/JGT/JLE/JGE - Status-driven conditional jumps.
                 case 0x1D:
                     LogInstructionExecuting("JEQ", first_operand);
-                    if (IsEqual)
-                        regPC = TryResolveMemoryAddressOperand(first_operand, firstOperandType, out uint targetPC) ? targetPC : first_operand;
-                    return 2;
+                    {
+                        var targetPC = ResolveJumpTarget(first_operand, second_operand, firstOperandType, out var consumed);
+                        if (IsEqual)
+                            regPC = targetPC;
+                        return consumed;
+                    }
 
                 case 0x1E:
                     LogInstructionExecuting("JNE", first_operand);
-                    if (IsNotEqual)
-                        regPC = TryResolveMemoryAddressOperand(first_operand, firstOperandType, out uint targetPC) ? targetPC : first_operand;
-                    return 2;
+                    {
+                        var targetPC = ResolveJumpTarget(first_operand, second_operand, firstOperandType, out var consumed);
+                        if (IsNotEqual)
+                            regPC = targetPC;
+                        return consumed;
+                    }
 
                 case 0x1F:
                     LogInstructionExecuting("JLT", first_operand);
-                    if (IsLessThan)
-                        regPC = TryResolveMemoryAddressOperand(first_operand, firstOperandType, out uint targetPC) ? targetPC : first_operand;
-                    return 2;
+                    {
+                        var targetPC = ResolveJumpTarget(first_operand, second_operand, firstOperandType, out var consumed);
+                        if (IsLessThan)
+                            regPC = targetPC;
+                        return consumed;
+                    }
 
                 case 0x20:
                     LogInstructionExecuting("JGT", first_operand);
-                    if (IsGreaterThan)
-                        regPC = TryResolveMemoryAddressOperand(first_operand, firstOperandType, out uint targetPC) ? targetPC : first_operand;
-                    return 2;
+                    {
+                        var targetPC = ResolveJumpTarget(first_operand, second_operand, firstOperandType, out var consumed);
+                        if (IsGreaterThan)
+                            regPC = targetPC;
+                        return consumed;
+                    }
 
                 case 0x21:
                     LogInstructionExecuting("JLE", first_operand);
-                    if (IsLessThan || IsEqual)
-                        regPC = TryResolveMemoryAddressOperand(first_operand, firstOperandType, out uint targetPC) ? targetPC : first_operand;
-                    return 2;
+                    {
+                        var targetPC = ResolveJumpTarget(first_operand, second_operand, firstOperandType, out var consumed);
+                        if (IsLessThan || IsEqual)
+                            regPC = targetPC;
+                        return consumed;
+                    }
 
                 case 0x22:
                     LogInstructionExecuting("JGE", first_operand);
-                    if (IsGreaterThan || IsEqual)
-                        regPC = TryResolveMemoryAddressOperand(first_operand, firstOperandType, out uint targetPC) ? targetPC : first_operand;
-                    return 2;
+                    {
+                        var targetPC = ResolveJumpTarget(first_operand, second_operand, firstOperandType, out var consumed);
+                        if (IsGreaterThan || IsEqual)
+                            regPC = targetPC;
+                        return consumed;
+                    }
 
                 // V1.6 multi-operand ALU instructions.
                 case 0x23:
@@ -809,6 +864,29 @@ namespace FoxVision
                         goto NOP;
                     }
 
+                    // In EM=2 the port bus is 32 bits wide. A primary 32-bit
+                    // destination performs one full 32-bit port read.
+                    if (Is32BitPortDestination(second_operand, secondOperandType))
+                    {
+                        if (!TryReadPort32(first_operand, out uint inValue32))
+                        {
+                            Console.ForegroundColor = ConsoleColor.Red;
+                            Console.WriteLine($"Illegal 32-bit IN port {first_operand:X4}");
+                            Console.ResetColor();
+                            goto NOP;
+                        }
+
+                        if (!TryWrite32BitRegister(second_operand, inValue32))
+                        {
+                            Console.ForegroundColor = ConsoleColor.Red;
+                            Console.WriteLine($"Illegal IN destination register {second_operand:X4}");
+                            Console.ResetColor();
+                            goto NOP;
+                        }
+
+                        return 3;
+                    }
+
                     if (!TryReadPort(first_operand, out ushort inValue))
                     {
                         Console.ForegroundColor = ConsoleColor.Red;
@@ -835,6 +913,30 @@ namespace FoxVision
                         Console.WriteLine("OUT is unavailable until EM is enabled.");
                         Console.ResetColor();
                         goto NOP;
+                    }
+
+                    // In EM=2 the port bus is 32 bits wide. A primary 32-bit
+                    // source performs one full 32-bit port write.
+                    if (Is32BitPortSource(first_operand, firstOperandType)
+                        && TryRead32BitRegister(first_operand, out uint outValue32))
+                    {
+                        if (secondOperandType != OperandTypeImmediate)
+                        {
+                            Console.ForegroundColor = ConsoleColor.Red;
+                            Console.WriteLine($"Illegal OUT port operand {second_operand:X4}");
+                            Console.ResetColor();
+                            goto NOP;
+                        }
+
+                        if (!TryWritePort32(second_operand, outValue32))
+                        {
+                            Console.ForegroundColor = ConsoleColor.Red;
+                            Console.WriteLine($"Illegal 32-bit OUT port {second_operand:X4}");
+                            Console.ResetColor();
+                            goto NOP;
+                        }
+
+                        return 3;
                     }
 
                     if (!TryReadRegisterOperand(first_operand, firstOperandType, out ushort outValue, allowStatus: true))
@@ -911,6 +1013,12 @@ namespace FoxVision
                 default:
                     Console.ForegroundColor = ConsoleColor.Red;
                     Console.WriteLine($"Illegal opcode {opcode:X4} (decoded {decodedOpcode:X4})");
+                    Console.WriteLine($"  PC={regPC:X8} X={regX:X8} Y={regY:X8} SP={regSP:X8} EM={regEM} AM={regAM}");
+                    for (int h = 192; h < 256; h++)
+                    {
+                        int hi = (_histIndex + h) & 0xFF;
+                        Console.WriteLine($"  [{h - 192,2}] PC={_histPC[hi]:X8} OP={_histOp[hi]:X4}");
+                    }
                     Console.ResetColor();
                     goto NOP;
             }
@@ -1121,11 +1229,12 @@ namespace FoxVision
         private static bool RequiresExtendedMode(ushort operand)
             => (operand >= RegisterIdR0 && operand <= RegisterIdAM)
             || (operand >= RegisterIdXL && operand <= RegisterIdCYCH)
+            || operand == RegisterIdMS
             || (operand >= RegisterIdR0L && operand <= RegisterIdR7H);
 
         private static bool IsPrimary32BitRegister(ushort operand)
             => operand == RegisterIdX || operand == RegisterIdY || operand == RegisterIdPC
-            || operand == RegisterIdSP || operand == RegisterIdCYC
+            || operand == RegisterIdSP || operand == RegisterIdCYC || operand == RegisterIdMS
             || (operand >= RegisterIdR0 && operand <= RegisterIdR7);
 
         private bool TryRead32BitRegister(ushort operand, out uint value)
@@ -1161,6 +1270,7 @@ namespace FoxVision
                 case RegisterIdSPH: value = (regSP >> 16) & 0xFFFF; return true;
                 case RegisterIdCYCL: value = regCYC & 0xFFFF; return true;
                 case RegisterIdCYCH: value = (regCYC >> 16) & 0xFFFF; return true;
+                case RegisterIdMS: value = (uint)(RAM.SizeBytes / 1024); return true;
 
                 case RegisterIdR0L: value = regR[0] & 0xFFFF; return true;
                 case RegisterIdR0H: value = (regR[0] >> 16) & 0xFFFF; return true;
@@ -1249,6 +1359,7 @@ namespace FoxVision
                 RegisterIdSPH => SetOutValue((ushort)((regSP >> 16) & 0xFFFF), out value),
                 RegisterIdCYCL => SetOutValue((ushort)(regCYC & 0xFFFF), out value),
                 RegisterIdCYCH => SetOutValue((ushort)((regCYC >> 16) & 0xFFFF), out value),
+                RegisterIdMS => SetOutValue((ushort)((RAM.SizeBytes / 1024) & 0xFFFF), out value),
 
                 RegisterIdR0L => SetOutValue((ushort)(regR[0] & 0xFFFF), out value),
                 RegisterIdR0H => SetOutValue((ushort)((regR[0] >> 16) & 0xFFFF), out value),
@@ -1431,7 +1542,45 @@ namespace FoxVision
 
             return (operand >= RegisterIdX && operand <= RegisterIdAM)
                 || (operand >= RegisterIdXL && operand <= RegisterIdCYCH)
+                || operand == RegisterIdMS
                 || (operand >= RegisterIdR0L && operand <= RegisterIdR7H);
+        }
+
+        private bool Is32BitPortDestination(ushort operand, byte operandType)
+            => Is32BitMemoryEnabled
+                && operandType == OperandTypeRegister
+                && Supports32BitRegisterWrite(operand);
+
+        private bool Is32BitPortSource(ushort operand, byte operandType)
+            => Is32BitMemoryEnabled
+                && operandType == OperandTypeRegister
+                && IsPrimary32BitRegister(operand);
+
+        private bool TryReadPort32(ushort port, out uint value)
+        {
+            value = 0;
+            var portDevices = _portDevices;
+            if (port < portDevices.Length && portDevices[port] == PortDeviceKind.VF32HardDisk)
+            {
+                return _hardDisk.TryReadWord(port, out value);
+            }
+
+            if (!TryReadPort(port, out ushort legacyValue))
+                return false;
+
+            value = legacyValue;
+            return true;
+        }
+
+        private bool TryWritePort32(ushort port, uint value)
+        {
+            var portDevices = _portDevices;
+            if (port < portDevices.Length && portDevices[port] == PortDeviceKind.VF32HardDisk)
+            {
+                return _hardDisk.TryWriteWord(port, value);
+            }
+
+            return TryWritePort(port, (ushort)(value & 0xFFFF));
         }
 
         private bool TryReadPort(ushort port, out ushort value)
@@ -1440,6 +1589,14 @@ namespace FoxVision
             if (port < portDevices.Length)
             {
                 var kind = portDevices[port];
+                if (kind == PortDeviceKind.VF32HardDisk)
+                {
+                    // VF32HardDisk requires the 32-bit port bus (EM=2 and a
+                    // primary 32-bit register operand).
+                    value = 0;
+                    return false;
+                }
+
                 if (kind == PortDeviceKind.VF16Pad)
                 {
                     value = _controllerState;
@@ -1556,6 +1713,18 @@ namespace FoxVision
             if (key == ConsoleKey.Tab)
                 return 0x0009;
 
+            // Navigation keys: return values > 127 so the guest can distinguish them
+            // from printable ASCII without needing to parse VT100 escape sequences.
+            if (key == ConsoleKey.UpArrow)    return 0x0101;
+            if (key == ConsoleKey.DownArrow)  return 0x0102;
+            if (key == ConsoleKey.RightArrow) return 0x0103;
+            if (key == ConsoleKey.LeftArrow)  return 0x0104;
+            if (key == ConsoleKey.Home)       return 0x0105;
+            if (key == ConsoleKey.End)        return 0x0106;
+            if (key == ConsoleKey.Delete)     return 0x0107;
+            if (key == ConsoleKey.PageUp)     return 0x0108;
+            if (key == ConsoleKey.PageDown)   return 0x0109;
+
             if (keyChar == '\0')
                 return 0;
 
@@ -1574,6 +1743,13 @@ namespace FoxVision
             if (port < portDevices.Length)
             {
                 var kind = portDevices[port];
+                if (kind == PortDeviceKind.VF32HardDisk)
+                {
+                    // VF32HardDisk requires the 32-bit port bus (EM=2 and a
+                    // primary 32-bit register operand).
+                    return false;
+                }
+
                 if (kind == PortDeviceKind.VF16Pad)
                 {
                     if (!IsExtendedModeEnabled)
@@ -1684,6 +1860,14 @@ namespace FoxVision
             {
                 Array.Copy(paths, _flashSavePaths, PortCount);
                 LoadFlashFromDisk();
+            }
+        }
+
+        internal void SetHardDiskSavePaths(string[]? paths)
+        {
+            if (paths is not null && paths.Length == PortCount)
+            {
+                _hardDisk.SetSavePaths(paths);
             }
         }
 

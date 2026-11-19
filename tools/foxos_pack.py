@@ -5,9 +5,10 @@ import argparse
 import struct
 from pathlib import Path
 
-EMBED_ADDRESS = 0x7000
+EMBED_ADDRESS = 0x20000
 EMBED_MAGIC = 0xF057
 EMBED_NAME_MAX = 8
+PROGRAM_BASE = 0x100000
 
 
 def read_rom(path: Path) -> tuple[int, list[int], bytes]:
@@ -71,37 +72,69 @@ def read_rom(path: Path) -> tuple[int, list[int], bytes]:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("os_rom", type=Path, help="resident FoxOS ROM")
-    parser.add_argument("--embed-program", type=Path, required=True)
-    parser.add_argument("--embed-name", required=True, help="name to create under /bin (1-8 ASCII characters)")
+    parser.add_argument(
+        "--embed-program",
+        type=Path,
+        action="append",
+        required=True,
+        help="foreground ROM to embed; repeat for several programs",
+    )
+    parser.add_argument(
+        "--embed-name",
+        action="append",
+        required=True,
+        help="name to create under /bin (1-8 ASCII characters); pairs with --embed-program in order",
+    )
     parser.add_argument("-o", "--output", type=Path, required=True)
     parser.add_argument("--embed-address", type=lambda value: int(value, 0), default=EMBED_ADDRESS)
     args = parser.parse_args()
 
+    if len(args.embed_program) != len(args.embed_name):
+        raise ValueError("--embed-program and --embed-name must be given the same number of times")
+
     os_start, os_words, header = read_rom(args.os_rom)
-    program_start, program_words, _ = read_rom(args.embed_program)
     if os_start != 0 or not header.startswith(b".VFOX16EXT"):
         raise ValueError("OS ROM must be an extended image loaded at address 0")
-    if program_start != 0x4000:
-        raise ValueError("foreground program must be built with --load-address 0x4000")
-    if not 0 < len(program_words) <= 1000:
-        raise ValueError(f"foreground program must contain 1-1000 words, found {len(program_words)}")
-    try:
-        embed_name = args.embed_name.encode("ascii")
-    except UnicodeEncodeError as error:
-        raise ValueError("--embed-name must contain ASCII characters") from error
-    if not 0 < len(embed_name) <= EMBED_NAME_MAX:
-        raise ValueError(f"--embed-name must contain 1-{EMBED_NAME_MAX} characters")
     if len(os_words) > args.embed_address:
         raise ValueError("OS ROM overlaps the embedded-program address")
+
     combined = os_words + [0] * (args.embed_address - len(os_words))
-    combined += [
-        EMBED_MAGIC,
-        len(embed_name),
-        *embed_name,
-        *([0] * (EMBED_NAME_MAX - len(embed_name))),
-        len(program_words),
-        *program_words,
-    ]
+
+    # Each record contains every embedded program, in the order given on the
+    # command line, immediately followed by the next record. The shell walks
+    # the chain until it finds a word that is not EMBED_MAGIC.
+    for program_path, name in zip(args.embed_program, args.embed_name):
+        program_start, program_words, _ = read_rom(program_path)
+        if program_start != PROGRAM_BASE:
+            raise ValueError(
+                f"foreground program {program_path} must be built with "
+                f"--load-address 0x{PROGRAM_BASE:X}"
+            )
+        # Records must stay below the foreground load address. The boot
+        # loader copies the first embedded image to PROGRAM_BASE, so an
+        # overlapping record would be overwritten.
+        remaining = PROGRAM_BASE - len(combined)
+        if not 0 < len(program_words) or len(program_words) + 11 > remaining:
+            raise ValueError(
+                f"embedded programs must end before 0x{PROGRAM_BASE:X}; "
+                f"{program_path} needs {len(program_words) + 11} more words, "
+                f"only {remaining} available"
+            )
+        try:
+            embed_name = name.encode("ascii")
+        except UnicodeEncodeError as error:
+            raise ValueError("--embed-name must contain ASCII characters") from error
+        if not 0 < len(embed_name) <= EMBED_NAME_MAX:
+            raise ValueError(f"--embed-name must contain 1-{EMBED_NAME_MAX} characters")
+        combined += [
+            EMBED_MAGIC,
+            len(embed_name),
+            *embed_name,
+            *([0] * (EMBED_NAME_MAX - len(embed_name))),
+            len(program_words),
+            *program_words,
+        ]
+
     version = header[10] if len(header) > 10 else 0
     mapper = struct.unpack_from(">H", header, 11)[0] if len(header) >= 13 else 0
     max_limit = 0x80000000 if mapper == 2 or version == 3 else 0x8000
@@ -118,7 +151,7 @@ def main() -> int:
         struct.pack_into(">H", output_header, 15, len(combined))
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_bytes(bytes(output_header) + struct.pack(f">{len(combined)}H", *combined))
-    print(f"embedded {args.embed_program} ({len(program_words)} words) into {args.output}")
+    print(f"embedded {len(args.embed_program)} program(s) into {args.output}")
     return 0
 
 

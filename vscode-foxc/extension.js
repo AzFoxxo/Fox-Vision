@@ -1,6 +1,8 @@
 "use strict";
 
 const vscode = require("vscode");
+const fs = require("fs");
+const path = require("path");
 
 const TYPES = ["u8", "u16", "u32", "void"];
 const KEYWORDS = ["if", "else", "while", "return"];
@@ -107,25 +109,83 @@ function createSnippetItems() {
             "u32 variable (em2_am1 mode)",
             new vscode.MarkdownString("Declare a 32-bit variable. Requires `--mode em2_am1`."),
             new vscode.SnippetString("u32 ${1:name} = ${2:0};")
+        ),
+        createCompletionItem(
+            "include",
+            vscode.CompletionItemKind.Snippet,
+            "Include a header",
+            new vscode.MarkdownString("Insert a `#include` directive. Headers may contain prototypes or whole code."),
+            new vscode.SnippetString('#include "${1:header.fh}"')
+        ),
+        createCompletionItem(
+            "prototype",
+            vscode.CompletionItemKind.Snippet,
+            "Function prototype",
+            "Declare a function signature without a body",
+            new vscode.SnippetString("${1:u16} ${2:name}(${3:u16 value});")
         )
     ];
 }
 
-function collectDocumentSymbols(document) {
-    const names = new Set();
-    // Match u8 / u16 / u32 / void declarations (with optional pointer stars)
-    const declarationPattern = /\b(?:u8|u16|u32|void)\s+\**\s*([A-Za-z_][A-Za-z0-9_]*)\b/g;
+// ---------------------------------------------------------------------------
+// Header / include support
+// ---------------------------------------------------------------------------
 
-    for (let line = 0; line < document.lineCount; line += 1) {
-        const text = document.lineAt(line).text;
-        declarationPattern.lastIndex = 0;
-        let match = declarationPattern.exec(text);
-        while (match) {
-            names.add(match[1]);
-            match = declarationPattern.exec(text);
+function parseIncludeDirective(raw) {
+    const match = /^#\s*include\s+(?:"([^"]+)"|<([^>]+)>)/.exec(raw.trim());
+    if (!match) return null;
+    if (match[1] !== undefined) return { target: match[1], angled: false };
+    if (match[2] !== undefined) return { target: match[2], angled: true };
+    return null;
+}
+
+function getIncludeDirectories(document) {
+    const dirs = [];
+    const config = vscode.workspace.getConfiguration("foxc", document.uri);
+    const configured = config.get("includePaths", []);
+    const workspaceFolder = vscode.workspace.getWorkspaceFolder(document.uri);
+    for (const entry of configured) {
+        if (typeof entry !== "string" || entry.length === 0) continue;
+        if (path.isAbsolute(entry)) {
+            dirs.push(entry);
+        } else if (workspaceFolder) {
+            dirs.push(path.join(workspaceFolder.uri.fsPath, entry));
+        } else {
+            dirs.push(path.resolve(path.dirname(document.uri.fsPath), entry));
         }
     }
+    return dirs;
+}
 
+function resolveInclude(fromPath, target, angled, document) {
+    const candidates = [];
+    const currentDir = path.dirname(fromPath);
+    const includeDirs = getIncludeDirectories(document);
+    if (angled) {
+        candidates.push(...includeDirs, currentDir);
+    } else {
+        candidates.push(currentDir, ...includeDirs);
+    }
+    for (const dir of candidates) {
+        const full = path.join(dir, target);
+        try {
+            if (fs.statSync(full).isFile()) return full;
+        } catch (_) {
+            // not found in this directory; try the next one
+        }
+    }
+    return null;
+}
+
+function collectDocumentSymbols(document) {
+    // Include symbols from headers as well as from the open document, so
+    // completions work for functions declared in included headers.
+    const symbols = collectTranslationUnitSymbols(document);
+    const names = new Set();
+    for (const name of symbols.globals.keys()) names.add(name);
+    for (const name of symbols.functions.keys()) {
+        if (!BUILTINS.includes(name)) names.add(name);
+    }
     return [...names].sort((left, right) => left.localeCompare(right));
 }
 
@@ -182,6 +242,15 @@ function tokenize(text) {
 
         const tokenLine = line;
         const tokenColumn = column;
+
+        if (ch === "#") {
+            let value = "";
+            while (index < text.length && current() !== "\n") {
+                value += advance();
+            }
+            addToken("preprocessor", value.trim(), tokenLine, tokenColumn);
+            continue;
+        }
 
         if (ch === "'" || ch === "\"") {
             const quote = ch;
@@ -312,15 +381,54 @@ function makeDiagnostic(token, message, severity = vscode.DiagnosticSeverity.Err
     return new vscode.Diagnostic(makeRange(token, Math.max(1, String(token.value || "").length)), message, severity);
 }
 
-function collectTopLevelSymbols(tokens) {
-    const globals = new Map();
+function createEmptySymbols() {
     const functions = new Map();
-    const diagnostics = [];
-
     for (const builtin of BUILTINS) {
-        functions.set(builtin, BUILTIN_SIGNATURES.get(builtin));
+        functions.set(builtin, {
+            ...BUILTIN_SIGNATURES.get(builtin),
+            source: "builtin",
+            isPrototype: false,
+            isDefinition: true,
+        });
     }
+    return { globals: new Map(), functions, diagnostics: [] };
+}
 
+function addFunctionSymbol(symbols, name, info, token, source, reportDiagnostics) {
+    const existing = symbols.functions.get(name);
+    if (!existing) {
+        symbols.functions.set(name, { ...info, source });
+        return;
+    }
+    if (existing.source === "builtin") {
+        if (reportDiagnostics) {
+            symbols.diagnostics.push(makeDiagnostic(token, `function ${name} conflicts with a builtin`));
+        }
+        return;
+    }
+    if (existing.isDefinition && info.isDefinition) {
+        if (reportDiagnostics) {
+            symbols.diagnostics.push(makeDiagnostic(token, `duplicate definition of function ${name}`));
+        }
+        return;
+    }
+    if (info.isDefinition) {
+        // A prototype followed by its definition is legal.
+        symbols.functions.set(name, { ...info, source, isPrototype: true });
+    }
+}
+
+function addGlobalSymbol(symbols, name, info, token, reportDiagnostics) {
+    if (symbols.globals.has(name)) {
+        if (reportDiagnostics) {
+            symbols.diagnostics.push(makeDiagnostic(token, `duplicate global ${name}`));
+        }
+        return;
+    }
+    symbols.globals.set(name, info);
+}
+
+function collectSymbolsFromTokens(tokens, symbols, source, reportDiagnostics) {
     let index = 0;
 
     function peek(offset = 0) {
@@ -354,99 +462,130 @@ function collectTopLevelSymbols(tokens) {
         }
     }
 
-    function readParamCount() {
-        let count = 0;
+    function readParams() {
+        const params = [];
         let depth = 1;
-        let sawType = false;
-
         while (index < tokens.length && depth > 0) {
             const token = advance();
-            if (token.kind === "eof") {
-                break;
-            }
-            if (isOpenParen(token)) {
-                depth += 1;
-                continue;
-            }
-            if (isCloseParen(token)) {
-                depth -= 1;
-                continue;
-            }
-            if (depth > 1) {
-                continue;
-            }
+            if (token.kind === "eof") break;
+            if (isOpenParen(token)) { depth += 1; continue; }
+            if (isCloseParen(token)) { depth -= 1; continue; }
+            if (depth > 1) continue;
             if (isTypeToken(token)) {
-                sawType = true;
-                continue;
-            }
-            if (sawType && token.kind === "op" && token.value === "*") {
-                continue;
-            }
-            if (sawType && isIdentifierToken(token)) {
-                count += 1;
-                sawType = false;
-                continue;
-            }
-            if (isComma(token)) {
-                sawType = false;
+                let typeName = token.value;
+                let stars = 0;
+                while (tokens[index] && tokens[index].kind === "op" && tokens[index].value === "*") {
+                    typeName += advance().value;
+                    stars += 1;
+                }
+                // `f(void)` is an explicit empty parameter list; `void *p` is a
+                // pointer parameter, so only bare `void` before `)` is skipped.
+                if (token.value === "void" && stars === 0 && isCloseParen(tokens[index])) continue;
+                const name = isIdentifierToken(tokens[index]) ? advance().value : "";
+                params.push({ type: typeName, name });
             }
         }
-
-        return count;
+        return params;
     }
 
     while (index < tokens.length) {
         const token = peek();
-        if (token.kind === "eof") {
-            break;
-        }
-        if (!isTypeToken(token)) {
-            advance();
-            continue;
-        }
+        if (token.kind === "eof") break;
+        if (token.kind === "preprocessor") { advance(); continue; }
+        if (!isTypeToken(token)) { advance(); continue; }
 
         const typeToken = advance();
-        while (peek().kind === "op" && peek().value === "*") {
-            advance();
-        }
+        while (peek().kind === "op" && peek().value === "*") advance();
         const nameToken = peek();
-        if (!isIdentifierToken(nameToken)) {
-            advance();
-            continue;
-        }
-
+        if (!isIdentifierToken(nameToken)) { advance(); continue; }
         advance();
-        const nextToken = peek();
-        if (isOpenParen(nextToken)) {
+
+        if (isOpenParen(peek())) {
             advance();
-            const paramCount = readParamCount();
-            if (functions.has(nameToken.value)) {
-                diagnostics.push(makeDiagnostic(nameToken, `duplicate function ${nameToken.value}`));
-            } else {
-                functions.set(nameToken.value, { ret: typeToken.value, params: paramCount });
-            }
+            const params = readParams();
+            let isDefinition = false;
             if (isOpenBrace(peek())) {
+                isDefinition = true;
                 advance();
                 skipBlock();
+            } else if (isSemicolon(peek())) {
+                advance();
             }
+            const paramText = params
+                .map((p) => `${p.type}${p.name ? " " + p.name : ""}`)
+                .join(", ");
+            addFunctionSymbol(symbols, nameToken.value, {
+                ret: typeToken.value,
+                params: params.length,
+                paramList: params,
+                isPrototype: !isDefinition,
+                isDefinition,
+                detail: `${typeToken.value} ${nameToken.value}(${paramText})`,
+            }, nameToken, source, reportDiagnostics);
             continue;
         }
 
-        if (globals.has(nameToken.value)) {
-            diagnostics.push(makeDiagnostic(nameToken, `duplicate global ${nameToken.value}`));
-        } else {
-            globals.set(nameToken.value, typeToken.value);
-        }
+        addGlobalSymbol(symbols, nameToken.value, { type: typeToken.value, source }, nameToken, reportDiagnostics);
         skipToSemicolon();
     }
+}
 
-    return { globals, functions, diagnostics };
+function collectTopLevelSymbols(tokens) {
+    const symbols = createEmptySymbols();
+    collectSymbolsFromTokens(tokens, symbols, null, true);
+    return symbols;
+}
+
+function isHeaderDocument(document) {
+    const lower = document.uri.fsPath.toLowerCase();
+    return lower.endsWith(".fh") || lower.endsWith(".h");
+}
+
+function collectTranslationUnitSymbols(document) {
+    const symbols = createEmptySymbols();
+    const visited = new Set();
+
+    function collectFile(filePath, text, isMain) {
+        const normalized = path.normalize(filePath);
+        if (visited.has(normalized)) return;
+        visited.add(normalized);
+
+        const tokens = tokenize(text);
+        collectSymbolsFromTokens(tokens, symbols, isMain ? null : filePath, isMain);
+
+        for (const token of tokens) {
+            if (token.kind !== "preprocessor") continue;
+            const directive = parseIncludeDirective(token.value);
+            if (!directive) continue;
+            const resolved = resolveInclude(filePath, directive.target, directive.angled, document);
+            if (!resolved) {
+                if (isMain) {
+                    symbols.diagnostics.push(makeDiagnostic(token, `cannot find include ${directive.target}`));
+                }
+                continue;
+            }
+            let content;
+            try {
+                content = fs.readFileSync(resolved, "utf8");
+            } catch (_) {
+                if (isMain) {
+                    symbols.diagnostics.push(makeDiagnostic(token, `cannot read include ${directive.target}`));
+                }
+                continue;
+            }
+            collectFile(resolved, content, false);
+        }
+    }
+
+    collectFile(document.uri.fsPath, document.getText(), true);
+    return symbols;
 }
 
 class FoxCValidator {
-    constructor(tokens, symbols) {
+    constructor(tokens, symbols, requireMain) {
         this.tokens = tokens;
         this.symbols = symbols;
+        this.requireMain = requireMain !== false;
         this.index = 0;
         this.diagnostics = [];
         this.scopes = [];
@@ -538,6 +677,10 @@ class FoxCValidator {
 
     parseProgram() {
         while (!this.check("eof")) {
+            if (this.check("preprocessor")) {
+                this.advance();
+                continue;
+            }
             if (!isTypeToken(this.current())) {
                 this.addError(this.current(), "expected a top-level declaration");
                 this.advance();
@@ -562,11 +705,15 @@ class FoxCValidator {
             this.parseGlobal(typeToken, nameToken);
         }
 
-        const mainSig = this.symbols.functions.get("main");
-        if (!mainSig) {
-            this.diagnostics.push(new vscode.Diagnostic(new vscode.Range(0, 0, 0, 1), "missing required function main"));
-        } else if (mainSig.ret !== "void" || mainSig.params !== 0) {
-            this.diagnostics.push(new vscode.Diagnostic(new vscode.Range(0, 0, 0, 1), "main must have signature void main()"));
+        if (this.requireMain) {
+            const mainSig = this.symbols.functions.get("main");
+            if (!mainSig) {
+                this.diagnostics.push(new vscode.Diagnostic(new vscode.Range(0, 0, 0, 1), "missing required function main"));
+            } else if (mainSig.ret !== "void" || mainSig.params !== 0) {
+                this.diagnostics.push(new vscode.Diagnostic(new vscode.Range(0, 0, 0, 1), "main must have signature void main()"));
+            } else if (!mainSig.isDefinition) {
+                this.diagnostics.push(new vscode.Diagnostic(new vscode.Range(0, 0, 0, 1), "missing definition of function main"));
+            }
         }
 
         return this.diagnostics;
@@ -613,12 +760,22 @@ class FoxCValidator {
         if (!this.check("op", ")")) {
             while (!this.check("eof") && !this.check("op", ")")) {
                 const paramType = this.expect("type", undefined, "expected a parameter type");
+                let stars = 0;
                 while (this.match("op", "*")) {
-                    // pointer declarator markers are allowed between parameter type and name
+                    stars += 1;
                 }
-                const paramName = this.expect("ident", undefined, "expected a parameter name");
-                if (paramType && paramName) {
-                    params.push({ type: paramType.value, name: paramName.value });
+                // `f(void)` is an explicit empty parameter list; `void *p` is a
+                // pointer parameter and must still be counted.
+                if (paramType && paramType.value === "void" && stars === 0 && this.check("op", ")")) {
+                    break;
+                }
+                const paramName = this.check("ident") ? this.advance() : null;
+                if (paramType) {
+                    params.push({
+                        type: paramType.value,
+                        name: paramName ? paramName.value : "",
+                        token: paramName || paramType,
+                    });
                 }
                 if (this.match("op", ",")) {
                     continue;
@@ -628,6 +785,12 @@ class FoxCValidator {
         }
 
         this.expect("op", ")", "expected ')' after parameter list");
+
+        // A prototype ends at ';'. Its signature was already collected above.
+        if (this.match("op", ";")) {
+            return;
+        }
+
         if (!this.expect("op", "{", "expected '{' to start the function body")) {
             this.synchronizeTopLevel();
             return;
@@ -926,8 +1089,8 @@ class FoxCValidator {
 
 function validateDocument(document, collection) {
     const tokens = tokenize(document.getText());
-    const symbols = collectTopLevelSymbols(tokens);
-    const validator = new FoxCValidator(tokens, symbols);
+    const symbols = collectTranslationUnitSymbols(document);
+    const validator = new FoxCValidator(tokens, symbols, !isHeaderDocument(document));
     const diagnostics = [...symbols.diagnostics, ...validator.parseProgram()];
     collection.set(document.uri, diagnostics);
 }
@@ -1000,12 +1163,20 @@ function activate(context) {
                     return new vscode.Hover(md);
                 }
 
-                // collect functions from document
-                const tokens = tokenize(document.getText());
-                const symbols = collectTopLevelSymbols(tokens);
-                if (symbols.functions.has(word)) {
-                    const f = symbols.functions.get(word);
-                    return new vscode.Hover(new vscode.MarkdownString(`**\`${word}(...) -> ${f.ret}\`**  *(${f.params} param(s))*`));
+                // Collect functions/globals from this document and all included headers.
+                const symbols = collectTranslationUnitSymbols(document);
+                const func = symbols.functions.get(word);
+                if (func && func.source !== "builtin") {
+                    const origin = func.source ? `  *(from \`${path.basename(func.source)}\`)*` : "";
+                    const label = func.detail || `${word}(...) -> ${func.ret}`;
+                    const kind = func.isDefinition ? (func.isPrototype ? "declared + defined" : "defined") : "declared in header";
+                    return new vscode.Hover(new vscode.MarkdownString(`**\`${label}\`**  *(${kind})*${origin}`));
+                }
+
+                const globalInfo = symbols.globals.get(word);
+                if (globalInfo) {
+                    const origin = globalInfo.source ? `  *(from \`${path.basename(globalInfo.source)}\`)*` : "";
+                    return new vscode.Hover(new vscode.MarkdownString(`**\`${word}: ${globalInfo.type}\`**${origin}`));
                 }
 
                 // Type hover

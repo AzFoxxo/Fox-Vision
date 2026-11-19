@@ -1,0 +1,72 @@
+// FoxOS kernel internal support — resident-kernel and shell only.
+//
+// These helpers (program loading, embedded images, banner, layout constants)
+// are not part of the application API exposed by <foxos.fh>.
+
+// ---------------------------------------------------------------------------
+// Address constants
+// ---------------------------------------------------------------------------
+
+// Foreground programs are loaded in the 32-bit address space, well above the
+// kernel, globals and stack. One word is two bytes, so this is an 8 MiB offset.
+u32 PROGRAM_BASE      = 0x00100000;
+
+// foxos_pack.py embeds the foreground image at this ROM word address.
+// It sits above the kernel, globals, stack and VRAM regions, but below the
+// 0x100000 foreground program area. The embedded-program chain starts at
+// 0x20000 so the larger 32-bit compiler output still fits before it.
+u32 EMBED_BASE        = 0x00020000;
+u16 EMBED_MAGIC       = 0xF057;
+u16 EMBED_NAME_MAX    = 8;
+u16 EMBED_LEN_OFFSET  = 10;
+u16 EMBED_DATA_OFFSET = 11;
+// ---------------------------------------------------------------------------
+// Program loader – block-copy a program from the 32-bit disk into the
+// 32-bit program area, then hand off execution.
+// ---------------------------------------------------------------------------
+
+void kernel_exec(u32 disk_word, u32 word_count)
+{
+    u32 i = 0;
+    u32 dest = PROGRAM_BASE;
+
+    if (word_count == 0)
+    {
+        return;
+    }
+
+    disk_read_begin(disk_word, word_count);
+    while (i < word_count)
+    {
+        poke(dest, in_port32(6));
+        dest = dest + 1;
+        i = i + 1;
+    }
+    os_start(PROGRAM_BASE);
+}
+
+// Copy a program that lives in the ROM image (for example the embedded
+// program placed at EMBED_BASE by foxos_pack.py). ROM contents are read
+// with peek(), not through the disk device.
+void kernel_exec_embedded(u32 rom_offset, u32 word_count)
+{
+    u32 i = 0;
+    u32 dest = PROGRAM_BASE;
+
+    while (i < word_count)
+    {
+        poke(dest, peek(rom_offset + i));
+        dest = dest + 1;
+        i = i + 1;
+    }
+    os_start(PROGRAM_BASE);
+}
+
+// ---------------------------------------------------------------------------
+// Banner
+// ---------------------------------------------------------------------------
+
+void kernel_banner()
+{
+    tty_puts("FoxOS 32-bit kernel v0.0.1 - EM=2, 4 GiB VF32HardDisk on PORT6\r\n");
+}

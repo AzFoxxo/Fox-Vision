@@ -19,12 +19,13 @@ namespace FoxVision
             _currentRom = initialRom;
 
             // Create a new block of contiguous memory for the RAM
-            _unprotectedMemory = new(ushort.MaxValue);
+            _unprotectedMemory = new(_options.MemorySizeBytes);
             bool loadedRom = LoadRomIntoMemory(_currentRom);
 
             // Create the CPU
             _processor = new(_unprotectedMemory, _options.ExecutionSpeedHz, _options.LogInstruction, _currentRom.ResetAddress, _options.PortDevices, _currentRom.Mapper);
             _processor.SetFlashSavePaths(_options.FlashSavePaths);
+            _processor.SetHardDiskSavePaths(_options.HardDiskSavePaths);
 
             if (_options.Headless)
             {
@@ -56,6 +57,12 @@ namespace FoxVision
                     _processor.SetExecutionSpeedHz(executionSpeedHz);
                     return true;
                 },
+                memorySizeBytes =>
+                {
+                    _unprotectedMemory.Resize(memorySizeBytes);
+                    _options.MemorySizeBytes = _unprotectedMemory.SizeBytes;
+                    return true;
+                },
                 enabled =>
                 {
                     _processor.SetInstructionLogging(enabled);
@@ -74,6 +81,12 @@ namespace FoxVision
                     {
                         _processor.SetFlashSavePaths(portConfig.FlashSavePaths);
                         _options.FlashSavePaths = portConfig.FlashSavePaths.ToArray();
+                    }
+
+                    if (portConfig.HardDiskSavePaths is not null && portConfig.HardDiskSavePaths.Length == EmulatorOptions.PortCount)
+                    {
+                        _processor.SetHardDiskSavePaths(portConfig.HardDiskSavePaths);
+                        _options.HardDiskSavePaths = portConfig.HardDiskSavePaths.ToArray();
                     }
 
                     _options.PortDevices = portConfig.PortDevices.ToArray();
@@ -129,6 +142,7 @@ namespace FoxVision
             lock (_reloadLock)
             {
                 StopCpuThread();
+                _unprotectedMemory.Resize(updated.MemorySizeBytes);
                 if (!LoadRomIntoMemory(romImage))
                 {
                     return false;
@@ -141,11 +155,15 @@ namespace FoxVision
                     _processor.SetFlashSavePaths(updated.FlashSavePaths);
                     _options.FlashSavePaths = updated.FlashSavePaths.ToArray();
                 }
+
+                _processor.SetHardDiskSavePaths(updated.HardDiskSavePaths);
+                _options.HardDiskSavePaths = updated.HardDiskSavePaths.ToArray();
                 StartCpuThread();
                 _currentRom = romImage;
                 _options.RomPath = updated.RomPath;
                 _options.ExecutionSpeedHz = updated.ExecutionSpeedHz;
                 _options.LogInstruction = updated.LogInstruction;
+                _options.MemorySizeBytes = _unprotectedMemory.SizeBytes;
                 _options.PortDevices = updated.PortDevices.ToArray();
             }
 
@@ -174,7 +192,7 @@ namespace FoxVision
                 return false;
             }
 
-            ulong maxAddress = rom.MaximumWords > 0x8000 ? 0x100000000UL : ((ulong)_unprotectedMemory.MaxAddress + 1);
+            ulong maxAddress = (ulong)_unprotectedMemory.MaxWordAddress + 1;
             if ((ulong)rom.StartAddress + (ulong)rom.Words.Length > maxAddress)
             {
                 Console.ForegroundColor = ConsoleColor.Red;

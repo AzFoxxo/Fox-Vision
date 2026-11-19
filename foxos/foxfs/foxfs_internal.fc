@@ -1,0 +1,167 @@
+// FoxFS internal support — formatting, validation, listings and the standard
+// root layout. Used by the kernel, shell and tests, not by applications.
+
+u32 FS_MAGIC         = 0x464F5833;
+u32 FS_VERSION       = 8;
+u32 METADATA_WORDS   = 10244;
+// ---------------------------------------------------------------------------
+// Init / format
+// ---------------------------------------------------------------------------
+
+void fs_format()
+{
+    u32 i = 0;
+    u32 slot = 0;
+
+    // Only the metadata area needs clearing. The data area is sparse and is
+    // written on demand, so formatting a 4 GiB cartridge is fast.
+    disk_write_begin(0, METADATA_WORDS);
+    while (i < METADATA_WORDS)
+    {
+        out_port32(6, 0);
+        i = i + 1;
+    }
+
+    disk_write(0, FS_MAGIC);
+    disk_write(1, FS_VERSION);
+    disk_write(2, ENTRY_COUNT);
+    disk_write(3, DATA_BASE);
+
+    // Free entries point at the root so a partially damaged entry can never
+    // make ".." walk into an arbitrary slot.
+    while (slot < ENTRY_COUNT)
+    {
+        disk_write(fs_entry_base(slot) + ENTRY_PARENT, ROOT_SLOT);
+        slot = slot + 1;
+    }
+    fs_current_dir = ROOT_SLOT;
+    fs_next_slot = 0;
+
+    // A freshly installed filesystem always has the standard directories.
+    fs_init_root_dirs();
+}
+
+u16 fs_valid()
+{
+    if (disk_read(0) != FS_MAGIC) { return 0; }
+    if (disk_read(1) != FS_VERSION) { return 0; }
+    if (disk_read(2) != ENTRY_COUNT) { return 0; }
+    if (disk_read(3) != DATA_BASE) { return 0; }
+    return 1;
+}
+// ---------------------------------------------------------------------------
+// Directory listing
+// ---------------------------------------------------------------------------
+
+void fs_list(u32 parent, u16 long_format)
+{
+    u32 slot  = 0;
+    u16 count = 0;
+
+    while (slot < ENTRY_COUNT)
+    {
+        fs_read_entry(slot);
+        if (fs_e_type != 0 && fs_e_parent == parent)
+        {
+            if (long_format)
+            {
+                if (fs_e_type == 2) { tty_puts("dir  "); }
+                else                { tty_puts("file "); }
+            }
+            fs_name_print(slot);
+            if (fs_e_type == 2) { tty_putc('/'); }
+            if (long_format)
+            {
+                tty_puts("  ");
+                tty_putu32(fs_e_size);
+                tty_puts(" words");
+            }
+            tty_newline();
+            count = count + 1;
+        }
+        slot = slot + 1;
+    }
+    if (count == 0) { tty_puts("(empty)\r\n"); }
+}
+
+// ---------------------------------------------------------------------------
+// Disk usage
+// ---------------------------------------------------------------------------
+
+void fs_df()
+{
+    u32 used = 0;
+    u32 data_words = 0;
+    u32 slot = 0;
+
+    while (slot < ENTRY_COUNT)
+    {
+        fs_read_entry(slot);
+        if (fs_e_type != 0)
+        {
+            used = used + 1;
+            if (fs_e_type == 1) { data_words = data_words + fs_e_size; }
+        }
+        slot = slot + 1;
+    }
+    tty_puts("entries: ");
+    tty_putu32(used);
+    tty_putc('/');
+    tty_putu32(ENTRY_COUNT);
+    tty_puts(" used\r\n");
+    tty_puts("file data: ");
+    tty_putu32(data_words);
+    tty_puts(" words\r\n");
+    tty_puts("per-file limit: ");
+    tty_putu32(FILE_CHUNK_WORDS);
+    tty_puts(" words\r\n");
+}
+// ---------------------------------------------------------------------------
+// Standard root layout
+// ---------------------------------------------------------------------------
+
+// Ensure line[start..end-1] names a directory at the root. Callers pass an
+// absolute path such as "/bin", so the current directory cannot affect the
+// result. Returns 1 when the directory exists afterwards, 0 on failure.
+u16 fs_ensure_root_dir(u16 start, u16 end)
+{
+    u32 slot = fs_resolve_path(start, end);
+
+    if (slot == NOT_FOUND)
+    {
+        return fs_create(start, end, 2) != NOT_FOUND;
+    }
+    fs_read_entry(slot);
+    return fs_e_type == 2;
+}
+
+// Create the standard top-level hierarchy on a fresh filesystem.
+// Existing entries are kept, so calling this again is safe.
+void fs_init_root_dirs()
+{
+    line[0] = '/';
+    line[1] = 'b';
+    line[2] = 'i';
+    line[3] = 'n';
+    fs_ensure_root_dir(0, 4);
+
+    line[0] = '/';
+    line[1] = 'h';
+    line[2] = 'o';
+    line[3] = 'm';
+    line[4] = 'e';
+    fs_ensure_root_dir(0, 5);
+
+    line[0] = '/';
+    line[1] = 't';
+    line[2] = 'e';
+    line[3] = 'm';
+    line[4] = 'p';
+    fs_ensure_root_dir(0, 5);
+
+    line[0] = '/';
+    line[1] = 'e';
+    line[2] = 't';
+    line[3] = 'c';
+    fs_ensure_root_dir(0, 4);
+}

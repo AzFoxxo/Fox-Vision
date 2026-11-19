@@ -1,0 +1,91 @@
+; VF32HardDisk test
+; Exercises the 32-bit address/data bus on PORT6.
+; Assemble with: fox16asm -i test/vf32harddisk_test.f16 --mode em2_am1
+; Expected output: OK
+
+:main
+MOV %2 EM          ; 32-bit mode: 32-bit port bus
+
+; ---------------------------------------------------------------------------
+; Write 0xDEADBEEF to address 0x00000000
+; ---------------------------------------------------------------------------
+MOV $0000 R0
+MOV $0000 R0H
+OUT R0 PORT6       ; address word
+
+MOV %1 R1          ; command: write, one transfer
+OUT R1 PORT6
+
+MOV $BEEF R0
+MOV $DEAD R0H
+OUT R0 PORT6       ; data word
+
+; ---------------------------------------------------------------------------
+; Write 0x11223344 to address 0xFFFFFFFC (last word of the 4 GiB cart)
+; ---------------------------------------------------------------------------
+MOV $FFFC R0
+MOV $FFFF R0H
+OUT R0 PORT6
+
+MOV %1 R1          ; write, one transfer
+OUT R1 PORT6
+
+MOV $3344 R0
+MOV $1122 R0H
+OUT R0 PORT6
+
+; ---------------------------------------------------------------------------
+; Read address 0x00000000 and verify 0xDEADBEEF
+; ---------------------------------------------------------------------------
+MOV $0000 R0
+MOV $0000 R0H
+OUT R0 PORT6
+
+MOV %0 R1          ; read, one transfer
+OUT R1 PORT6
+IN PORT6 R0
+
+MOV $BEEF R2
+MOV $DEAD R2H
+CMP R0 R2
+JNE fail
+
+; ---------------------------------------------------------------------------
+; Read address 0xFFFFFFFC and verify 0x11223344
+; ---------------------------------------------------------------------------
+MOV $FFFC R0
+MOV $FFFF R0H
+OUT R0 PORT6
+
+MOV %0 R1          ; read, one transfer
+OUT R1 PORT6
+IN PORT6 R0
+
+MOV $3344 R2
+MOV $1122 R2H
+CMP R0 R2
+JNE fail
+
+; ---------------------------------------------------------------------------
+; Success
+; ---------------------------------------------------------------------------
+MOV %79 X          ; 'O'
+OUT X PORT4
+MOV %75 X          ; 'K'
+OUT X PORT4
+MOV %10 X
+OUT X PORT4
+HLT
+
+:fail
+MOV %70 X          ; 'F'
+OUT X PORT4
+MOV %65 X          ; 'A'
+OUT X PORT4
+MOV %73 X          ; 'I'
+OUT X PORT4
+MOV %76 X          ; 'L'
+OUT X PORT4
+MOV %10 X
+OUT X PORT4
+HLT

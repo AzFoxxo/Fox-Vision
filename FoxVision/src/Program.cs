@@ -96,6 +96,7 @@ namespace FoxVision
                 startInfo.EnvironmentVariables["FOXVISION_EXECUTION_SPEED_HZ"] = options.ExecutionSpeedHz.ToString();
                 startInfo.EnvironmentVariables["FOXVISION_LOG_INSTRUCTION"] = options.LogInstruction.ToString();
                 startInfo.EnvironmentVariables["FOXVISION_ROM_PREVIEW_WORDS"] = options.RomPreviewWords.ToString();
+                startInfo.EnvironmentVariables["FOXVISION_MEMORY_SIZE"] = options.MemorySizeBytes.ToString();
                 startInfo.EnvironmentVariables["FOXVISION_CONTROLLER_UP_KEY"] = options.ControllerUpKey.ToString();
                 startInfo.EnvironmentVariables["FOXVISION_CONTROLLER_DOWN_KEY"] = options.ControllerDownKey.ToString();
                 startInfo.EnvironmentVariables["FOXVISION_CONTROLLER_LEFT_KEY"] = options.ControllerLeftKey.ToString();
@@ -114,6 +115,15 @@ namespace FoxVision
                 for (int port = 0; port < options.PortDevices.Length; port++)
                 {
                     startInfo.EnvironmentVariables[$"FOXVISION_PORT{port}_DEVICE"] = options.PortDevices[port].ToString();
+                }
+
+                for (int port = 0; port < options.HardDiskSavePaths.Length; port++)
+                {
+                    string? path = options.HardDiskSavePaths[port];
+                    if (!string.IsNullOrWhiteSpace(path))
+                    {
+                        startInfo.EnvironmentVariables[$"FOXVISION_PORT{port}_HARDDISK_PATH"] = path;
+                    }
                 }
 
                 Process.Start(startInfo);
@@ -143,6 +153,7 @@ namespace FoxVision
                 ExecutionSpeedHz = options.ExecutionSpeedHz,
                 LogInstruction = options.LogInstruction,
                 RomPreviewWords = options.RomPreviewWords,
+                MemorySizeBytes = options.MemorySizeBytes,
                 ControllerUpKey = options.ControllerUpKey,
                 ControllerDownKey = options.ControllerDownKey,
                 ControllerLeftKey = options.ControllerLeftKey,
@@ -154,6 +165,7 @@ namespace FoxVision
                 FixedTtyPortIndex = options.FixedTtyPortIndex,
                 PortDevices = options.PortDevices.ToArray(),
                 FlashSavePaths = options.FlashSavePaths?.ToArray() ?? new string[EmulatorOptions.PortCount],
+                HardDiskSavePaths = options.HardDiskSavePaths?.ToArray() ?? EmulatorOptions.CreateDefaultHardDiskSavePaths(),
                 BuildMode = options.BuildMode,
                 BuildMapper = options.BuildMapper,
                 BuildStrictFormat = options.BuildStrictFormat,
@@ -463,6 +475,27 @@ namespace FoxVision
                         options.LogInstruction = true;
                         break;
 
+                    case "--memory":
+                    case "--memory-size":
+                        if (i + 1 >= args.Length)
+                        {
+                            Console.ForegroundColor = ConsoleColor.Red;
+                            Console.WriteLine("Missing value for --memory option.");
+                            Console.ForegroundColor = ConsoleColor.White;
+                            return false;
+                        }
+
+                        if (!EmulatorOptions.TryParseMemorySize(args[++i], out var memorySizeBytes))
+                        {
+                            Console.ForegroundColor = ConsoleColor.Red;
+                            Console.WriteLine($"Invalid memory size '{args[i]}'. Use bytes or a K/M/G suffix (for example 128K, 64M or 4G).");
+                            Console.ForegroundColor = ConsoleColor.White;
+                            return false;
+                        }
+
+                        options.MemorySizeBytes = memorySizeBytes;
+                        break;
+
                     case "-h":
                     case "--help":
                         PrintUsage();
@@ -486,6 +519,7 @@ namespace FoxVision
             Console.WriteLine("  -r, --rom <path>    Load ROM binary at startup");
             Console.WriteLine("  --headless          Run without GUI until halt");
             Console.WriteLine("  --log               Enable instruction logging");
+            Console.WriteLine("  --memory <size>     RAM size in bytes or with a K/M/G suffix (128K-4G, default 4G)");
             Console.WriteLine("  -h, --help          Show this help message");
         }
 
@@ -856,6 +890,22 @@ namespace FoxVision
                         ushort? operand = readWord(1);
                         if (operand.HasValue)
                         {
+                            // Direct-memory jump operands use the wide 32-bit
+                            // form: low word first, then the high word.
+                            if (DecodeOperandType(opcodeWord, 0) == 0b10)
+                            {
+                                ushort? high = readWord(2);
+                                if (high.HasValue)
+                                {
+                                    uint target = ((uint)high.Value << 16) | operand.Value;
+                                    Console.ForegroundColor = ConsoleColor.DarkGray;
+                                    Console.Write($"{operand.Value:X4} {high.Value:X4} ");
+                                    Console.ForegroundColor = prev;
+                                    Console.WriteLine($"(${target:X8} / {target})");
+                                    return 2;
+                                }
+                            }
+
                             Console.ForegroundColor = ConsoleColor.DarkGray;
                             Console.Write($"{operand.Value:X4} ");
                             Console.ForegroundColor = prev;
@@ -1146,6 +1196,7 @@ namespace FoxVision
                 0x0017 => "SPH",
                 0x0018 => "CYCL",
                 0x0019 => "CYCH",
+                0x001A => "MS",
                 0x0020 => "R0L",
                 0x0021 => "R0H",
                 0x0022 => "R1L",

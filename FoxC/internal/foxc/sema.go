@@ -19,6 +19,7 @@ type semantic struct {
 	scopes       []map[string]symbolInfo
 	currFn       *FuncDecl
 	extendedMode bool
+	em2Am1Mode   bool
 }
 
 func check(prog *Program, opts CompileOptions) error {
@@ -26,21 +27,36 @@ func check(prog *Program, opts CompileOptions) error {
 		funcs:        map[string]funcSig{},
 		globals:      map[string]symbolInfo{},
 		extendedMode: isExtendedMode(opts.Mode),
+		em2Am1Mode:   isEm2Am1Mode(opts.Mode),
 	}
 
-	s.funcs["poke"] = funcSig{ret: Type{Base: TypeVoid}, params: []Type{{Base: TypeU16}, {Base: TypeU16}}}
-	s.funcs["peek"] = funcSig{ret: Type{Base: TypeU16}, params: []Type{{Base: TypeU16}}}
+	// In EM=2 the memory address bus is 32 bits wide, so poke/peek take
+	// full-width word addresses. The stored value remains one 16-bit word.
+	pokeAddr := Type{Base: TypeU16}
+	if s.em2Am1Mode {
+		pokeAddr = Type{Base: TypeU32}
+	}
+	osStartAddr := Type{Base: TypeU16}
+	if s.em2Am1Mode {
+		osStartAddr = Type{Base: TypeU32}
+	}
+
+	s.funcs["poke"] = funcSig{ret: Type{Base: TypeVoid}, params: []Type{pokeAddr, pokeAddr}}
+	s.funcs["peek"] = funcSig{ret: Type{Base: TypeU16}, params: []Type{pokeAddr}}
 	s.funcs["wait"] = funcSig{ret: Type{Base: TypeVoid}, params: []Type{{Base: TypeU16}}}
 	s.funcs["cyc"] = funcSig{ret: Type{Base: TypeU16}, params: []Type{}}
+	s.funcs["get_memory_size"] = funcSig{ret: Type{Base: TypeU32}, params: []Type{}}
 	s.funcs["vblank"] = funcSig{ret: Type{Base: TypeVoid}, params: []Type{}}
 	s.funcs["in_port"] = funcSig{ret: Type{Base: TypeU16}, params: []Type{{Base: TypeU16}}}
 	s.funcs["out_port"] = funcSig{ret: Type{Base: TypeVoid}, params: []Type{{Base: TypeU16}, {Base: TypeU16}}}
+	s.funcs["in_port32"] = funcSig{ret: Type{Base: TypeU32}, params: []Type{{Base: TypeU16}}}
+	s.funcs["out_port32"] = funcSig{ret: Type{Base: TypeVoid}, params: []Type{{Base: TypeU16}, {Base: TypeU32}}}
 	s.funcs["am"] = funcSig{ret: Type{Base: TypeU16}, params: []Type{}}
 	s.funcs["set_am"] = funcSig{ret: Type{Base: TypeVoid}, params: []Type{{Base: TypeU16}}}
 	s.funcs["em"] = funcSig{ret: Type{Base: TypeU16}, params: []Type{}}
 	s.funcs["set_em"] = funcSig{ret: Type{Base: TypeVoid}, params: []Type{{Base: TypeU16}}}
 	s.funcs["os_return"] = funcSig{ret: Type{Base: TypeVoid}, params: []Type{}}
-	s.funcs["os_start"] = funcSig{ret: Type{Base: TypeVoid}, params: []Type{{Base: TypeU16}}}
+	s.funcs["os_start"] = funcSig{ret: Type{Base: TypeVoid}, params: []Type{osStartAddr}}
 
 	for _, g := range prog.Globals {
 		if g.Type.Base == TypeVoid && g.Type.Ptr == 0 {
@@ -61,29 +77,48 @@ func check(prog *Program, opts CompileOptions) error {
 		s.globals[g.Name] = symbolInfo{typ: g.Type, isArray: g.IsArray, arrayLen: g.ArrayLen}
 	}
 
+	builtinSigs := make(map[string]funcSig, len(s.funcs))
+	for name, sig := range s.funcs {
+		builtinSigs[name] = sig
+	}
+
+	defined := map[string]bool{}
 	for _, fn := range prog.Funcs {
-		if _, exists := s.funcs[fn.Name]; exists {
-			return fmt.Errorf("duplicate function %q", fn.Name)
+		sig, err := s.funcSignature(fn)
+		if err != nil {
+			return err
 		}
-		if fn.Ret.Base == TypeU32 && !s.extendedMode {
-			return fmt.Errorf("function %q: u32 requires extended mode", fn.Name)
+		if _, isBuiltin := builtinSigs[fn.Name]; isBuiltin {
+			return fmt.Errorf("function %q conflicts with a builtin", fn.Name)
 		}
-		params := make([]Type, 0, len(fn.Params))
-		for _, p := range fn.Params {
-			if p.Type.Base == TypeVoid && p.Type.Ptr == 0 {
-				return fmt.Errorf("parameter %q in %q cannot be void", p.Name, fn.Name)
+
+		if fn.IsPrototype {
+			if existing, exists := s.funcs[fn.Name]; exists {
+				if !sameFuncSig(existing, sig) {
+					return fmt.Errorf("conflicting prototype for function %q", fn.Name)
+				}
+			} else {
+				s.funcs[fn.Name] = sig
 			}
-			if p.Type.Base == TypeU32 && !s.extendedMode {
-				return fmt.Errorf("parameter %q in %q: u32 requires extended mode", p.Name, fn.Name)
-			}
-			params = append(params, p.Type)
+			continue
 		}
-		s.funcs[fn.Name] = funcSig{ret: fn.Ret, params: params}
+
+		if defined[fn.Name] {
+			return fmt.Errorf("duplicate definition of function %q", fn.Name)
+		}
+		if existing, exists := s.funcs[fn.Name]; exists && !sameFuncSig(existing, sig) {
+			return fmt.Errorf("definition of function %q does not match its prototype", fn.Name)
+		}
+		s.funcs[fn.Name] = sig
+		defined[fn.Name] = true
 	}
 
 	mainSig, ok := s.funcs["main"]
 	if !ok {
 		return fmt.Errorf("missing required function main")
+	}
+	if !defined["main"] {
+		return fmt.Errorf("missing definition of function main")
 	}
 	if mainSig.ret.Base != TypeVoid || mainSig.ret.Ptr != 0 || len(mainSig.params) != 0 {
 		return fmt.Errorf("main must have signature void main()")
@@ -115,6 +150,9 @@ func check(prog *Program, opts CompileOptions) error {
 	}
 
 	for _, fn := range prog.Funcs {
+		if fn.IsPrototype {
+			continue
+		}
 		s.currFn = fn
 		s.pushScope()
 		for _, p := range fn.Params {
@@ -136,6 +174,42 @@ func check(prog *Program, opts CompileOptions) error {
 	}
 
 	return nil
+}
+
+func (s *semantic) funcSignature(fn *FuncDecl) (funcSig, error) {
+	if fn.Ret.Base == TypeU32 && !s.extendedMode {
+		return funcSig{}, fmt.Errorf("function %q: u32 requires extended mode", fn.Name)
+	}
+	params := make([]Type, 0, len(fn.Params))
+	for _, p := range fn.Params {
+		if p.Type.Base == TypeVoid && p.Type.Ptr == 0 {
+			return funcSig{}, fmt.Errorf("parameter %q in %q cannot be void", p.Name, fn.Name)
+		}
+		if p.Type.Base == TypeU32 && !s.extendedMode {
+			return funcSig{}, fmt.Errorf("parameter %q in %q: u32 requires extended mode", p.Name, fn.Name)
+		}
+		if p.Name == "" && !fn.IsPrototype {
+			return funcSig{}, fmt.Errorf("parameter name required in definition of %q", fn.Name)
+		}
+		params = append(params, p.Type)
+	}
+	return funcSig{ret: fn.Ret, params: params}, nil
+}
+
+func sameFuncSig(a, b funcSig) bool {
+	if !sameType(a.ret, b.ret) || len(a.params) != len(b.params) {
+		return false
+	}
+	for i := range a.params {
+		if !sameType(a.params[i], b.params[i]) {
+			return false
+		}
+	}
+	return true
+}
+
+func sameType(a, b Type) bool {
+	return a.Base == b.Base && a.Ptr == b.Ptr
 }
 
 func (s *semantic) checkStmt(st Stmt) error {
@@ -480,8 +554,11 @@ func (s *semantic) exprType(e Expr) (Type, error) {
 		}
 		return Type{Base: rt.Base}, nil
 	case *CallExpr:
-		if !s.extendedMode && (n.Callee == "in_port" || n.Callee == "out_port" || n.Callee == "am" || n.Callee == "set_am" || n.Callee == "em" || n.Callee == "set_em") {
+		if !s.extendedMode && (n.Callee == "in_port" || n.Callee == "out_port" || n.Callee == "in_port32" || n.Callee == "out_port32" || n.Callee == "am" || n.Callee == "set_am" || n.Callee == "em" || n.Callee == "set_em" || n.Callee == "get_memory_size") {
 			return Type{Base: TypeInvalid}, fmt.Errorf("%s requires extended mode", n.Callee)
+		}
+		if !s.em2Am1Mode && (n.Callee == "in_port32" || n.Callee == "out_port32" || n.Callee == "get_memory_size") {
+			return Type{Base: TypeInvalid}, fmt.Errorf("%s requires 32-bit mode (--mode em2_am1)", n.Callee)
 		}
 		sig, ok := s.funcs[n.Callee]
 		if !ok {

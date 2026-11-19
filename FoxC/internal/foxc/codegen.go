@@ -12,6 +12,17 @@ const (
 	globalLimitAddr = 0xEC78
 	// Keep the runtime stack above FoxOS's embedded-program area at $7000.
 	runtimeStackTop = 0x7800
+
+	// 32-bit (EM=2) builds move globals above the resident shell text (which
+	// ends just below $A000). The editor's 16K-word buffer still fits below
+	// the VRAM window at $EC78. The software stack starts above all globals
+	// at $E000, leaving room for frames without touching code or data.
+	em2GlobalBaseAddr  = 0xA000
+	em2RuntimeStackTop = 0xE000
+
+	// The emulator starts SP just below the 5000-word VRAM window. Startup
+	// re-seats it on every entry, including the OSRET restart path.
+	hardwareStackTop = 0xFFFF - 5000
 )
 
 const (
@@ -105,14 +116,32 @@ type gen struct {
 
 	enableStackChecks bool
 	stackLimit        uint16
+
+	// widePointers selects two-word pointer storage. It is only needed when
+	// the image is linked above the 16-bit word window, as foreground
+	// programs are; keeping low images on one-word pointers avoids inflating
+	// the resident shell past the globals base.
+	widePointers bool
+
+	// Memory layout for this target. 32-bit images get a higher stack and
+	// globals base so their code has more room to grow.
+	stackTop uint16
 }
 
 func generate(prog *Program, opts CompileOptions) (string, error) {
+	globalBase := uint16(globalBaseAddr)
+	stackTop := uint16(runtimeStackTop)
+	if isEm2Am1Mode(opts.Mode) {
+		globalBase = em2GlobalBaseAddr
+		stackTop = em2RuntimeStackTop
+	}
 	g := &gen{
 		prog:         prog,
 		extendedMode: isExtendedMode(opts.Mode),
 		em2Am1Mode:   isEm2Am1Mode(opts.Mode),
-		nextAddr:     globalBaseAddr,
+		nextAddr:     globalBase,
+		stackTop:     uint16(stackTop),
+		widePointers: isEm2Am1Mode(opts.Mode) && opts.LoadAddress > 0xFFFF,
 		globals:      map[string]storage{},
 		funcs:        map[string]*FuncDecl{},
 		frames:       map[string]*funcFrame{},
@@ -126,6 +155,9 @@ func generate(prog *Program, opts CompileOptions) (string, error) {
 	g.configureRegisters()
 
 	for _, fn := range prog.Funcs {
+		if fn.IsPrototype {
+			continue
+		}
 		g.funcs[fn.Name] = fn
 	}
 	mainFn, ok := g.funcs["main"]
@@ -156,11 +188,16 @@ func generate(prog *Program, opts CompileOptions) (string, error) {
 	}
 
 	var err error
-	g.stackTopSlot, err = g.allocGlobal(Type{Base: TypeU16})
+	// Runtime stack and frame pointers stay one word: their values live in
+	// the low 64K RAM window, even for foreground programs linked at
+	// $100000. Keeping these slots 16-bit avoids expanding every u32
+	// operation in the image into a two-word sequence.
+	runtimeSlotType := Type{Base: TypeU16}
+	g.stackTopSlot, err = g.allocGlobal(runtimeSlotType)
 	if err != nil {
 		return "", err
 	}
-	g.frameBaseSlot, err = g.allocGlobal(Type{Base: TypeU16})
+	g.frameBaseSlot, err = g.allocGlobal(runtimeSlotType)
 	if err != nil {
 		return "", err
 	}
@@ -189,7 +226,11 @@ func generate(prog *Program, opts CompileOptions) (string, error) {
 	} else if g.extendedMode {
 		g.emit("MOV %1 EM")
 	}
-	g.emit(fmt.Sprintf("MOV %%%d X", runtimeStackTop))
+	// Restarting through OSRET re-enters this startup code with whatever
+	// hardware stack the previous program left behind. Re-seat SP so a
+	// foreground program cannot corrupt the shell's stack frames.
+	g.emit(fmt.Sprintf("MOV %%%d SP", hardwareStackTop))
+	g.emit(fmt.Sprintf("MOV %%%d X", g.stackTop))
 	g.storeToGlobal(g.stackTopSlot)
 	g.emit("MOV %0 X")
 	g.storeToGlobal(g.frameBaseSlot)
@@ -226,7 +267,7 @@ func generate(prog *Program, opts CompileOptions) (string, error) {
 	g.emit("HLT")
 
 	for _, fn := range prog.Funcs {
-		if fn.Name == "main" {
+		if fn.IsPrototype || fn.Name == "main" {
 			continue
 		}
 		if err := g.emitFunction(g.frames[fn.Name]); err != nil {
@@ -235,7 +276,7 @@ func generate(prog *Program, opts CompileOptions) (string, error) {
 	}
 
 	for _, fn := range prog.Funcs {
-		if fn.Name == "main" {
+		if fn.IsPrototype || fn.Name == "main" {
 			continue
 		}
 		g.emitDispatch(g.frames[fn.Name])
@@ -268,8 +309,8 @@ func (g *gen) configureStackChecks() {
 			g.stackLimit = uint16(v)
 		}
 	}
-	if g.stackLimit < runtimeStackTop {
-		g.stackLimit = runtimeStackTop
+	if g.stackLimit < g.stackTop {
+		g.stackLimit = g.stackTop
 	}
 }
 
@@ -354,11 +395,11 @@ func (g *gen) restoreLiveRegisters(regs []string) {
 
 func (g *gen) prepareFrames() error {
 	for _, fn := range g.prog.Funcs {
-		if fn.Name == "main" {
+		if fn.IsPrototype || fn.Name == "main" {
 			continue
 		}
 
-		localCount := countLocalsInStmtList(fn.Body)
+		localCount := g.countLocalsInStmtList(fn.Body)
 		inlineTemps := maxInlineArgsInStmtList(fn.Body, g.inline)
 		next := 0
 		fr := &funcFrame{
@@ -374,12 +415,12 @@ func (g *gen) prepareFrames() error {
 		if fn.Ret.Base != TypeVoid || fn.Ret.Ptr != 0 {
 			slot := storage{kind: storageFrame, offset: next, typ: fn.Ret}
 			fr.retSlot = &slot
-			next += typeWords(fn.Ret)
+			next += g.wordCount(fn.Ret)
 		}
 
 		for _, p := range fn.Params {
 			slot := storage{kind: storageFrame, offset: next, typ: p.Type}
-			next += typeWords(p.Type)
+			next += g.wordCount(p.Type)
 			fr.paramSlots = append(fr.paramSlots, slot)
 			fr.paramByName[p.Name] = slot
 		}
@@ -677,7 +718,16 @@ func (g *gen) emitExprInto(e Expr, dst string) error {
 		g.emit(fmt.Sprintf("MOV %%%d %s", n.Value, dst))
 	case *StringLit:
 		label := g.stringLabel(n.Value)
-		g.emit("MOV " + label + " " + dst)
+		// A 32-bit image can place its data segment above 0xFFFF. Build the
+		// pointer from both halves instead of emitting a label immediate that
+		// the assembler would have to truncate to 16 bits.
+		high, low, ok := splitRegister(dst)
+		if !ok {
+			g.emit("MOV " + label + " " + dst)
+			return nil
+		}
+		g.emit("MOV @hi(" + label + ") " + high)
+		g.emit("MOV @lo(" + label + ") " + low)
 	case *IdentExpr:
 		slot, ok := g.lookup(n.Name)
 		if !ok {
@@ -931,11 +981,21 @@ func (g *gen) emitCallInto(n *CallExpr, dst string) error {
 		return nil
 	case "cyc":
 		return g.emitBuiltinCycInto(n, dst)
+	case "get_memory_size":
+		return g.emitBuiltinGetMemorySizeInto(n, dst)
 	case "vblank":
 		return g.emitBuiltinVBlank(n)
 	case "in_port":
 		return g.emitBuiltinInPortInto(n, dst)
+	case "in_port32":
+		return g.emitBuiltinInPortInto(n, dst)
 	case "out_port":
+		if err := g.emitBuiltinOutPort(n); err != nil {
+			return err
+		}
+		g.emit("MOV %0 " + dst)
+		return nil
+	case "out_port32":
 		if err := g.emitBuiltinOutPort(n); err != nil {
 			return err
 		}
@@ -1131,6 +1191,17 @@ func (g *gen) emitBuiltinCycInto(call *CallExpr, dst string) error {
 	return nil
 }
 
+// emitBuiltinGetMemorySizeInto reads the ISA V2.1 read-only MS register, which
+// reports the installed RAM size in 1 KiB units. A primary-register destination keeps
+// all 32 bits; smaller destinations receive the low word only.
+func (g *gen) emitBuiltinGetMemorySizeInto(call *CallExpr, dst string) error {
+	if len(call.Args) != 0 {
+		return fmt.Errorf("get_memory_size expects 0 arguments")
+	}
+	g.emit("MOV MS " + dst)
+	return nil
+}
+
 func (g *gen) emitBuiltinVBlank(call *CallExpr) error {
 	if len(call.Args) != 0 {
 		return fmt.Errorf("vblank expects 0 arguments")
@@ -1183,11 +1254,24 @@ func (g *gen) emitBuiltinOSStart(call *CallExpr) error {
 	if len(call.Args) != 1 {
 		return fmt.Errorf("os_start expects 1 argument")
 	}
-	target, ok := call.Args[0].(*IntLit)
-	if !ok || target.Value < 0 || target.Value > 0xFFFF {
+	// A 16-bit constant can use the compact absolute JMP encoding. In 32-bit
+	// mode any other address is materialised in X and jumped through.
+	if target, ok := call.Args[0].(*IntLit); ok {
+		if target.Value < 0 || target.Value > 0xFFFFFFFF {
+			return fmt.Errorf("os_start target is out of range")
+		}
+		if target.Value <= 0xFFFF {
+			g.emit(fmt.Sprintf("JMP $%04X", target.Value))
+			return nil
+		}
+	}
+	if !g.em2Am1Mode {
 		return fmt.Errorf("os_start target must be a 16-bit constant")
 	}
-	g.emit(fmt.Sprintf("JMP $%04X", target.Value))
+	if err := g.emitExprInto(call.Args[0], regX); err != nil {
+		return err
+	}
+	g.emit("JMP X")
 	return nil
 }
 
@@ -1353,7 +1437,7 @@ func (g *gen) emitInlineFunctionCall(in inlineFn, call *CallExpr) error {
 }
 
 func shortInlineCandidate(fn *FuncDecl) (inlineFn, bool) {
-	if fn.Name == "main" {
+	if fn.IsPrototype || fn.Name == "main" {
 		return inlineFn{}, false
 	}
 	for _, p := range fn.Params {
@@ -1472,8 +1556,19 @@ func (g *gen) emitCompareResultTo(op string, dst string) error {
 	return nil
 }
 
+// wordCount returns the number of 16-bit words a scalar occupies. Images
+// linked above the 16-bit word window store pointers as two words, just like
+// u32, so addresses above $FFFF survive a load/store. Low images keep the
+// original one-word pointers.
+func (g *gen) wordCount(t Type) int {
+	if g.widePointers && t.Ptr > 0 {
+		return 2
+	}
+	return typeWords(t)
+}
+
 func (g *gen) allocGlobal(t Type) (storage, error) {
-	size := typeWords(t)
+	size := g.wordCount(t)
 	if int(g.nextAddr)+size > int(globalLimitAddr) {
 		return storage{}, fmt.Errorf("global storage overflow: reached reserved memory at $%04X", g.nextAddr)
 	}
@@ -1506,11 +1601,11 @@ func (g *gen) allocLocal(t Type) (storage, error) {
 		return g.allocGlobal(t)
 	}
 	maxLocal := g.currentFrame.localStart + g.currentFrame.localSlotCount
-	if g.currentFrame.localNextOffset+typeWords(t) > maxLocal {
+	if g.currentFrame.localNextOffset+g.wordCount(t) > maxLocal {
 		return storage{}, fmt.Errorf("local slot overflow in function %q", g.currentFrame.decl.Name)
 	}
 	s := storage{kind: storageFrame, offset: g.currentFrame.localNextOffset, typ: t}
-	g.currentFrame.localNextOffset += typeWords(t)
+	g.currentFrame.localNextOffset += g.wordCount(t)
 	return s, nil
 }
 
@@ -1760,7 +1855,9 @@ func (g *gen) exprType(e Expr) Type {
 		switch n.Callee {
 		case "peek", "cyc", "in_port", "am", "em":
 			return Type{Base: TypeU16}
-		case "poke", "wait", "vblank", "out_port", "os_return", "os_start", "set_am", "set_em":
+		case "in_port32", "get_memory_size":
+			return Type{Base: TypeU32}
+		case "poke", "wait", "vblank", "out_port", "out_port32", "os_return", "os_start", "set_am", "set_em":
 			return Type{Base: TypeVoid}
 		}
 		if fn, ok := g.funcs[n.Callee]; ok {
@@ -1820,6 +1917,11 @@ func (g *gen) storeToStorage(slot storage) {
 			return
 		}
 	}
+	if g.widePointers && slot.typ.Ptr > 0 {
+		if g.storeU32ToStorageAddress(slot, regX) {
+			return
+		}
+	}
 	if slot.kind == storageGlobal {
 		g.emit("STR X " + slot.operand)
 		return
@@ -1855,6 +1957,15 @@ func (g *gen) loadFromStorageInto(slot storage, dst string) {
 		return
 	}
 	if slot.typ.Ptr == 0 && slot.typ.Base == TypeU32 {
+		if g.loadU32FromStorageInto(slot, dst) {
+			return
+		}
+		if dst != regX && g.loadU32FromStorageInto(slot, regX) {
+			g.emit("MOV X " + dst)
+			return
+		}
+	}
+	if g.widePointers && slot.typ.Ptr > 0 {
 		if g.loadU32FromStorageInto(slot, dst) {
 			return
 		}
@@ -2209,6 +2320,10 @@ func (g *gen) loadFrameAddress(offset int) {
 }
 
 func (g *gen) loadFrameAddressInto(offset int, dst string) {
+	if dst == regX {
+		g.loadFrameAddress(offset)
+		return
+	}
 	g.loadFromGlobalInto(g.frameBaseSlot, dst)
 	if offset > 0 {
 		g.emit(fmt.Sprintf("ADD %%%d %s", offset, dst))
@@ -2328,25 +2443,25 @@ func collectAddressTakenExpr(e Expr, taken map[string]bool) {
 	}
 }
 
-func countLocalsInStmtList(stmts []Stmt) int {
+func (g *gen) countLocalsInStmtList(stmts []Stmt) int {
 	total := 0
 	for _, st := range stmts {
-		total += countLocalsInStmt(st)
+		total += g.countLocalsInStmt(st)
 	}
 	return total
 }
 
-func countLocalsInStmt(st Stmt) int {
+func (g *gen) countLocalsInStmt(st Stmt) int {
 	switch n := st.(type) {
 	case *VarDeclStmt:
 		if n.Decl.IsArray {
 			return arrayWordCount(n.Decl.Type.Base, n.Decl.ArrayLen)
 		}
-		return typeWords(n.Decl.Type)
+		return g.wordCount(n.Decl.Type)
 	case *IfStmt:
-		return countLocalsInStmtList(n.Then) + countLocalsInStmtList(n.Else)
+		return g.countLocalsInStmtList(n.Then) + g.countLocalsInStmtList(n.Else)
 	case *WhileStmt:
-		return countLocalsInStmtList(n.Body)
+		return g.countLocalsInStmtList(n.Body)
 	default:
 		return 0
 	}

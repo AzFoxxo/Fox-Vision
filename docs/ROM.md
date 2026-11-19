@@ -46,8 +46,8 @@ Compatibility note: existing tools in this repository currently write a 10-byte 
 
 ## Size limits and enforcement (current implementation)
 
-- The assembler generator enforces a strict-format check when requested via the assembler's `--strict-format` option. In that mode the assembler enforces a maximum payload size of 2,048 words (4K words) excluding the 10-byte header. This preserves compatibility with legacy ROM size expectations.
-- The emulator's runtime loader accepts ROMs up to 0x1000 words (4,096 words) when copying into the machine memory area; ROMs larger than this will be rejected by the emulator. The repository's configuration and extension-mode design allow larger ROM sizes conceptually (extension mode may expand ROM space up to 32K words), but the current emulator enforces the limits above.
+- The assembler generator enforces a strict-format check when requested via the assembler's `--strict-format` option. In that mode legacy images are limited to 4,096 payload words, while extended and `em2_am1` images are limited to 32,768 payload words.
+- The emulator's runtime loader applies the limit selected by the container mapper: `rom4k` accepts up to `0x1000` words, `rom32k` up to `0x8000` words, and `rombyte8_32` up to `0x1_0000_0000` words when the CPU is in the 32-bit address space (`EM=2`). Images loaded at a non-zero start address must also fit within the selected address space.
 
 ## Notes for tool authors and integrators
 

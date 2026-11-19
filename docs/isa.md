@@ -1,8 +1,11 @@
-# Specification of the Fox Vision architecture (ISA V2.0)
+# Specification of the Fox Vision architecture (ISA V2.0 / V2.1)
 
 ## Processor
 
 The CPU is a single threaded 8MHz RISC chip. It uses the FoxVision architecture with support for FoxVision16 legacy operations and FoxVision32 extended operations (introduced in V2.0), featuring 32-bit registers and a 32-bit address bus with configurable 16-bit or 8-bit addressing modes.
+
+ISA V2.1 is an additive revision of V2.0. It introduces the read-only `MS`
+(Memory Size) register; all V2.0 registers and behaviour remain unchanged.
 
 ### Registers
 
@@ -15,24 +18,25 @@ Writing to an `L` sub-register updates bits 15–0 while preserving bits 31–16
 
 #### Primary Registers
 
-| ID  | Register | Size   | Read/Write | Description                                                                                                                                                                                                                                                                          |
-| --- | -------- | ------ | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| 0x0 | X        | 32-bit | Yes        | General-purpose register #1 (full 32-bit). Aliased by `XL` (low 16) and `XH` (high 16).                                                                                                                                                                                              |
-| 0x1 | Y        | 32-bit | Yes        | General-purpose register #2 (full 32-bit). Aliased by `YL` (low 16) and `YH` (high 16).                                                                                                                                                                                              |
-| 0x2 | PC       | 32-bit | No         | Program counter (32-bit address bus pointer; modified by control-flow logic). Aliased by `PCL` and `PCH`.                                                                                                                                                                            |
-| 0x3 | STATUS   | 8-bit  | Limited    | CPU flags register (written by CPU operations like CMP, DIV, HLT, CLR, and by `POP STATUS`).                                                                                                                                                                                         |
-| 0x4 | SP       | 32-bit | Yes        | Stack Pointer (full 32-bit memory address). Points to top of stack. Aliased by `SPL` and `SPH`.                                                                                                                                                                                      |
-| 0x5 | CYC      | 32-bit | Read-only  | Global cycle counter (wrapping at 0xFFFFFFFF → 0x00000000). Represents elapsed CPU cycles since reset. Aliased by `CYCL` and `CYCH`.                                                                                                                                                 |
-| 0x6 | EM       | 16-bit | Yes        | Extension Mode control register. Defaults to `0x0000`. `0x0000` = legacy mode; `0x0001` = extension mode (16-bit address space, up to 32K words ROM, port I/O); `0x0002` = 32-bit addressing space for memory (unlocks 32-bit address bus). Used alongside `AM` for modern hardware. |
-| 0x7 | R0       | 32-bit | Yes        | General-purpose register #0 (Introduced with ISA V1.11, extended to 32-bit in V2.0). Aliased by `R0L` and `R0H`.                                                                                                                                                                     |
-| 0x8 | R1       | 32-bit | Yes        | General-purpose register #1 (Introduced with ISA V1.11, extended to 32-bit in V2.0). Aliased by `R1L` and `R1H`.                                                                                                                                                                     |
-| 0x9 | R2       | 32-bit | Yes        | General-purpose register #2 (Introduced with ISA V1.11, extended to 32-bit in V2.0). Aliased by `R2L` and `R2H`.                                                                                                                                                                     |
-| 0xA | R3       | 32-bit | Yes        | General-purpose register #3 (Introduced with ISA V1.11, extended to 32-bit in V2.0). Aliased by `R3L` and `R3H`.                                                                                                                                                                     |
-| 0xB | R4       | 32-bit | Yes        | General-purpose register #4 (Introduced with ISA V1.11, extended to 32-bit in V2.0). Aliased by `R4L` and `R4H`.                                                                                                                                                                     |
-| 0xC | R5       | 32-bit | Yes        | General-purpose register #5 (Introduced with ISA V1.11, extended to 32-bit in V2.0). Aliased by `R5L` and `R5H`.                                                                                                                                                                     |
-| 0xD | R6       | 32-bit | Yes        | General-purpose register #6 (Introduced with ISA V1.11, extended to 32-bit in V2.0). Aliased by `R6L` and `R6H`.                                                                                                                                                                     |
-| 0xE | R7       | 32-bit | Yes        | General-purpose register #7 (Introduced with ISA V1.11, extended to 32-bit in V2.0). Aliased by `R7L` and `R7H`.                                                                                                                                                                     |
-| 0xF | AM       | 16-bit | Yes        | Addressing Mode control register (Introduced with ISA V2.0). Defaults to `0x0000`. `0` = 16-bit word addressing, `1` = 8-bit byte addressing. Usable independently from `EM`, but combined with `EM=2` for modern hardware.                                                          |
+| ID   | Register | Size   | Read/Write | Description                                                                                                                                                                                                                                                                          |
+| ---- | -------- | ------ | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 0x0  | X        | 32-bit | Yes        | General-purpose register #1 (full 32-bit). Aliased by `XL` (low 16) and `XH` (high 16).                                                                                                                                                                                              |
+| 0x1  | Y        | 32-bit | Yes        | General-purpose register #2 (full 32-bit). Aliased by `YL` (low 16) and `YH` (high 16).                                                                                                                                                                                              |
+| 0x2  | PC       | 32-bit | No         | Program counter (32-bit address bus pointer; modified by control-flow logic). Aliased by `PCL` and `PCH`.                                                                                                                                                                            |
+| 0x3  | STATUS   | 8-bit  | Limited    | CPU flags register (written by CPU operations like CMP, DIV, HLT, CLR, and by `POP STATUS`).                                                                                                                                                                                         |
+| 0x4  | SP       | 32-bit | Yes        | Stack Pointer (full 32-bit memory address). Points to top of stack. Aliased by `SPL` and `SPH`.                                                                                                                                                                                      |
+| 0x5  | CYC      | 32-bit | Read-only  | Global cycle counter (wrapping at 0xFFFFFFFF → 0x00000000). Represents elapsed CPU cycles since reset. Aliased by `CYCL` and `CYCH`.                                                                                                                                                 |
+| 0x6  | EM       | 16-bit | Yes        | Extension Mode control register. Defaults to `0x0000`. `0x0000` = legacy mode; `0x0001` = extension mode (16-bit address space, up to 32K words ROM, port I/O); `0x0002` = 32-bit addressing space for memory (unlocks 32-bit address bus). Used alongside `AM` for modern hardware. |
+| 0x7  | R0       | 32-bit | Yes        | General-purpose register #0 (Introduced with ISA V1.11, extended to 32-bit in V2.0). Aliased by `R0L` and `R0H`.                                                                                                                                                                     |
+| 0x8  | R1       | 32-bit | Yes        | General-purpose register #1 (Introduced with ISA V1.11, extended to 32-bit in V2.0). Aliased by `R1L` and `R1H`.                                                                                                                                                                     |
+| 0x9  | R2       | 32-bit | Yes        | General-purpose register #2 (Introduced with ISA V1.11, extended to 32-bit in V2.0). Aliased by `R2L` and `R2H`.                                                                                                                                                                     |
+| 0xA  | R3       | 32-bit | Yes        | General-purpose register #3 (Introduced with ISA V1.11, extended to 32-bit in V2.0). Aliased by `R3L` and `R3H`.                                                                                                                                                                     |
+| 0xB  | R4       | 32-bit | Yes        | General-purpose register #4 (Introduced with ISA V1.11, extended to 32-bit in V2.0). Aliased by `R4L` and `R4H`.                                                                                                                                                                     |
+| 0xC  | R5       | 32-bit | Yes        | General-purpose register #5 (Introduced with ISA V1.11, extended to 32-bit in V2.0). Aliased by `R5L` and `R5H`.                                                                                                                                                                     |
+| 0xD  | R6       | 32-bit | Yes        | General-purpose register #6 (Introduced with ISA V1.11, extended to 32-bit in V2.0). Aliased by `R6L` and `R6H`.                                                                                                                                                                     |
+| 0xE  | R7       | 32-bit | Yes        | General-purpose register #7 (Introduced with ISA V1.11, extended to 32-bit in V2.0). Aliased by `R7L` and `R7H`.                                                                                                                                                                     |
+| 0xF  | AM       | 16-bit | Yes        | Addressing Mode control register (Introduced with ISA V2.0). Defaults to `0x0000`. `0` = 16-bit word addressing, `1` = 8-bit byte addressing. Usable independently from `EM`, but combined with `EM=2` for modern hardware.                                                          |
+| 0x1A | MS       | 32-bit | Read-only  | Memory Size register (Introduced with ISA V2.1). Reports the installed RAM size in 1 KiB units (for example `0x00400000` for 4 GiB). Available when `EM != 0`; a full 32-bit read requires `EM=2`.                                                                                   |
 
 #### 16-Bit Sub-Registers (H / L Versions)
 
@@ -125,6 +129,22 @@ The low byte defines how the two operand words are interpreted:
 - `10` = Direct Memory Address
 - `11` = Indirect Memory Address
 
+### 32-bit jump operands (EM = 2)
+
+`JMP`, `JPZ`, `JNZ`, and the V1.5 conditional jumps (`JEQ`, `JNE`, `JLT`,
+`JGT`, `JLE`, `JGE`) normally carry a 16-bit target in one operand word. When
+`EM = 2` and the target lies above `0xFFFF`, the assembler emits the **wide
+jump** form instead:
+
+- The operand is encoded as a Direct Memory Address (`10`).
+- Two operand words follow the opcode: the low 16 bits first, then the high
+  16 bits. The instruction therefore occupies three words.
+- The processor combines the two words into a 32-bit target:
+  `(high << 16) | low`.
+
+A register operand remains a register-indirect jump (`JMP X` reaches the full
+32-bit value in `X`). In 16-bit modes the wide form is never emitted.
+
 ## Legacy Instructions
 
 **Note**: Set Active Register (SRA) instructions are considered legacy and cease working once you enable extended mode for machine and these Multiple Operand Instructions (MOIs) should be used instead:
@@ -201,7 +221,7 @@ MOI register operands support `X`, `Y`, and `STATUS` (source-only for status rea
 - `0000 0000` `0001 1010` - `STR` `SRC` `DST`
 - `0000 0000` `0001 1011` - `LOD` `SRC` `DST`
 
-In V2.0, `MOV` between two primary registers (`X`, `Y`, `R0`–`R7`, `SP`, `PC`, `CYC`) copies the full 32 bits. A move whose source is an immediate or an `H`/`L` sub-register remains 16 bits wide and zero-extends when the destination is a primary register; writing an `H`/`L` destination preserves the other half of the underlying register.
+In V2.0 and later, `MOV` between two primary registers (`X`, `Y`, `R0`–`R7`, `SP`, `PC`, `CYC`, plus `MS` from V2.1) copies the full 32 bits. A move whose source is an immediate or an `H`/`L` sub-register remains 16 bits wide and zero-extends when the destination is a primary register; writing an `H`/`L` destination preserves the other half of the underlying register. `MS` may be a source only.
 
 `LOD` and `STR` transfer one addressing unit: one 16-bit word when `AM=0`, or one 8-bit byte when `AM=1`. They do not transfer a full 32-bit register in one instruction.
 
@@ -344,20 +364,24 @@ Compilers that target extended mode are expected to emit this initialization at 
 
 Ports are not memory-mapped.
 
-- Each port is 16 bits wide
 - Port numbers are encoded as 16-bit immediate values in the range `0x0000` to `0xFFFF` (0 to 65,535)
+- Port transfer width follows `EM`: 16-bit in `EM=1`, 32-bit in `EM=2` when the register operand is a primary 32-bit register (`X`, `Y`, `SP`, `R0`–`R7`)
+- 16-bit sub-registers (for example `XL` or `R0L`) and the 16-bit control registers (`STATUS`, `EM`, `AM`) always use a 16-bit port transfer
 - Ports `0x0000` through `0x0007` map to default emulator devices; ports `0x0008` through `0xFFFF` are available for system expansion and user devices
 
 Port I/O and FoxOS process-control instructions use the following encodings:
 
-- `0000 0000` `0011 0000` - `IN`  `PORT DST` - Read the 16-bit value from port `PORT` into register `DST`
+- `0000 0000` `0011 0000` - `IN`  `PORT DST` - Read a value from port `PORT` into register `DST` (16-bit or 32-bit, per the rules above)
 - `0000 0000` `0011 0010` - `OSRET` - Return from a FoxOS foreground program to the resident OS at address `0`
-- `0000 0000` `0011 0001` - `OUT` `SRC PORT` - Write the 16-bit value from register `SRC` to port `PORT`
+- `0000 0000` `0011 0001` - `OUT` `SRC PORT` - Write a value from register `SRC` to port `PORT` (16-bit or 32-bit, per the rules above)
 
 `OSRET` is the only FoxOS-specific CPU opcode. A resident OS starts a
-foreground image with an ordinary absolute `JMP` to that image's load address;
-there is no separate `OSSTART` opcode. The FoxC `os_start(address)` built-in
-emits this `JMP`, while `os_return()` emits `OSRET`.
+foreground image with a jump to that image's load address; there is no
+separate `OSSTART` opcode. In `EM = 2` a target above `0xFFFF` uses either the
+wide jump form (two operand words, emitted automatically for labels by
+Fox16ASM) or a register-indirect jump (`JMP X`) with the address materialised
+in a 32-bit register. The FoxC `os_start(address)` built-in emits the
+appropriate form, while `os_return()` emits `OSRET`.
 
 ### Addressing Mode (AM) and 32-bit Architecture (V2.0)
 
@@ -379,13 +403,13 @@ ISA V2.0 introduces the **Addressing Mode (`AM`)** register and the **32-bit Add
 
 #### Addressing and Mode Matrix
 
-| Configuration    | Memory Address Bus | Addressing Granularity | Total Addressable Space | Usage                                    |
-| ---------------- | ------------------ | ---------------------- | ----------------------- | ---------------------------------------- |
-| `EM = 0, AM = 0` | 16-bit             | 16-bit word            | 64K words (128 KB)      | Legacy mode (V1.0)                       |
-| `EM = 1, AM = 0` | 16-bit             | 16-bit word            | 64K words (128 KB)      | Extended mode with port I/O (V1.10)      |
-| `EM = 1, AM = 1` | 16-bit             | 8-bit byte             | 64 KB bytes             | 16-bit byte-addressed mode               |
-| `EM = 2, AM = 0` | 32-bit             | 16-bit word            | $2^{32}$ words (8 GB)   | 32-bit word-addressed mode (FoxC V2)     |
-| `EM = 2, AM = 1` | 32-bit             | 8-bit byte             | $2^{32}$ bytes (4 GB)   | **Modern byte-addressed target**         |
+| Configuration    | Memory Address Bus | Addressing Granularity | Total Addressable Space | Usage                                |
+| ---------------- | ------------------ | ---------------------- | ----------------------- | ------------------------------------ |
+| `EM = 0, AM = 0` | 16-bit             | 16-bit word            | 64K words (128 KB)      | Legacy mode (V1.0)                   |
+| `EM = 1, AM = 0` | 16-bit             | 16-bit word            | 64K words (128 KB)      | Extended mode with port I/O (V1.10)  |
+| `EM = 1, AM = 1` | 16-bit             | 8-bit byte             | 64 KB bytes             | 16-bit byte-addressed mode           |
+| `EM = 2, AM = 0` | 32-bit             | 16-bit word            | $2^{32}$ words (8 GB)   | 32-bit word-addressed mode (FoxC V2) |
+| `EM = 2, AM = 1` | 32-bit             | 8-bit byte             | $2^{32}$ bytes (4 GB)   | **Modern byte-addressed target**     |
 
 Modern hand-written programs targeting a byte-addressed memory model should initialize both registers at startup:
 ```assembly
@@ -414,10 +438,35 @@ MOV %1 AM   ; Switch to 8-bit byte addressing
 MOV %0 AM   ; Return to 16-bit word addressing
 ```
 
+#### Memory Size Register (`MS`, introduced in ISA V2.1)
+
+- Register ID: `0x1A` (`MS`)
+- Introduced: ISA V2.1 (additive extension to V2.0)
+- Size: 32-bit
+- Access: read-only
+- Availability: extended modes only (`EM != 0`); the full 32-bit value is returned by a primary-register read in `EM=2`
+
+`MS` reports the amount of RAM installed in the emulated machine, expressed in **1 KiB units**:
+
+```text
+MS = MemorySizeBytes / 1024
+```
+
+For example, a 128 KiB machine reports `0x00000080`, and the default 4 GiB
+machine reports `0x00400000`. In `EM=1`, a read returns the low 16 bits only.
+
+```assembly
+MOV %2 EM       ; Enable 32-bit register/memory mode
+MOV MS R0       ; R0 = RAM size in KiB
+```
+
+Writing `MS` is illegal; the assembler rejects it as a destination and the CPU
+raises an illegal-destination error if such an instruction is executed.
+
 #### 32-bit Registers and High/Low Sub-Registers
 
 To allow flexible manipulation of 32-bit addresses and data within a 16-bit instruction format:
-- Core registers (`R0`–`R7`, `X`, `Y`, `PC`, `SP`, `CYC`) are 32 bits wide.
+- Core registers (`R0`–`R7`, `X`, `Y`, `PC`, `SP`, `CYC`) are 32 bits wide. ISA V2.1 adds the 32-bit read-only `MS` register.
 - For each register, a High (`H`) and Low (`L`) 16-bit sub-register is provided:
   - Base register (e.g. `R0`): full 32-bit value (`[31:0]`). Used to hold 32-bit memory pointers or 32-bit calculation values.
   - Low sub-register (e.g. `R0L`): lower 16 bits (`[15:0]`). Reading/writing affects only bits 15–0 while preserving bits 31–16 of the base register.
@@ -512,3 +561,9 @@ Writing `0x0002` to `EM` enables a full 32-bit address bus for memory:
   - **Stack Pointer**: `SP` acts as a 32-bit pointer to the top of the stack in memory.
 
 See [port_devices.md](port_devices.md) for port device specifications and port mappings.
+
+### Emulator Memory Size
+
+FoxVision provides up to 4 GB of RAM. The emulated memory size can be configured from 128 KB up to 4 GB using `--memory <size>` or the `FOXVISION_MEMORY_SIZE` environment variable. Accesses beyond the configured size read as zero and writes are ignored. When running with the GUI, the size can also be changed from **Settings → Memory size**.
+
+Guest software can read the configured size from the read-only `MS` register (in KiB units) in extended modes. FoxC exposes it as `get_memory_size()`.

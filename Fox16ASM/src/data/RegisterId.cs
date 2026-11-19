@@ -30,6 +30,10 @@ namespace Fox16ASM
         CYCL = 0x0018,
         CYCH = 0x0019,
 
+        // Read-only memory-size register, introduced in ISA V2.1. Reports
+        // installed RAM in 1 KiB units. Available when EM != 0.
+        MS = 0x001A,
+
         R0L = 0x0020,
         R0H = 0x0021,
         R1L = 0x0022,
@@ -81,6 +85,7 @@ namespace Fox16ASM
                 "SPH" => RegisterId.SPH,
                 "CYCL" => RegisterId.CYCL,
                 "CYCH" => RegisterId.CYCH,
+                "MS" => RegisterId.MS,
 
                 "R0L" => RegisterId.R0L,
                 "R0H" => RegisterId.R0H,
@@ -103,7 +108,7 @@ namespace Fox16ASM
 
             return symbol is "X" or "Y" or "PC" or "STATUS" or "SP" or "CYC" or "EM"
                 or "R0" or "R1" or "R2" or "R3" or "R4" or "R5" or "R6" or "R7" or "AM"
-                or "XL" or "XH" or "YL" or "YH" or "PCL" or "PCH" or "SPL" or "SPH" or "CYCL" or "CYCH"
+                or "XL" or "XH" or "YL" or "YH" or "PCL" or "PCH" or "SPL" or "SPH" or "CYCL" or "CYCH" or "MS"
                 or "R0L" or "R0H" or "R1L" or "R1H" or "R2L" or "R2H" or "R3L" or "R3H"
                 or "R4L" or "R4H" or "R5L" or "R5H" or "R6L" or "R6H" or "R7L" or "R7H";
         }
@@ -111,6 +116,7 @@ namespace Fox16ASM
         internal static bool IsSupportedRegisterId(ushort value)
             => (value >= (ushort)RegisterId.X && value <= (ushort)RegisterId.AM)
             || (value >= (ushort)RegisterId.XL && value <= (ushort)RegisterId.CYCH)
+            || value == (ushort)RegisterId.MS
             || (value >= (ushort)RegisterId.R0L && value <= (ushort)RegisterId.R7H);
     }
 }

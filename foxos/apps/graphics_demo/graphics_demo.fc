@@ -1,27 +1,33 @@
-// graphics_demo – FoxOS foreground application
-// Loaded at 0x4000, launched by foxsh via "run /bin/graphics"
+// graphics_demo – 32-bit FoxOS foreground application
+// Loaded in the FoxOS 32-bit program area (0x100000), launched by foxsh
+// via "run /bin/graphics".
 //
 // Cycles a 16-color palette across a 100×50 (5000 pixel) block of VRAM,
 // producing a smooth scrolling-gradient animation synced to vertical blank.
 //
-// VRAM is mapped at the top of the Fox16 address space (0xFFFF downwards).
+// VRAM is mapped at the top of the 16-bit word-address range (0xFFFF
+// downwards); FoxOS addresses memory in 32-bit words with AM=0.
+//
+// This demo only uses FoxC built-ins (poke/vblank), so it does not need
+// <foxos.fh>. Applications that use terminal, disk or FoxFS services should
+// include it.
 
-u16 VRAM_TOP = 65535;
-u16 PIXELS   = 5000;
-u16 phase    = 0;
+u32 VRAM_TOP = 65535;
+u32 PIXELS   = 5000;
+u32 phase    = 0;
 
 // Return a 4-bit palette index for pixel idx at animation phase p.
-u16 colorFor(u16 idx, u16 p)
+u32 colorFor(u32 idx, u32 p)
 {
-    u16 v = idx + p;
+    u32 v = idx + p;
     return v & 15;
 }
 
 // Paint a full frame into VRAM.
-void drawFrame(u16 p)
+void drawFrame(u32 p)
 {
-    u16 addr = VRAM_TOP;
-    u16 i    = 0;
+    u32 addr = VRAM_TOP;
+    u32 i    = 0;
     while (i < PIXELS)
     {
         poke(addr, colorFor(i, p));

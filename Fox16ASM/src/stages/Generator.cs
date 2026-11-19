@@ -15,12 +15,12 @@ class Generator
     private const int LegacyStrictFormatMaxPayloadWords = 4 * 1024;
     private const int ExtendedStrictFormatMaxPayloadWords = 32 * 1024;
 
-    private readonly record struct ResolvedOperand(ushort Value, IROperandKind Kind);
+    private readonly record struct ResolvedOperand(uint Value, IROperandKind Kind);
 
     public class GenerationOutput
     {
         public byte[] Bytes = Array.Empty<byte>();
-        public Dictionary<string, ushort> Labels = new();
+        public Dictionary<string, uint> Labels = new();
     }
 
     public static CompilationResult<GenerationOutput> Generate(
@@ -42,11 +42,13 @@ class Generator
         }
 
         var diagnostics = new List<Diagnostic>();
-        var labelTable = ResolveLabelAddresses(ir, sourceFile, debugFlags, diagnostics, loadAddress, is32BitLimit: effectiveMapper == 2 || effectiveVersion == 3 || mode == AssemblerMode.Extended2);
+        var is32BitLimit = effectiveMapper == 2 || effectiveVersion == 3 || mode == AssemblerMode.Extended2;
+        var wideJumps = DetermineWideJumps(ir, loadAddress, is32BitLimit);
+        var labelTable = ResolveLabelAddresses(ir, sourceFile, debugFlags, diagnostics, loadAddress, is32BitLimit, wideJumps);
         if (diagnostics.Any(d => d.Severity == DiagnosticSeverity.Error))
             return CompilationResult<GenerationOutput>.Failed(diagnostics);
 
-        var payloadWordCount = GetPayloadWordCount(ir);
+        var payloadWordCount = GetPayloadWordCount(ir, wideJumps);
         if (strictFormat)
         {
             var maximumPayloadWords = GetStrictFormatMaxPayloadWords(mode, effectiveMapper);
@@ -62,11 +64,12 @@ class Generator
         using var memory = new MemoryStream();
         using var writer = new EndianBinaryWriter(EndianBitConverter.Big, memory);
 
-        var resetVector = ResolveResetVectorAddress(ir, loadAddress);
+        var resetVector = ResolveResetVectorAddress(ir, loadAddress, wideJumps);
         WriteHeader(memory, mode, payloadWordCount, loadAddress, resetVector, effectiveVersion, effectiveMapper);
 
-        foreach (var item in ir.Items)
+        for (var itemIndex = 0; itemIndex < ir.Items.Count; itemIndex++)
         {
+            var item = ir.Items[itemIndex];
             if (item.Kind == IRProgramItemKind.Instruction)
             {
                 var instruction = item.Instruction;
@@ -93,16 +96,45 @@ class Generator
                 if (!ValidateInstructionOperands(instruction, resolvedOperands, mode, sourceFile, diagnostics))
                     continue;
 
-                var encodedOpcode = EncodeOpcode(instruction, opcodeValue, resolvedOperands);
+                var wideJump = wideJumps.Contains(itemIndex);
+
+                // A single operand word cannot hold an address above 0xFFFF.
+                // Jumps have the wide form; everything else must use @lo/@hi
+                // or an indirect register instead of silently truncating.
+                var operandTooLarge = false;
+                if (!wideJump)
+                {
+                    foreach (var resolvedOperand in resolvedOperands)
+                    {
+                        if (resolvedOperand.Kind != IROperandKind.Register &&
+                            resolvedOperand.Value > ushort.MaxValue)
+                        {
+                            diagnostics.Add(Diagnostic.Error(
+                                $"Operand value 0x{resolvedOperand.Value:X} does not fit in 16 bits; " +
+                                "use @lo(label)/@hi(label) for 32-bit addresses.",
+                                sourceFile,
+                                instruction.Line,
+                                instruction.Column,
+                                instruction.SourceLine));
+                            operandTooLarge = true;
+                        }
+                    }
+                }
+                if (operandTooLarge)
+                    continue;
+
+                var encodedOpcode = EncodeOpcode(instruction, opcodeValue, resolvedOperands, wideJump);
                 writer.Write(encodedOpcode);
                 if (debugFlags.ShowTokens)
                     Console.WriteLine($"OPCODE: {instruction.Opcode} => {encodedOpcode:X4}");
 
                 foreach (var operand in resolvedOperands)
                 {
-                    writer.Write(operand.Value);
+                    writer.Write((ushort)(operand.Value & 0xFFFF));
+                    if (wideJump)
+                        writer.Write((ushort)((operand.Value >> 16) & 0xFFFF));
                     if (debugFlags.ShowTokens)
-                        Console.WriteLine($"OPERAND: {operand.Value:X4}");
+                        Console.WriteLine($"OPERAND: {operand.Value:X8}");
                 }
             }
             else
@@ -112,9 +144,9 @@ class Generator
                 if (!TryResolveOperand(dataWord.Operand, labelTable, ir.Constants, sourceFile, contextInstruction, diagnostics, out var resolvedWord))
                     continue;
 
-                writer.Write(resolvedWord.Value);
+                writer.Write((ushort)(resolvedWord.Value & 0xFFFF));
                 if (debugFlags.ShowTokens)
-                    Console.WriteLine($"DATA: {resolvedWord.Value:X4}");
+                    Console.WriteLine($"DATA: {resolvedWord.Value:X8}");
             }
         }
 
@@ -128,22 +160,107 @@ class Generator
         Console.ForegroundColor = ConsoleColor.White;
         Console.WriteLine("Code generation complete!");
 
-        var outp = new GenerationOutput { Bytes = bytes, Labels = new Dictionary<string, ushort>(labelTable) };
+        var outp = new GenerationOutput { Bytes = bytes, Labels = new Dictionary<string, uint>(labelTable) };
         return new CompilationResult<GenerationOutput>(outp, diagnostics);
     }
 
-    private static int GetPayloadWordCount(AssemblerIR ir)
-        => ir.Items.Sum(item => item.WordCount) + 2;
+    private static int GetPayloadWordCount(AssemblerIR ir, HashSet<int> wideJumps)
+        => ir.Items.Select((item, index) => item.WordCount + (wideJumps.Contains(index) ? 1 : 0)).Sum() + 2;
 
-    private static uint ResolveResetVectorAddress(AssemblerIR ir, uint loadAddress)
+    private static Dictionary<string, uint> BuildLabelTable(AssemblerIR ir, uint loadAddress, HashSet<int> wideJumps)
+    {
+        var itemAddresses = new long[ir.Items.Count];
+        long cursor = loadAddress;
+        for (var i = 0; i < ir.Items.Count; i++)
+        {
+            itemAddresses[i] = cursor;
+            cursor += ir.Items[i].WordCount + (wideJumps.Contains(i) ? 1 : 0);
+        }
+
+        var labels = new Dictionary<string, uint>(StringComparer.OrdinalIgnoreCase);
+        var eofAddress = (uint)cursor;
+        foreach (var label in ir.Labels.OrderBy(l => l.Line))
+        {
+            var targetAddress = eofAddress;
+            for (var i = 0; i < ir.Items.Count; i++)
+            {
+                if (ir.Items[i].Line < label.Line)
+                    continue;
+
+                targetAddress = (uint)itemAddresses[i];
+                break;
+            }
+
+            labels.TryAdd(label.Name, targetAddress);
+        }
+
+        return labels;
+    }
+
+    private static HashSet<int> DetermineWideJumps(AssemblerIR ir, uint loadAddress, bool is32BitLimit)
+    {
+        var wideJumps = new HashSet<int>();
+        if (!is32BitLimit)
+            return wideJumps;
+
+        // A 32-bit jump carries its target in two operand words. Whether a jump
+        // needs that form depends on the target address, which itself depends
+        // on the size of earlier jumps. Mark jumps whose targets fall outside
+        // the 16-bit range and repeat until the layout is stable.
+        while (true)
+        {
+            var labels = BuildLabelTable(ir, loadAddress, wideJumps);
+            var changed = false;
+
+            for (var i = 0; i < ir.Items.Count; i++)
+            {
+                if (wideJumps.Contains(i))
+                    continue;
+
+                var item = ir.Items[i];
+                if (item.Kind != IRProgramItemKind.Instruction)
+                    continue;
+
+                var instruction = item.Instruction;
+                if (!IsJumpOpcode(instruction.Opcode) || instruction.Operands.Count != 1)
+                    continue;
+
+                var operand = instruction.Operands[0];
+                if (operand.Kind == IROperandKind.Register)
+                    continue;
+
+                var scratchDiagnostics = new List<Diagnostic>();
+                if (!TryResolveOperand(operand, labels, ir.Constants, string.Empty, instruction, scratchDiagnostics, out var resolved))
+                    continue;
+
+                if (resolved.Kind != IROperandKind.Register && resolved.Value > ushort.MaxValue)
+                {
+                    wideJumps.Add(i);
+                    changed = true;
+                }
+            }
+
+            if (!changed)
+                return wideJumps;
+        }
+    }
+
+    private static bool IsJumpOpcode(string opcode)
+        => opcode switch
+        {
+            "JMP" or "JPZ" or "JNZ" or "JEQ" or "JNE" or "JLT" or "JGT" or "JLE" or "JGE" => true,
+            _ => false,
+        };
+
+    private static uint ResolveResetVectorAddress(AssemblerIR ir, uint loadAddress, HashSet<int> wideJumps)
     {
         uint address = loadAddress;
-        foreach (var item in ir.Items)
+        for (var i = 0; i < ir.Items.Count; i++)
         {
-            if (item.SegmentKind == IRSegmentKind.Code)
+            if (ir.Items[i].SegmentKind == IRSegmentKind.Code)
                 return address;
 
-            address += (uint)item.WordCount;
+            address += (uint)(ir.Items[i].WordCount + (wideJumps.Contains(i) ? 1 : 0));
         }
 
         return 0;
@@ -185,12 +302,54 @@ class Generator
             }
         }
 
+        if (!ValidateReadOnlyRegisterDestinations(instruction, resolvedOperands, sourceFile, diagnostics))
+            return false;
+
         return instruction.Opcode switch
         {
             "IN" => ValidatePortTransfer(instruction, resolvedOperands, sourceFile, diagnostics, portOperandIndex: 0, registerOperandIndex: 1),
             "OUT" => ValidatePortTransfer(instruction, resolvedOperands, sourceFile, diagnostics, portOperandIndex: 1, registerOperandIndex: 0),
             _ => true,
         };
+    }
+
+    private static bool ValidateReadOnlyRegisterDestinations(
+        IRInstruction instruction,
+        IReadOnlyList<ResolvedOperand> resolvedOperands,
+        string sourceFile,
+        List<Diagnostic> diagnostics)
+    {
+        // Destination operand positions for the instructions that can write a
+        // register. MS is read-only, so it may appear as a source but never as
+        // a destination (including LOD, POP and IN).
+        int[] destinationIndices = instruction.Opcode switch
+        {
+            "MOV" or "ADD" or "SUB" or "MUL" or "DIV" or "AND2" or "OR"
+                or "XOR2" or "SHL" or "SHR" => new[] { 1 },
+            "LOD" or "POP" => new[] { 0 },
+            "IN" => new[] { 1 },
+            _ => Array.Empty<int>(),
+        };
+
+        foreach (int index in destinationIndices)
+        {
+            if (index >= resolvedOperands.Count)
+                continue;
+
+            var operand = resolvedOperands[index];
+            if (operand.Kind == IROperandKind.Register && operand.Value == (ushort)RegisterId.MS)
+            {
+                diagnostics.Add(Diagnostic.Error(
+                    "Register operand 'MS' is read-only.",
+                    sourceFile,
+                    instruction.Line,
+                    instruction.Column,
+                    instruction.SourceLine));
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private static bool ValidatePortTransfer(
@@ -238,22 +397,23 @@ class Generator
         return true;
     }
 
-    private static Dictionary<string, ushort> ResolveLabelAddresses(
+    private static Dictionary<string, uint> ResolveLabelAddresses(
         AssemblerIR ir,
         string sourceFile,
         DebugFlags debugFlags,
         List<Diagnostic> diagnostics,
         uint loadAddress,
-        bool is32BitLimit = false)
+        bool is32BitLimit,
+        HashSet<int> wideJumps)
     {
-        var labelsByName = new Dictionary<string, ushort>(StringComparer.OrdinalIgnoreCase);
+        var labelsByName = new Dictionary<string, uint>(StringComparer.OrdinalIgnoreCase);
         var itemAddresses = new long[ir.Items.Count];
         var eofAddress = (long)loadAddress;
 
         for (var i = 0; i < ir.Items.Count; i++)
         {
             itemAddresses[i] = eofAddress;
-            eofAddress += ir.Items[i].WordCount;
+            eofAddress += ir.Items[i].WordCount + (wideJumps.Contains(i) ? 1 : 0);
             if (!is32BitLimit && eofAddress > ushort.MaxValue)
             {
                 diagnostics.Add(Diagnostic.Error(
@@ -278,7 +438,7 @@ class Generator
                 break;
             }
 
-            if (!labelsByName.TryAdd(label.Name, (ushort)targetAddress))
+            if (!labelsByName.TryAdd(label.Name, (uint)targetAddress))
             {
                 diagnostics.Add(Diagnostic.Error(
                     $"Duplicate label declaration '{label.Name}'.",
@@ -290,7 +450,7 @@ class Generator
             }
 
             if (debugFlags.ShowLabels)
-                Console.WriteLine($"LABEL DECL: {label.Name} => {targetAddress:X4}");
+                Console.WriteLine($"LABEL DECL: {label.Name} => {targetAddress:X8}");
         }
 
         return labelsByName;
@@ -298,7 +458,7 @@ class Generator
 
     private static bool TryResolveOperand(
         IROperand operand,
-        Dictionary<string, ushort> labelTable,
+        Dictionary<string, uint> labelTable,
         IReadOnlyDictionary<string, IROperand> constants,
         string sourceFile,
         IRInstruction instruction,
@@ -318,6 +478,25 @@ class Generator
                 if (operand.Symbol is not null && labelTable.TryGetValue(operand.Symbol, out var labelAddress))
                 {
                     resolved = new ResolvedOperand(labelAddress, IROperandKind.Label);
+                    return true;
+                }
+
+                diagnostics.Add(Diagnostic.Error(
+                    $"Unresolved label '{operand.Symbol}'.",
+                    sourceFile,
+                    operand.Line,
+                    operand.Column,
+                    instruction.SourceLine));
+                resolved = default;
+                return false;
+            case IROperandKind.LabelLow:
+            case IROperandKind.LabelHigh:
+                if (operand.Symbol is not null && labelTable.TryGetValue(operand.Symbol, out var halfAddress))
+                {
+                    var halfValue = operand.Kind == IROperandKind.LabelLow
+                        ? halfAddress & 0xFFFF
+                        : (halfAddress >> 16) & 0xFFFF;
+                    resolved = new ResolvedOperand(halfValue, IROperandKind.Immediate);
                     return true;
                 }
 
@@ -391,7 +570,7 @@ class Generator
         }
     }
 
-    private static ushort EncodeOpcode(IRInstruction instruction, ushort opcodeValue, IReadOnlyList<ResolvedOperand> resolvedOperands)
+    private static ushort EncodeOpcode(IRInstruction instruction, ushort opcodeValue, IReadOnlyList<ResolvedOperand> resolvedOperands, bool wideJump)
     {
         if (opcodeValue > 0x00FF)
             return opcodeValue;
@@ -401,16 +580,22 @@ class Generator
         byte operandTwoType = 0;
 
         if (resolvedOperands.Count > 0)
-            operandOneType = ClassifyOperandType(instruction.Opcode, resolvedOperands[0], 0);
+            operandOneType = ClassifyOperandType(instruction.Opcode, resolvedOperands[0], 0, wideJump && resolvedOperands.Count == 1);
         if (resolvedOperands.Count > 1)
-            operandTwoType = ClassifyOperandType(instruction.Opcode, resolvedOperands[1], 1);
+            operandTwoType = ClassifyOperandType(instruction.Opcode, resolvedOperands[1], 1, false);
 
         var controlLowByte = (byte)((operandCount & 0b11) | ((operandOneType & 0b11) << 2) | ((operandTwoType & 0b11) << 4));
         return (ushort)((opcodeValue << 8) | controlLowByte);
     }
 
-    private static byte ClassifyOperandType(string opcode, ResolvedOperand operand, int operandIndex)
+    private static byte ClassifyOperandType(string opcode, ResolvedOperand operand, int operandIndex, bool wideJump)
     {
+        // A jump target above the 16-bit range is encoded as a two-word
+        // direct-memory operand: low word first, then high word. The
+        // direct-memory type marks the wide form for the processor.
+        if (wideJump && operand.Kind != IROperandKind.Register)
+            return OperandTypeDirectMemory;
+
         var isMemoryAddressOperand = IsMemoryAddressOperand(opcode, operandIndex);
 
         if (operand.Kind == IROperandKind.Register)
