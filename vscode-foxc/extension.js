@@ -14,19 +14,19 @@ const BUILTINS = [
 ];
 
 const BUILTIN_SIGNATURES = new Map([
-    ["poke",      { ret: "void", params: 2, detail: "poke(addr: u16, value: u16) -> void",   doc: "Write a 16-bit word to memory at `addr`." }],
-    ["peek",      { ret: "u16",  params: 1, detail: "peek(addr: u16) -> u16",                doc: "Read a 16-bit word from memory at `addr`." }],
-    ["wait",      { ret: "void", params: 1, detail: "wait(cycles: u16) -> void",             doc: "Block for the given number of CPU cycles." }],
-    ["cyc",       { ret: "u16",  params: 0, detail: "cyc() -> u16",                          doc: "Read the low 16 bits of the CPU cycle counter (`CYC` register)." }],
-    ["vblank",    { ret: "void", params: 0, detail: "vblank() -> void",                      doc: "Block until the next display VBlank (frame sync)." }],
-    ["in_port",   { ret: "u16",  params: 1, detail: "in_port(port: u16) -> u16",             doc: "Read a value from a hardware port. Requires extended or em2_am1 mode.\nPort range: 0–7 in extended mode; 0–65535 in em2_am1 mode." }],
-    ["out_port",  { ret: "void", params: 2, detail: "out_port(port: u16, value: u16) -> void", doc: "Write a value to a hardware port. Requires extended or em2_am1 mode.\nPort range: 0–7 in extended mode; 0–65535 in em2_am1 mode." }],
-    ["am",        { ret: "u16",  params: 0, detail: "am() -> u16",                           doc: "Read the AM (Addressing Mode) register. **em2_am1 mode only.**\nReturns 1 when byte addressing is active." }],
-    ["set_am",    { ret: "void", params: 1, detail: "set_am(value: u16) -> void",            doc: "Write the AM register. **em2_am1 mode only.**\n`set_am(1)` enables byte addressing; `set_am(0)` disables it." }],
-    ["em",        { ret: "u16",  params: 0, detail: "em() -> u16",                           doc: "Read the EM (Extension Mode) register. **em2_am1 mode only.**\nReturns 2 in V2.0 32-bit mode." }],
-    ["set_em",    { ret: "void", params: 1, detail: "set_em(value: u16) -> void",            doc: "Write the EM register. **em2_am1 mode only.**\n`set_em(2)` enables 32-bit address space." }],
-    ["os_start",  { ret: "void", params: 1, detail: "os_start(address: u16) -> void",        doc: "Start a FoxOS foreground program at the given address." }],
-    ["os_return", { ret: "void", params: 0, detail: "os_return() -> void",                   doc: "Return from a FoxOS foreground program to the resident OS (`OSRET`)." }],
+    ["poke", { ret: "void", params: 2, detail: "poke(addr: u16, value: u16) -> void", doc: "Write a 16-bit word to memory at `addr`." }],
+    ["peek", { ret: "u16", params: 1, detail: "peek(addr: u16) -> u16", doc: "Read a 16-bit word from memory at `addr`." }],
+    ["wait", { ret: "void", params: 1, detail: "wait(cycles: u16) -> void", doc: "Block for the given number of CPU cycles." }],
+    ["cyc", { ret: "u16", params: 0, detail: "cyc() -> u16", doc: "Read the low 16 bits of the CPU cycle counter (`CYC` register)." }],
+    ["vblank", { ret: "void", params: 0, detail: "vblank() -> void", doc: "Block until the next display VBlank (frame sync)." }],
+    ["in_port", { ret: "u16", params: 1, detail: "in_port(port: u16) -> u16", doc: "Read a value from a hardware port. Requires extended or em2_am1 mode.\nPort range: 0–7 in extended mode; 0–65535 in em2_am1 mode." }],
+    ["out_port", { ret: "void", params: 2, detail: "out_port(port: u16, value: u16) -> void", doc: "Write a value to a hardware port. Requires extended or em2_am1 mode.\nPort range: 0–7 in extended mode; 0–65535 in em2_am1 mode." }],
+    ["am", { ret: "u16", params: 0, detail: "am() -> u16", doc: "Read the AM (Addressing Mode) register. **em2_am1 mode only.**\nReturns 1 when byte addressing is active." }],
+    ["set_am", { ret: "void", params: 1, detail: "set_am(value: u16) -> void", doc: "Write the AM register. **em2_am1 mode only.**\n`set_am(1)` enables byte addressing; `set_am(0)` disables it." }],
+    ["em", { ret: "u16", params: 0, detail: "em() -> u16", doc: "Read the EM (Extension Mode) register. **em2_am1 mode only.**\nReturns 2 in V2.0 32-bit mode." }],
+    ["set_em", { ret: "void", params: 1, detail: "set_em(value: u16) -> void", doc: "Write the EM register. **em2_am1 mode only.**\n`set_em(2)` enables 32-bit address space." }],
+    ["os_start", { ret: "void", params: 1, detail: "os_start(address: u16) -> void", doc: "Start a FoxOS foreground program at the given address." }],
+    ["os_return", { ret: "void", params: 0, detail: "os_return() -> void", doc: "Return from a FoxOS foreground program to the resident OS (`OSRET`)." }],
 ]);
 
 function createCompletionItem(label, kind, detail, documentation, insertText) {
@@ -47,9 +47,9 @@ function createKeywordItems() {
 
 function createTypeItems() {
     const TYPE_DOCS = {
-        u8:   "8-bit unsigned integer. Packed two-per-word in arrays.",
-        u16:  "16-bit unsigned integer. Native word size.",
-        u32:  "32-bit unsigned integer. **Requires `--mode em2_am1`.** Occupies two 16-bit words in memory.",
+        u8: "8-bit unsigned integer. Packed two-per-word in arrays.",
+        u16: "16-bit unsigned integer. Native word size.",
+        u32: "32-bit unsigned integer. **Requires `--mode em2_am1`.** Occupies two 16-bit words in memory.",
         void: "No value. Used as function return type."
     };
     return TYPES.map((type) =>
@@ -1181,9 +1181,9 @@ function activate(context) {
 
                 // Type hover
                 const TYPE_HOVER = {
-                    u8:   "`u8` — 8-bit unsigned integer. Packed two-per-word in arrays.",
-                    u16:  "`u16` — 16-bit unsigned integer. Native word size.",
-                    u32:  "`u32` — 32-bit unsigned integer. **Requires `--mode em2_am1`.** Occupies two 16-bit words.",
+                    u8: "`u8` — 8-bit unsigned integer. Packed two-per-word in arrays.",
+                    u16: "`u16` — 16-bit unsigned integer. Native word size.",
+                    u32: "`u32` — 32-bit unsigned integer. **Requires `--mode em2_am1`.** Occupies two 16-bit words.",
                     void: "`void` — no value; used as function return type."
                 };
                 if (TYPE_HOVER[word]) {

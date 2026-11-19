@@ -14,11 +14,15 @@ const (
 	runtimeStackTop = 0x7800
 
 	// 32-bit (EM=2) builds move globals above the resident shell text (which
-	// ends just below $A000). The editor's 16K-word buffer still fits below
-	// the VRAM window at $EC78. The software stack starts above all globals
-	// at $E000, leaving room for frames without touching code or data.
+	// ends just below $A000). Large global arrays (such as the editor's text
+	// buffer) can grow past $E000, so the software stack is moved to the first
+	// free word after the globals rather than assuming a fixed base.
 	em2GlobalBaseAddr  = 0xA000
 	em2RuntimeStackTop = 0xE000
+
+	// Minimum space reserved for the software stack between the end of the
+	// globals and the VRAM window at $EC78.
+	minEm2StackWords = 0x400
 
 	// The emulator starts SP just below the 5000-word VRAM window. Startup
 	// re-seats it on every entry, including the OSRET restart path.
@@ -208,6 +212,23 @@ func generate(prog *Program, opts CompileOptions) (string, error) {
 	g.arrayTemp1, err = g.allocGlobal(Type{Base: TypeU16})
 	if err != nil {
 		return "", err
+	}
+
+	if g.em2Am1Mode {
+		// Globals grow upward from $A000 and can cross the default $E000 stack
+		// base. Start the software stack after the last global so frames never
+		// overwrite global arrays. Small images keep the original $E000 base.
+		if g.nextAddr > g.stackTop {
+			g.stackTop = g.nextAddr
+			if g.stackLimit < g.stackTop {
+				g.stackLimit = g.stackTop
+			}
+		}
+		if int(g.stackTop)+minEm2StackWords > int(globalLimitAddr) {
+			return "", fmt.Errorf(
+				"global storage leaves less than %d words for the stack (globals end at $%04X)",
+				minEm2StackWords, g.nextAddr)
+		}
 	}
 
 	if err := g.prepareFrames(); err != nil {
