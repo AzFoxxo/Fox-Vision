@@ -9,6 +9,7 @@
 
 #include <kernel/kernel.fc>
 #include <foxfs/foxfs.fc>
+#include <kernel/abi.fc>
 
 // ---------------------------------------------------------------------------
 // Read a line from the terminal into line[] / line_len
@@ -365,6 +366,7 @@ void shell_disp(u16 start, u16 end)
     u32 count     = 0;
     u32 i         = 0;
     u32 w         = 0;
+    u32 byte_mode = 0;
     u32 last_char = 10;
 
     while (start < end && line[start] == ' ') { start = start + 1; }
@@ -388,10 +390,14 @@ void shell_disp(u16 start, u16 end)
         tty_puts("that is a directory\r\n");
         return;
     }
-    if (fs_e_type != 1)
+    if (fs_e_type != FILE_PROGRAM)
     {
-        tty_puts("not found\r\n");
-        return;
+        if (fs_e_type != FILE_TEXT)
+        {
+            tty_puts("not found\r\n");
+            return;
+        }
+        byte_mode = 1;
     }
 
     count = fs_e_size;
@@ -399,16 +405,29 @@ void shell_disp(u16 start, u16 end)
     {
         return;
     }
-    if (count > FILE_CHUNK_WORDS)
+    if (byte_mode == 1)
     {
-        tty_puts("file too large\r\n");
-        return;
+        if (count > FILE_CHUNK_WORDS * 4)
+        {
+            tty_puts("file too large\r\n");
+            return;
+        }
+        disk_bytes_read_begin(fs_data_base(slot), count);
+    }
+    else
+    {
+        if (count > FILE_CHUNK_WORDS)
+        {
+            tty_puts("file too large\r\n");
+            return;
+        }
+        disk_read_begin(fs_data_base(slot), count);
     }
 
-    disk_read_begin(fs_data_base(slot), count);
     while (i < count)
     {
-        w = in_port32(6);
+        if (byte_mode == 1) { w = disk_bytes_read(); }
+        else                { w = in_port32(6); }
         if (w == 10)
         {
             tty_newline();
@@ -597,8 +616,22 @@ void dispatch()
 // main – kernel entry point, run on boot
 // ---------------------------------------------------------------------------
 
+// The ABI returns here after a foreground process exits. Entering through a
+// synthetic kernel frame means the shell gets a clean software stack, so the
+// abandoned frames from the previous dispatch are harmless.
+void shell_loop()
+{
+    while (1)
+    {
+        print_prompt();
+        read_line();
+        dispatch();
+    }
+}
+
 void main()
 {
+    abi_init();
     kernel_banner();
 
     if (fs_valid() == 0)
@@ -614,11 +647,6 @@ void main()
 
     shell_logo();
     shell_help();
-
-    while (1)
-    {
-        print_prompt();
-        read_line();
-        dispatch();
-    }
+    abi_set_shell((u32)&shell_loop);
+    shell_loop();
 }

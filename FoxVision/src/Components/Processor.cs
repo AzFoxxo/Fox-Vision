@@ -15,6 +15,25 @@ namespace FoxVision
         private ushort regAM;
         private ulong _totalCycleCount;
         private byte regStatus;
+
+        // ISA V2.2 trap and process-window state. The kernel programs these
+        // registers once; the processor uses them on every user-mode memory
+        // access and whenever a trap is delivered.
+        private uint regVEC;
+        private uint regKSP;
+        private uint regDB;
+        private uint regHB;
+        private uint regCB;
+        private uint regQUANT;
+        private bool regIRQEN;
+        private volatile bool _kernelMode;
+        private int _quitRequested;
+        // Pristine copy of the memory that overlaps VRAM. FoxOS graphics apps
+        // paint the top of the 16-bit word range, which includes the tail of
+        // the resident kernel/shell image; host quit restores it before the
+        // kernel resumes.
+        private readonly ushort[] _residentImageShadow = new ushort[VramSizeInWords];
+        private uint _lastIrqCycle;
         private bool _waitActive;
         private ushort _waitStartCycle;
         private ushort _waitDuration;
@@ -88,6 +107,15 @@ namespace FoxVision
         // ISA V2.1: read-only memory size in 1 KiB units.
         private const ushort RegisterIdMS = 0x001A;
 
+        // ISA V2.2 trap and process-window control registers.
+        private const ushort RegisterIdVEC = 0x001B;
+        private const ushort RegisterIdIRQEN = 0x001C;
+        private const ushort RegisterIdKSP = 0x001D;
+        private const ushort RegisterIdDB = 0x001E;
+        private const ushort RegisterIdHB = 0x001F;
+        private const ushort RegisterIdCB = 0x0030;
+        private const ushort RegisterIdQUANT = 0x0031;
+
         private const ushort RegisterIdR0L = 0x0020;
         private const ushort RegisterIdR0H = 0x0021;
         private const ushort RegisterIdR1L = 0x0022;
@@ -108,6 +136,26 @@ namespace FoxVision
         private const ushort VramSizeInWords = 5000;
         private const ushort StackStartAddress = (ushort)(ushort.MaxValue - VramSizeInWords);
 
+        // ISA V2.2 virtual address windows. DB relocates the data window in
+        // both modes: user tasks get a private base, while the resident kernel
+        // uses KernelDataBase so its globals live above its text. HB and CB
+        // are only consulted for user code.
+        private const uint KernelDataBase = 0x00043000;
+        private const uint UserDataStart = 0x0000A000;
+        private const uint UserDataEnd = 0x0000EC78;
+        private const uint UserCodeStart = 0x00100000;
+        private const uint UserCodeEnd = 0x00900000;
+        private const uint UserHeapStart = 0x20000000;
+        private const uint UserHeapEnd = 0x20400000;
+
+        // Trap frame written by SYS and the timer interrupt, read by the
+        // kernel. The frame lives in physical memory above the kernel image
+        // and below the user data window.
+        // Above the resident kernel's text/globals but below the user code
+        // window at $100000. Page 7 is allocated lazily on the first trap.
+        internal const uint TrapFrameAddress = 0x00070000;
+        internal const int TrapFrameWords = 40;
+
         private readonly Stopwatch timer;
         private readonly ContiguousMemory RAM;
         private PortDeviceKind[] _portDevices;
@@ -127,8 +175,10 @@ namespace FoxVision
         internal Processor(ContiguousMemory RAM, int executionSpeedHz, bool logInstruction, uint initialPC, PortDeviceKind[]? portDevices = null, ushort mapper = 0)
         {
             this.RAM = RAM;
+            SnapshotResidentImage();
             _resetPC = initialPC;
             _mapper = mapper;
+            _kernelMode = _resetPC < UserCodeStart;
 
             regX = 0;
             regY = 0;
@@ -148,6 +198,14 @@ namespace FoxVision
             }
             _totalCycleCount = 0;
             regStatus = 0;
+            regVEC = 0;
+            regKSP = 0;
+            regDB = _resetPC < UserCodeStart ? KernelDataBase : 0;
+            regHB = 0;
+            regCB = 0;
+            regQUANT = 0;
+            regIRQEN = false;
+            _lastIrqCycle = 0;
             _waitActive = false;
             _waitStartCycle = 0;
             _waitDuration = 0;
@@ -202,7 +260,31 @@ namespace FoxVision
 
             if (!_waitActive && !_vblankWaitActive)
             {
-                ushort[] data = new ushort[] { RAM.ReadWord(regPC), RAM.ReadWord(regPC + 1), RAM.ReadWord(regPC + 2) };
+                // A host keyboard shortcut can request termination of the
+                // foreground process. Deliver it as a trap so programs that
+                // never poll the guest TTY can still be stopped. Cause 2 is
+                // reserved for host-requested quit.
+                if (Interlocked.CompareExchange(ref _quitRequested, 0, 0) != 0)
+                {
+                    Interlocked.Exchange(ref _quitRequested, 0);
+                    if (!_kernelMode && regVEC != 0)
+                    {
+                        RestoreResidentImage();
+                        DeliverTrap(2, regPC);
+                    }
+                }
+
+                // Preemption: a user-mode interval timer delivers the same
+                // trap as SYS with cause=1. The kernel clears IRQEN on entry
+                // and re-arms it when it returns to a process.
+                if (!_kernelMode && regIRQEN && regQUANT != 0
+                    && unchecked(regCYC - _lastIrqCycle) >= regQUANT)
+                {
+                    DeliverTrap(1, regPC);
+                }
+
+                uint fetchPC = TranslateInstructionAddress(regPC);
+                ushort[] data = new ushort[] { RAM.ReadWord(fetchPC), RAM.ReadWord(fetchPC + 1), RAM.ReadWord(fetchPC + 2) };
 
                 _histPC[_histIndex] = regPC;
                 _histOp[_histIndex] = data[0];
@@ -257,6 +339,26 @@ namespace FoxVision
         internal void SignalVBlank()
             => Interlocked.Increment(ref _vblankSequence);
 
+        // The top 5000 words are VRAM. On FoxOS that range also holds the tail
+        // of the resident image, so graphics programs overwrite kernel and
+        // shell code while drawing. Keep the boot-time contents so Super+Q can
+        // repair the image before returning to FoxSH.
+        private void SnapshotResidentImage()
+        {
+            for (int i = 0; i < _residentImageShadow.Length; i++)
+            {
+                _residentImageShadow[i] = RAM.ReadWord((uint)(StackStartAddress + 1 + i));
+            }
+        }
+
+        private void RestoreResidentImage()
+        {
+            for (int i = 0; i < _residentImageShadow.Length; i++)
+            {
+                RAM.WriteWord((uint)(StackStartAddress + 1 + i), _residentImageShadow[i]);
+            }
+        }
+
         internal ulong GetCycleCount()
             => _totalCycleCount;
 
@@ -281,6 +383,17 @@ namespace FoxVision
                 Array.Clear(regR, 0, regR.Length);
             _totalCycleCount = 0;
             regStatus = 0;
+            regVEC = 0;
+            regKSP = 0;
+            regDB = _resetPC < UserCodeStart ? KernelDataBase : 0;
+            regHB = 0;
+            regCB = 0;
+            regQUANT = 0;
+            regIRQEN = false;
+            // A ROM linked below the user code window is resident kernel
+            // code; a foreground image booted at $100000 starts in user mode.
+            _kernelMode = _resetPC < UserCodeStart;
+            _lastIrqCycle = 0;
             _waitActive = false;
             _waitStartCycle = 0;
             _waitDuration = 0;
@@ -288,6 +401,7 @@ namespace FoxVision
             _vblankSequence = 0;
             _vblankWaitSequence = 0;
             _controllerState = 0;
+            Interlocked.Exchange(ref _quitRequested, 0);
             lock (_ttyLock)
             {
                 _ttyInputBuffer.Clear();
@@ -310,6 +424,20 @@ namespace FoxVision
             {
                 _keyboardReport = report;
             }
+        }
+
+        // Called by the host GUI when Super+Q is pressed. The request is only
+        // meaningful while a user-mode process owns the CPU; the shell and the
+        // resident kernel run in kernel mode and have no foreground app to quit.
+        internal bool RequestQuitForeground()
+        {
+            if (_kernelMode)
+            {
+                return false;
+            }
+
+            Interlocked.Exchange(ref _quitRequested, 1);
+            return true;
         }
 
         internal void SetMouseState(byte buttons, sbyte wheel, sbyte dx, sbyte dy)
@@ -970,6 +1098,33 @@ namespace FoxVision
                     regPC = 0;
                     return 2;
 
+                case 0x33:
+                    // SYS: enter the kernel through VEC. The instruction
+                    // consumes its opcode word and the unused operand word.
+                    LogInstructionExecuting("SYS", first_operand);
+                    if (_kernelMode)
+                    {
+                        Console.ForegroundColor = ConsoleColor.Red;
+                        Console.WriteLine("SYS executed in kernel mode.");
+                        Console.ResetColor();
+                        goto NOP;
+                    }
+                    DeliverTrap(0, unchecked(regPC + 1));
+                    return 1;
+
+                case 0x34:
+                    // SYSRET: resume the frame saved by SYS or the timer.
+                    LogInstructionExecuting("SYSRET", first_operand);
+                    if (!_kernelMode)
+                    {
+                        Console.ForegroundColor = ConsoleColor.Red;
+                        Console.WriteLine("SYSRET executed outside kernel mode.");
+                        Console.ResetColor();
+                        goto NOP;
+                    }
+                    RestoreTrap();
+                    return 0;
+
                 // Debug extension opcodes
                 case 0xC000:
                     if (IsExtendedModeEnabled)
@@ -1032,6 +1187,89 @@ namespace FoxVision
                 Program.DebugLogInstructionFromMemory(RAM, regPC);
         }
 
+        // -----------------------------------------------------------------
+        // ISA V2.2 trap frame
+        // -----------------------------------------------------------------
+
+        private void WriteTrapWord(int offset, ushort value)
+            => RAM.WriteWord(TrapFrameAddress + (uint)offset, value);
+
+        private ushort ReadTrapWord(int offset)
+            => RAM.ReadWord(TrapFrameAddress + (uint)offset);
+
+        private void WriteTrapDword(int offset, uint value)
+        {
+            WriteTrapWord(offset, (ushort)(value & 0xFFFF));
+            WriteTrapWord(offset + 1, (ushort)((value >> 16) & 0xFFFF));
+        }
+
+        private uint ReadTrapDword(int offset)
+            => (uint)ReadTrapWord(offset) | ((uint)ReadTrapWord(offset + 1) << 16);
+
+        // DeliverTrap saves the complete user-visible machine state, switches
+        // to the kernel stack and jumps to VEC. cause 0 = SYS, 1 = timer IRQ,
+        // 2 = host-requested foreground quit.
+        private void DeliverTrap(ushort cause, uint userPC)
+        {
+            WriteTrapWord(0, cause);
+            WriteTrapDword(1, userPC);
+            WriteTrapDword(3, regSP);
+            WriteTrapDword(5, regX);
+            WriteTrapDword(7, regY);
+            WriteTrapWord(9, regStatus);
+            for (int i = 0; i < 8; i++)
+                WriteTrapDword(10 + i * 2, regR[i]);
+            WriteTrapWord(26, (ushort)(regIRQEN ? 1 : 0));
+            WriteTrapDword(27, regDB);
+            WriteTrapDword(29, regHB);
+            WriteTrapDword(31, regCB);
+            WriteTrapWord(33, regAM);
+            WriteTrapWord(34, regEM);
+            WriteTrapDword(35, regQUANT);
+            WriteTrapWord(37, 0);
+
+            _kernelMode = true;
+            _lastIrqCycle = regCYC;
+            if (regKSP != 0)
+                regSP = regKSP;
+            // The trap saved the user DB in the frame; switch to the kernel
+            // data window so kernel globals and stacks are translated there.
+            regDB = KernelDataBase;
+            regPC = regVEC;
+            regIRQEN = false;
+        }
+
+        // RestoreTrap is the SYSRET path. It loads the frame the kernel left
+        // in memory and resumes the user program exactly where it stopped.
+        private void RestoreTrap()
+        {
+            uint userPC = ReadTrapDword(1);
+            regSP = ReadTrapDword(3);
+            regX = ReadTrapDword(5);
+            regY = ReadTrapDword(7);
+            regStatus = (byte)ReadTrapWord(9);
+            for (int i = 0; i < 8; i++)
+                regR[i] = ReadTrapDword(10 + i * 2);
+            regIRQEN = ReadTrapWord(26) != 0;
+            regHB = ReadTrapDword(29);
+            regCB = ReadTrapDword(31);
+            regAM = ReadTrapWord(33);
+            regEM = ReadTrapWord(34);
+            regQUANT = ReadTrapDword(35);
+            regPC = userPC;
+            // Privilege follows the return address: user code lives in the
+            // foreground window, while the resident kernel/shell stays below
+            // it. This lets kernel code enter a user task with a synthetic
+            // frame and still return to the shell later through the same
+            // frame mechanism.
+            _kernelMode = userPC < UserCodeStart;
+            // Synthetic kernel frames have no DB; always use the kernel data
+            // window when returning to resident code. User frames carry their
+            // own DB in the trap frame.
+            regDB = _kernelMode ? KernelDataBase : ReadTrapDword(27);
+            _lastIrqCycle = regCYC;
+        }
+
         private void ChangeActiveRegister(ushort regID)
             => SetActiveRegister(regID != 0);
 
@@ -1072,10 +1310,36 @@ namespace FoxVision
         private bool IsByteAddressingEnabled
             => regAM == 1;
 
+        private uint TranslateInstructionAddress(uint address)
+        {
+            if (!_kernelMode && regCB != 0 && address >= UserCodeStart && address < UserCodeEnd)
+                return regCB + (address - UserCodeStart);
+            return address;
+        }
+
+        private uint TranslateDataAddress(uint address)
+        {
+            // DB applies to the data window in both modes. The kernel sets it
+            // to KernelDataBase so its globals and software stack live above
+            // the resident text; user tasks carry a private base in their
+            // trap frame.
+            if (regDB != 0 && address >= UserDataStart && address < UserDataEnd)
+                return regDB + (address - UserDataStart);
+            if (_kernelMode)
+                return address;
+            if (regHB != 0 && address >= UserHeapStart && address < UserHeapEnd)
+                return regHB + (address - UserHeapStart);
+            if (regCB != 0 && address >= UserCodeStart && address < UserCodeEnd)
+                return regCB + (address - UserCodeStart);
+            return address;
+        }
+
         private ushort ReadMemory(uint address)
         {
             if (!Is32BitMemoryEnabled)
                 address &= 0xFFFF;
+
+            address = TranslateDataAddress(address);
 
             if (IsByteAddressingEnabled)
             {
@@ -1091,6 +1355,8 @@ namespace FoxVision
         {
             if (!Is32BitMemoryEnabled)
                 address &= 0xFFFF;
+
+            address = TranslateDataAddress(address);
 
             if (IsByteAddressingEnabled)
             {
@@ -1116,6 +1382,7 @@ namespace FoxVision
                     uint address = regSP - (uint)(units - 1 - i);
                     if (!Is32BitMemoryEnabled)
                         address &= 0xFFFF;
+                    address = TranslateDataAddress(address);
                     RAM.WriteByte(address, (byte)(value >> (8 * i)));
                 }
             }
@@ -1126,6 +1393,7 @@ namespace FoxVision
                     uint address = regSP - (uint)(units - 1 - i);
                     if (!Is32BitMemoryEnabled)
                         address &= 0xFFFF;
+                    address = TranslateDataAddress(address);
                     RAM.WriteWord(address, (ushort)(value >> (16 * i)));
                 }
             }
@@ -1146,6 +1414,7 @@ namespace FoxVision
                 uint unitAddress = regSP - (uint)(units - 1 - i);
                 if (!Is32BitMemoryEnabled)
                     unitAddress &= 0xFFFF;
+                unitAddress = TranslateDataAddress(unitAddress);
                 uint unit = IsByteAddressingEnabled
                     ? RAM.ReadByte(unitAddress)
                     : RAM.ReadWord(unitAddress);
@@ -1230,11 +1499,21 @@ namespace FoxVision
             => (operand >= RegisterIdR0 && operand <= RegisterIdAM)
             || (operand >= RegisterIdXL && operand <= RegisterIdCYCH)
             || operand == RegisterIdMS
+            || operand == RegisterIdVEC
+            || operand == RegisterIdIRQEN
+            || operand == RegisterIdKSP
+            || operand == RegisterIdDB
+            || operand == RegisterIdHB
+            || operand == RegisterIdCB
+            || operand == RegisterIdQUANT
             || (operand >= RegisterIdR0L && operand <= RegisterIdR7H);
 
         private static bool IsPrimary32BitRegister(ushort operand)
             => operand == RegisterIdX || operand == RegisterIdY || operand == RegisterIdPC
             || operand == RegisterIdSP || operand == RegisterIdCYC || operand == RegisterIdMS
+            || operand == RegisterIdVEC || operand == RegisterIdIRQEN || operand == RegisterIdKSP
+            || operand == RegisterIdDB || operand == RegisterIdHB || operand == RegisterIdCB
+            || operand == RegisterIdQUANT
             || (operand >= RegisterIdR0 && operand <= RegisterIdR7);
 
         private bool TryRead32BitRegister(ushort operand, out uint value)
@@ -1259,6 +1538,13 @@ namespace FoxVision
                 case RegisterIdR7: value = regR[7]; return true;
                 case RegisterIdEM: value = regEM; return true;
                 case RegisterIdAM: value = regAM; return true;
+                case RegisterIdVEC: value = regVEC; return true;
+                case RegisterIdIRQEN: value = (uint)(regIRQEN ? 1 : 0); return true;
+                case RegisterIdKSP: value = regKSP; return true;
+                case RegisterIdDB: value = regDB; return true;
+                case RegisterIdHB: value = regHB; return true;
+                case RegisterIdCB: value = regCB; return true;
+                case RegisterIdQUANT: value = regQUANT; return true;
 
                 case RegisterIdXL: value = regX & 0xFFFF; return true;
                 case RegisterIdXH: value = (regX >> 16) & 0xFFFF; return true;
@@ -1295,6 +1581,9 @@ namespace FoxVision
 
         private static bool Supports32BitRegisterWrite(ushort operand)
             => operand == RegisterIdX || operand == RegisterIdY || operand == RegisterIdSP
+            || operand == RegisterIdVEC || operand == RegisterIdIRQEN || operand == RegisterIdKSP
+            || operand == RegisterIdDB || operand == RegisterIdHB || operand == RegisterIdCB
+            || operand == RegisterIdQUANT
             || (operand >= RegisterIdR0 && operand <= RegisterIdR7);
 
         private bool TryWrite32BitRegister(ushort operand, uint value)
@@ -1315,6 +1604,17 @@ namespace FoxVision
                 case RegisterIdR5: regR[5] = value; return true;
                 case RegisterIdR6: regR[6] = value; return true;
                 case RegisterIdR7: regR[7] = value; return true;
+                case RegisterIdVEC: regVEC = value; return true;
+                case RegisterIdIRQEN:
+                    regIRQEN = value != 0;
+                    if (regIRQEN)
+                        _lastIrqCycle = regCYC;
+                    return true;
+                case RegisterIdKSP: regKSP = value; return true;
+                case RegisterIdDB: regDB = value; return true;
+                case RegisterIdHB: regHB = value; return true;
+                case RegisterIdCB: regCB = value; return true;
+                case RegisterIdQUANT: regQUANT = value; return true;
                 default:
                     return false;
             }
@@ -1339,6 +1639,13 @@ namespace FoxVision
                 RegisterIdCYC => SetOutValue((ushort)(regCYC & 0xFFFF), out value),
                 RegisterIdEM => SetOutValue(regEM, out value),
                 RegisterIdAM => SetOutValue(regAM, out value),
+                RegisterIdVEC => SetOutValue((ushort)(regVEC & 0xFFFF), out value),
+                RegisterIdIRQEN => SetOutValue((ushort)(regIRQEN ? 1 : 0), out value),
+                RegisterIdKSP => SetOutValue((ushort)(regKSP & 0xFFFF), out value),
+                RegisterIdDB => SetOutValue((ushort)(regDB & 0xFFFF), out value),
+                RegisterIdHB => SetOutValue((ushort)(regHB & 0xFFFF), out value),
+                RegisterIdCB => SetOutValue((ushort)(regCB & 0xFFFF), out value),
+                RegisterIdQUANT => SetOutValue((ushort)(regQUANT & 0xFFFF), out value),
 
                 RegisterIdR0 => SetOutValue((ushort)(regR[0] & 0xFFFF), out value),
                 RegisterIdR1 => SetOutValue((ushort)(regR[1] & 0xFFFF), out value),
@@ -1397,6 +1704,17 @@ namespace FoxVision
                 case RegisterIdStatus when allowStatus: regStatus = (byte)value; return true;
                 case RegisterIdEM: regEM = NormalizeExtensionMode(value); return true;
                 case RegisterIdAM: regAM = (ushort)(value != 0 ? 1 : 0); return true;
+                case RegisterIdVEC: regVEC = value; return true;
+                case RegisterIdIRQEN:
+                    regIRQEN = value != 0;
+                    if (regIRQEN)
+                        _lastIrqCycle = regCYC;
+                    return true;
+                case RegisterIdKSP: regKSP = value; return true;
+                case RegisterIdDB: regDB = value; return true;
+                case RegisterIdHB: regHB = value; return true;
+                case RegisterIdCB: regCB = value; return true;
+                case RegisterIdQUANT: regQUANT = value; return true;
 
                 case RegisterIdR0: regR[0] = value; return true;
                 case RegisterIdR1: regR[1] = value; return true;

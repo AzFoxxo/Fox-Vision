@@ -87,18 +87,29 @@ u16 bf_load_file(u32 slot)
     u32 count = 0;
     u32 i = 0;
     u32 w = 0;
+    u32 byte_mode = 0;
     u16 ch = 0;
 
     fs_read_entry(slot);
     count = fs_e_size;
     if (count == 0) { return 0; }
-    if (count > FILE_CHUNK_WORDS) { return 0; }
+    byte_mode = fs_e_type == FILE_TEXT;
+    if (byte_mode == 1)
+    {
+        if (count > FILE_CHUNK_WORDS * 4) { return 0; }
+        disk_bytes_read_begin(fs_data_base(slot), count);
+    }
+    else
+    {
+        if (count > FILE_CHUNK_WORDS) { return 0; }
+        disk_read_begin(fs_data_base(slot), count);
+    }
 
     code_len = 0;
-    disk_read_begin(fs_data_base(slot), count);
     while (i < count)
     {
-        w = in_port32(6);
+        if (byte_mode == 1) { w = disk_bytes_read(); }
+        else                { w = in_port32(6); }
         i = i + 1;
 
         if (w == 10 || (w >= 32 && w <= 126))
@@ -215,11 +226,14 @@ void main()
             return;
         }
         fs_read_entry(slot);
-        if (fs_e_type != 1)
+        if (fs_e_type != FILE_PROGRAM)
         {
-            tty_puts("Not a file.\r\n");
-            os_return();
-            return;
+            if (fs_e_type != FILE_TEXT)
+            {
+                tty_puts("Not a file.\r\n");
+                os_return();
+                return;
+            }
         }
 
         if (bf_load_file(slot) == 0)

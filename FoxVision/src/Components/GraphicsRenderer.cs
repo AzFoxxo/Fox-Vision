@@ -64,6 +64,7 @@ namespace FoxVision.Components
         private readonly Func<EmulatorOptions, bool> _setPortConfigurationRequested;
         private readonly Func<byte, bool> _setControllerStateRequested;
         private readonly Func<ushort, bool> _setKeyboardStateRequested;
+        private readonly Func<bool> _requestQuitRequested;
         private readonly Func<byte, sbyte, sbyte, sbyte, bool> _setMouseStateRequested;
         private readonly Func<ulong> _getProcessorCycleCountRequested;
         private readonly System.Action _signalVBlankRequested;
@@ -93,6 +94,8 @@ namespace FoxVision.Components
         private readonly HashSet<uint> _pressedNonModifierKeys = new();
         private uint _lastNonModifierKey = 0;
         private byte _modifierMask = 0;
+        private bool _superHeld = false;
+        private bool _superQuitIssued = false;
         private byte _mouseButtonsState = 0;
         private sbyte _mouseWheelState = 0;
         private sbyte _mouseDxState = 0;
@@ -145,6 +148,7 @@ namespace FoxVision.Components
             Func<EmulatorOptions, bool> setPortConfigurationRequested,
             Func<byte, bool> setControllerStateRequested,
             Func<ushort, bool> setKeyboardStateRequested,
+            Func<bool> requestQuitRequested,
             Func<byte, sbyte, sbyte, sbyte, bool> setMouseStateRequested,
             Func<ulong> getProcessorCycleCountRequested,
             System.Action signalVBlankRequested,
@@ -168,6 +172,7 @@ namespace FoxVision.Components
             _setPortConfigurationRequested = setPortConfigurationRequested;
             _setControllerStateRequested = setControllerStateRequested;
             _setKeyboardStateRequested = setKeyboardStateRequested;
+            _requestQuitRequested = requestQuitRequested;
             _setMouseStateRequested = setMouseStateRequested;
             _getProcessorCycleCountRequested = getProcessorCycleCountRequested;
             _signalVBlankRequested = signalVBlankRequested;
@@ -202,9 +207,10 @@ namespace FoxVision.Components
                 Resizable = false
             };
             _window.DeleteEvent += (_, _) => Gtk.Application.Quit();
-            _window.AddEvents((int)(Gdk.EventMask.KeyPressMask | Gdk.EventMask.KeyReleaseMask | Gdk.EventMask.ButtonPressMask));
+            _window.AddEvents((int)(Gdk.EventMask.KeyPressMask | Gdk.EventMask.KeyReleaseMask | Gdk.EventMask.ButtonPressMask | Gdk.EventMask.FocusChangeMask));
             _window.KeyPressEvent += OnKeyPressEvent;
             _window.KeyReleaseEvent += OnKeyReleaseEvent;
+            _window.FocusOutEvent += (_, _) => ResetHostKeyboardState();
 
             var headerBar = new HeaderBar
             {
@@ -394,11 +400,12 @@ namespace FoxVision.Components
                 Vexpand = true
             };
             _drawingArea.CanFocus = true;
-            _drawingArea.AddEvents((int)(Gdk.EventMask.KeyPressMask | Gdk.EventMask.KeyReleaseMask | Gdk.EventMask.ButtonPressMask | Gdk.EventMask.ButtonReleaseMask | Gdk.EventMask.PointerMotionMask | Gdk.EventMask.ScrollMask));
+            _drawingArea.AddEvents((int)(Gdk.EventMask.KeyPressMask | Gdk.EventMask.KeyReleaseMask | Gdk.EventMask.ButtonPressMask | Gdk.EventMask.ButtonReleaseMask | Gdk.EventMask.PointerMotionMask | Gdk.EventMask.ScrollMask | Gdk.EventMask.FocusChangeMask));
             _drawingArea.SetSizeRequest(Width * _windowScale, Height * _windowScale);
             _drawingArea.Drawn += OnDrawn;
             _drawingArea.KeyPressEvent += OnKeyPressEvent;
             _drawingArea.KeyReleaseEvent += OnKeyReleaseEvent;
+            _drawingArea.FocusOutEvent += (_, _) => ResetHostKeyboardState();
             _drawingArea.ButtonPressEvent += OnPointerButtonPressEvent;
             _drawingArea.ButtonReleaseEvent += OnPointerButtonReleaseEvent;
             _drawingArea.MotionNotifyEvent += OnPointerMotionEvent;
@@ -900,6 +907,24 @@ namespace FoxVision.Components
         {
             uint keyVal = args.Event.KeyValue;
 
+            if (IsSuperKey(keyVal))
+            {
+                _superHeld = true;
+                _superQuitIssued = false;
+            }
+            else if (IsQuitKey(keyVal) && _superHeld && !_superQuitIssued)
+            {
+                // Consume the chord so 'q' is never forwarded to the guest.
+                _superQuitIssued = true;
+                args.RetVal = true;
+                try
+                {
+                    _requestQuitRequested();
+                }
+                catch { }
+                return;
+            }
+
             // First try controller mapping
             if (TryMapKeyToControllerMask(keyVal, out var buttonMask))
             {
@@ -907,18 +932,19 @@ namespace FoxVision.Components
                 return;
             }
 
-            // Map to keyboard HID usage
-            byte usage = MapGdkKeyToHidUsage(keyVal);
-            if (usage == 0)
-                return;
-
-            // Update modifier mask if this is a modifier key
+            // Modifiers have no HID usage, but they must still update the
+            // high byte of the keyboard report.
             if (IsModifierKey(keyVal, out byte modBit))
             {
                 _modifierMask |= modBit;
             }
             else
             {
+                // Map to keyboard HID usage
+                byte usage = MapGdkKeyToHidUsage(keyVal);
+                if (usage == 0)
+                    return;
+
                 _pressedNonModifierKeys.Add(keyVal);
                 _lastNonModifierKey = keyVal;
             }
@@ -929,6 +955,12 @@ namespace FoxVision.Components
         private void OnKeyReleaseEvent(object? sender, KeyReleaseEventArgs args)
         {
             uint keyVal = args.Event.KeyValue;
+
+            if (IsSuperKey(keyVal))
+            {
+                _superHeld = false;
+                _superQuitIssued = false;
+            }
 
             if (TryMapKeyToControllerMask(keyVal, out _))
             {
@@ -951,6 +983,26 @@ namespace FoxVision.Components
             }
 
             RecomputeAndSendKeyboardReport();
+        }
+
+        private static bool IsSuperKey(uint keyVal)
+            => keyVal == (uint)Gdk.Key.Super_L || keyVal == (uint)Gdk.Key.Super_R;
+
+        private static bool IsQuitKey(uint keyVal)
+            => NormalizeKeyValue(keyVal) == (uint)Gdk.Key.q;
+
+        private void ResetHostKeyboardState()
+        {
+            _modifierMask = 0;
+            _pressedNonModifierKeys.Clear();
+            _lastNonModifierKey = 0;
+            _superHeld = false;
+            _superQuitIssued = false;
+            try
+            {
+                _setKeyboardStateRequested(0);
+            }
+            catch { }
         }
 
         private bool IsModifierKey(uint keyVal, out byte modBit)

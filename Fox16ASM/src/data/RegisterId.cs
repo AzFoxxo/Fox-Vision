@@ -34,6 +34,15 @@ namespace Fox16ASM
         // installed RAM in 1 KiB units. Available when EM != 0.
         MS = 0x001A,
 
+        // ISA V2.2 trap and process-window registers.
+        VEC = 0x001B,
+        IRQEN = 0x001C,
+        KSP = 0x001D,
+        DB = 0x001E,
+        HB = 0x001F,
+        CB = 0x0030,
+        QUANT = 0x0031,
+
         R0L = 0x0020,
         R0H = 0x0021,
         R1L = 0x0022,
@@ -86,6 +95,13 @@ namespace Fox16ASM
                 "CYCL" => RegisterId.CYCL,
                 "CYCH" => RegisterId.CYCH,
                 "MS" => RegisterId.MS,
+                "VEC" => RegisterId.VEC,
+                "IRQEN" => RegisterId.IRQEN,
+                "KSP" => RegisterId.KSP,
+                "DB" => RegisterId.DB,
+                "HB" => RegisterId.HB,
+                "CB" => RegisterId.CB,
+                "QUANT" => RegisterId.QUANT,
 
                 "R0L" => RegisterId.R0L,
                 "R0H" => RegisterId.R0H,
@@ -109,6 +125,7 @@ namespace Fox16ASM
             return symbol is "X" or "Y" or "PC" or "STATUS" or "SP" or "CYC" or "EM"
                 or "R0" or "R1" or "R2" or "R3" or "R4" or "R5" or "R6" or "R7" or "AM"
                 or "XL" or "XH" or "YL" or "YH" or "PCL" or "PCH" or "SPL" or "SPH" or "CYCL" or "CYCH" or "MS"
+                or "VEC" or "IRQEN" or "KSP" or "DB" or "HB" or "CB" or "QUANT"
                 or "R0L" or "R0H" or "R1L" or "R1H" or "R2L" or "R2H" or "R3L" or "R3H"
                 or "R4L" or "R4H" or "R5L" or "R5H" or "R6L" or "R6H" or "R7L" or "R7H";
         }
@@ -117,6 +134,9 @@ namespace Fox16ASM
             => (value >= (ushort)RegisterId.X && value <= (ushort)RegisterId.AM)
             || (value >= (ushort)RegisterId.XL && value <= (ushort)RegisterId.CYCH)
             || value == (ushort)RegisterId.MS
+            || (value >= (ushort)RegisterId.VEC && value <= (ushort)RegisterId.HB)
+            || value == (ushort)RegisterId.CB
+            || value == (ushort)RegisterId.QUANT
             || (value >= (ushort)RegisterId.R0L && value <= (ushort)RegisterId.R7H);
     }
 }

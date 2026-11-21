@@ -11,6 +11,10 @@ import (
 type CompileOptions struct {
 	Mode        string
 	LoadAddress uint32
+	// GlobalBase overrides the word address where globals are allocated.
+	// Resident images whose text grows beyond the default $A000 need a
+	// higher base so code and globals do not overlap.
+	GlobalBase uint32
 	// SourcePath is the path of src, used to resolve relative includes.
 	SourcePath string
 	// IncludeDirs are searched for #include directives.

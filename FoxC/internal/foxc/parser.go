@@ -534,6 +534,33 @@ func (p *parser) parseMul() (Expr, error) {
 }
 
 func (p *parser) parseUnary() (Expr, error) {
+	// Cast expression: (type) unary. Look ahead so parenthesised expressions
+	// are unaffected.
+	if p.at(tokLParen) && p.peek(1).kind == tokType {
+		save := p.pos
+		p.next()
+		baseTok := p.next()
+		ptr := 0
+		for p.at(tokStar) {
+			p.next()
+			ptr++
+		}
+		if p.at(tokRParen) {
+			p.next()
+			base, ok := typeKindFromName(baseTok.text)
+			if !ok {
+				p.pos = save
+			} else {
+				x, err := p.parseUnary()
+				if err != nil {
+					return nil, err
+				}
+				return &CastExpr{Type: Type{Base: base, Ptr: ptr}, X: x}, nil
+			}
+		} else {
+			p.pos = save
+		}
+	}
 	if p.at(tokMinus) {
 		p.next()
 		x, err := p.parseUnary()
@@ -637,6 +664,21 @@ func (p *parser) parsePrimary() (Expr, error) {
 	}
 	curr := p.curr()
 	return nil, fmt.Errorf("unexpected token %q at %d:%d", curr.text, curr.line, curr.col)
+}
+
+func typeKindFromName(name string) (TypeKind, bool) {
+	switch name {
+	case "u8":
+		return TypeU8, true
+	case "u16":
+		return TypeU16, true
+	case "u32":
+		return TypeU32, true
+	case "void":
+		return TypeVoid, true
+	default:
+		return TypeInvalid, false
+	}
 }
 
 func (p *parser) parseType() (TypeKind, error) {

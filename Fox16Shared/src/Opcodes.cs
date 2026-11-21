@@ -72,6 +72,9 @@ namespace Fox16Shared
             {"OUT", 49},
             // FoxOS process control
             {"OSRET", 50},
+            // ISA V2.2 trap entry and return
+            {"SYS", 51},
+            {"SYSRET", 52},
             // Debug extension opcodes
             {"DBG_LGC", DEBUG_EXTENSION_OFFSET},
             {"DBG_MEM", DEBUG_EXTENSION_OFFSET + 1},

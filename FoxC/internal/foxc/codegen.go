@@ -104,6 +104,7 @@ type gen struct {
 	frameBaseSlot storage
 	arrayTemp0    storage
 	arrayTemp1    storage
+	errnoSlot     storage
 
 	currentFrame *funcFrame
 	inlineDepth  map[string]int
@@ -121,10 +122,9 @@ type gen struct {
 	enableStackChecks bool
 	stackLimit        uint16
 
-	// widePointers selects two-word pointer storage. It is only needed when
-	// the image is linked above the 16-bit word window, as foreground
-	// programs are; keeping low images on one-word pointers avoids inflating
-	// the resident shell past the globals base.
+	// widePointers selects two-word pointer storage. EM=2 images can place
+	// code and string literals above the 16-bit word window, including the
+	// resident OS image once the kernel and shell grow past $FFFF.
 	widePointers bool
 
 	// Memory layout for this target. 32-bit images get a higher stack and
@@ -138,6 +138,9 @@ func generate(prog *Program, opts CompileOptions) (string, error) {
 	if isEm2Am1Mode(opts.Mode) {
 		globalBase = em2GlobalBaseAddr
 		stackTop = em2RuntimeStackTop
+		if opts.GlobalBase != 0 {
+			globalBase = uint16(opts.GlobalBase)
+		}
 	}
 	g := &gen{
 		prog:         prog,
@@ -145,7 +148,7 @@ func generate(prog *Program, opts CompileOptions) (string, error) {
 		em2Am1Mode:   isEm2Am1Mode(opts.Mode),
 		nextAddr:     globalBase,
 		stackTop:     uint16(stackTop),
-		widePointers: isEm2Am1Mode(opts.Mode) && opts.LoadAddress > 0xFFFF,
+		widePointers: isEm2Am1Mode(opts.Mode),
 		globals:      map[string]storage{},
 		funcs:        map[string]*FuncDecl{},
 		frames:       map[string]*funcFrame{},
@@ -210,6 +213,10 @@ func generate(prog *Program, opts CompileOptions) (string, error) {
 		return "", err
 	}
 	g.arrayTemp1, err = g.allocGlobal(Type{Base: TypeU16})
+	if err != nil {
+		return "", err
+	}
+	g.errnoSlot, err = g.allocGlobal(Type{Base: TypeU16})
 	if err != nil {
 		return "", err
 	}
@@ -348,7 +355,10 @@ func (g *gen) configureRegisters() {
 		return
 	}
 
-	all := []string{"R0", "R1", "R2", "R3", "R4", "R5", "R6", "R7"}
+	// R7 is reserved as the scratch register that carries the X result across
+	// syscall register save/restore. The syscall ABI never writes R7, so
+	// excluding it from the allocator keeps results from being overwritten.
+	all := []string{"R0", "R1", "R2", "R3", "R4", "R5", "R6"}
 	const tempCount = 2
 
 	g.tempPool = append(g.tempPool, all[:tempCount]...)
@@ -836,6 +846,12 @@ func (g *gen) emitExprInto(e Expr, dst string) error {
 		if err := g.emitBinaryInto(n, dst); err != nil {
 			return err
 		}
+	case *CastExpr:
+		if err := g.emitExprInto(n.X, dst); err != nil {
+			return err
+		}
+		g.maskResult(dst, n.Type)
+		return nil
 	case *CallExpr:
 		return g.emitCallInto(n, dst)
 	default:
@@ -1022,6 +1038,22 @@ func (g *gen) emitCallInto(n *CallExpr, dst string) error {
 		}
 		g.emit("MOV %0 " + dst)
 		return nil
+	case "in_port_v":
+		return g.emitBuiltinInPortVariableInto(n, dst)
+	case "in_port32_v":
+		return g.emitBuiltinInPortVariableInto(n, dst)
+	case "out_port_v":
+		if err := g.emitBuiltinOutPortVariable(n); err != nil {
+			return err
+		}
+		g.emit("MOV %0 " + dst)
+		return nil
+	case "out_port32_v":
+		if err := g.emitBuiltinOutPortVariable(n); err != nil {
+			return err
+		}
+		g.emit("MOV %0 " + dst)
+		return nil
 	case "am":
 		g.emit("MOV AM " + dst)
 		return nil
@@ -1052,6 +1084,65 @@ func (g *gen) emitCallInto(n *CallExpr, dst string) error {
 		return g.emitBuiltinOSReturn(n)
 	case "os_start":
 		return g.emitBuiltinOSStart(n)
+	case "syscall":
+		return g.emitBuiltinSyscall(n, dst)
+	case "sysret":
+		if len(n.Args) != 0 {
+			return fmt.Errorf("sysret expects no arguments")
+		}
+		g.emit("SYSRET")
+		g.emit("MOV %0 " + dst)
+		return nil
+	case "sys_setvec":
+		return g.emitBuiltinSetControl(n, "VEC", dst)
+	case "sys_setksp":
+		return g.emitBuiltinSetControl(n, "KSP", dst)
+	case "sys_setquant":
+		return g.emitBuiltinSetControl(n, "QUANT", dst)
+	case "sys_irq":
+		return g.emitBuiltinSetControl(n, "IRQEN", dst)
+	case "sys_setdb":
+		return g.emitBuiltinSetControl(n, "DB", dst)
+	case "sys_sethb":
+		return g.emitBuiltinSetControl(n, "HB", dst)
+	case "sys_setcb":
+		return g.emitBuiltinSetControl(n, "CB", dst)
+	case "halt":
+		if len(n.Args) != 0 {
+			return fmt.Errorf("halt expects no arguments")
+		}
+		g.emit("HLT")
+		g.emit("MOV %0 " + dst)
+		return nil
+	case "get_stack_top":
+		g.loadFromGlobalInto(g.stackTopSlot, dst)
+		return nil
+	case "get_frame_base":
+		g.loadFromGlobalInto(g.frameBaseSlot, dst)
+		return nil
+	case "errno":
+		g.loadFromGlobalInto(g.errnoSlot, dst)
+		return nil
+	case "set_stack_top":
+		if len(n.Args) != 1 {
+			return fmt.Errorf("set_stack_top expects 1 argument")
+		}
+		if err := g.emitExpr(n.Args[0]); err != nil {
+			return err
+		}
+		g.storeToGlobal(g.stackTopSlot)
+		g.emit("MOV %0 " + dst)
+		return nil
+	case "set_frame_base":
+		if len(n.Args) != 1 {
+			return fmt.Errorf("set_frame_base expects 1 argument")
+		}
+		if err := g.emitExpr(n.Args[0]); err != nil {
+			return err
+		}
+		g.storeToGlobal(g.frameBaseSlot)
+		g.emit("MOV %0 " + dst)
+		return nil
 	}
 	if err := g.emitFunctionCall(n); err != nil {
 		return err
@@ -1141,6 +1232,58 @@ func (g *gen) emitLogicalOrInto(left, right Expr, dst string) error {
 	g.emit(":" + trueLabel)
 	g.emit("MOV %1 " + dst)
 	g.emit(":" + endLabel)
+	return nil
+}
+
+// emitBuiltinSetControl writes a 32-bit control register. VEC, KSP, QUANT
+// and IRQEN are all primary registers, so a register move keeps the full
+// width even when the argument was computed in X.
+func (g *gen) emitBuiltinSetControl(call *CallExpr, reg, dst string) error {
+	if len(call.Args) != 1 {
+		return fmt.Errorf("control-register write expects 1 argument")
+	}
+	if err := g.emitExprInto(call.Args[0], regX); err != nil {
+		return err
+	}
+	g.emit("MOV X " + reg)
+	g.emit("MOV %0 " + dst)
+	return nil
+}
+
+// emitBuiltinSyscall implements the user half of the ISA V2.2 trap ABI:
+//
+//	R0 = number, R1..R6 = arguments, SYSRET returns X (result) and Y (errno).
+//
+// Compiler-cached locals and temporaries are spilled to the hardware stack
+// first because the syscall ABI claims R0-R6.
+func (g *gen) emitBuiltinSyscall(call *CallExpr, dst string) error {
+	if !g.em2Am1Mode {
+		return fmt.Errorf("syscall requires --mode em2_am1")
+	}
+	if len(call.Args) != 7 {
+		return fmt.Errorf("syscall expects 7 arguments (number, a1..a6)")
+	}
+
+	saved := g.spillLiveRegisters()
+	for _, arg := range call.Args {
+		if err := g.emitExpr(arg); err != nil {
+			return err
+		}
+		g.emit("PUSH X")
+	}
+	for i := 6; i >= 0; i-- {
+		g.emit(fmt.Sprintf("POP R%d", i))
+	}
+	g.emit("SYS")
+	g.emit("STR Y " + g.errnoSlot.operand)
+	// R7 is not part of the compiler's variable-register set and is not
+	// touched by the syscall ABI, so it keeps the 32-bit result safe while
+	// the spilled locals are restored.
+	g.emit("MOV X R7")
+	g.restoreLiveRegisters(saved)
+	if dst != "R7" {
+		g.emit("MOV R7 " + dst)
+	}
 	return nil
 }
 
@@ -1263,9 +1406,73 @@ func (g *gen) emitBuiltinOutPort(call *CallExpr) error {
 	return nil
 }
 
+// emitPortOperandPatch writes the port number currently in X into the immediate
+// operand word of the labelled IN/OUT instruction. IN stores the port at +1;
+// OUT stores it at +2 after the source-register operand.
+func (g *gen) emitPortOperandPatch(label string, offset int) {
+	high, low, ok := splitRegister(regY)
+	if !ok {
+		// Y always has sub-registers; this is only a defensive guard.
+		return
+	}
+	g.emit("MOV @hi(" + label + ") " + high)
+	g.emit("MOV @lo(" + label + ") " + low)
+	g.emit(fmt.Sprintf("ADD %%%d Y", offset))
+	g.emit("STR X Y")
+}
+
+// Variable-port variants exist because the ISA encodes port numbers as 16-bit
+// instruction immediates. The port is evaluated into X, patched into a nearby
+// IN/OUT instruction, and that instruction then performs the real transfer.
+func (g *gen) emitBuiltinInPortVariableInto(call *CallExpr, dst string) error {
+	if len(call.Args) != 1 {
+		return fmt.Errorf("in_port_v expects 1 argument")
+	}
+	label := g.label("port_in_v")
+	if err := g.emitExprInto(call.Args[0], regX); err != nil {
+		return err
+	}
+	g.emit("AND %65535 X")
+	g.emitPortOperandPatch(label, 1)
+	g.emit(":" + label)
+	g.emit("IN %0 " + dst)
+	return nil
+}
+
+func (g *gen) emitBuiltinOutPortVariable(call *CallExpr) error {
+	if len(call.Args) != 2 {
+		return fmt.Errorf("out_port_v expects 2 arguments")
+	}
+	label := g.label("port_out_v")
+	if err := g.emitExprInto(call.Args[0], regX); err != nil {
+		return err
+	}
+	g.emit("AND %65535 X")
+	g.emitPortOperandPatch(label, 2)
+	if err := g.emitExpr(call.Args[1]); err != nil {
+		return err
+	}
+	g.emit(":" + label)
+	g.emit("OUT X %0")
+	return nil
+}
+
 func (g *gen) emitBuiltinOSReturn(call *CallExpr) error {
 	if len(call.Args) != 0 {
 		return fmt.Errorf("os_return expects no arguments")
+	}
+	// A foreground image runs as a process, so os_return must ask the kernel
+	// to retire it. Resident kernel images keep the OSRET restart behaviour.
+	if g.widePointers {
+		g.emit("MOV %0 R0")
+		g.emit("MOV %0 R1")
+		g.emit("MOV %0 R2")
+		g.emit("MOV %0 R3")
+		g.emit("MOV %0 R4")
+		g.emit("MOV %0 R5")
+		g.emit("MOV %0 R6")
+		g.emit("SYS")
+		return nil
 	}
 	g.emit("OSRET")
 	return nil
@@ -1603,7 +1810,7 @@ func (g *gen) allocGlobalArray(elem Type, length int) (storage, error) {
 	if elem.Ptr != 0 {
 		return storage{}, fmt.Errorf("array of pointer element type not supported")
 	}
-	words := arrayWordCount(elem.Base, length)
+	words := arrayWordCount(elem.Base, length, g.em2Am1Mode)
 	if words <= 0 {
 		return storage{}, fmt.Errorf("invalid array length %d", length)
 	}
@@ -1637,7 +1844,7 @@ func (g *gen) allocLocalArray(elem Type, length int) (storage, error) {
 	if g.currentFrame == nil {
 		return g.allocGlobalArray(elem, length)
 	}
-	words := arrayWordCount(elem.Base, length)
+	words := arrayWordCount(elem.Base, length, g.em2Am1Mode)
 	if words <= 0 {
 		return storage{}, fmt.Errorf("invalid array length %d", length)
 	}
@@ -1650,12 +1857,18 @@ func (g *gen) allocLocalArray(elem Type, length int) (storage, error) {
 	return s, nil
 }
 
-func arrayWordCount(elem TypeKind, length int) int {
+func arrayWordCount(elem TypeKind, length int, unpackedBytes bool) int {
 	if length <= 0 {
 		return 0
 	}
 	switch elem {
 	case TypeU8:
+		// EM=2 images use one 16-bit word per u8 element so a u8 pointer is
+		// a plain word address and byte buffers agree with FoxFS and string
+		// literals. Legacy 16-bit images keep the denser packed layout.
+		if unpackedBytes {
+			return length
+		}
 		return (length + 1) / 2
 	case TypeU32:
 		return length * 2
@@ -1832,6 +2045,11 @@ func (g *gen) exprType(e Expr) Type {
 	case *UnaryExpr:
 		switch n.Op {
 		case "&":
+			if id, ok := n.X.(*IdentExpr); ok {
+				if _, isFunc := g.funcs[id.Name]; isFunc {
+					return Type{Base: TypeU32}
+				}
+			}
 			t := g.exprType(n.X)
 			return Type{Base: t.Base, Ptr: t.Ptr + 1}
 		case "*":
@@ -1872,14 +2090,22 @@ func (g *gen) exprType(e Expr) Type {
 			return Type{Base: TypeU16}
 		}
 		return Type{Base: TypeU8}
+	case *CastExpr:
+		return n.Type
 	case *CallExpr:
 		switch n.Callee {
 		case "peek", "cyc", "in_port", "am", "em":
 			return Type{Base: TypeU16}
 		case "in_port32", "get_memory_size":
 			return Type{Base: TypeU32}
-		case "poke", "wait", "vblank", "out_port", "out_port32", "os_return", "os_start", "set_am", "set_em":
+		case "poke", "wait", "vblank", "out_port", "out_port32", "os_return", "os_start", "set_am", "set_em",
+			"sysret", "sys_setvec", "sys_setksp", "sys_setquant", "sys_irq",
+			"sys_setdb", "sys_sethb", "sys_setcb", "set_stack_top", "set_frame_base", "halt":
 			return Type{Base: TypeVoid}
+		case "syscall":
+			return Type{Base: TypeU32}
+		case "get_stack_top", "get_frame_base", "errno":
+			return Type{Base: TypeU16}
 		}
 		if fn, ok := g.funcs[n.Callee]; ok {
 			return fn.Ret
@@ -2015,6 +2241,9 @@ func (g *gen) emitAddressOfInto(e Expr, dst string) error {
 	case *IdentExpr:
 		slot, ok := g.lookup(n.Name)
 		if !ok {
+			if fr, isFunc := g.frames[n.Name]; isFunc {
+				return g.emitFunctionAddressInto(fr.entryLabel, dst)
+			}
 			return fmt.Errorf("unknown variable %q", n.Name)
 		}
 		if slot.isArray {
@@ -2045,6 +2274,20 @@ func (g *gen) emitAddressOfInto(e Expr, dst string) error {
 	default:
 		return fmt.Errorf("cannot take address of expression")
 	}
+	return nil
+}
+
+// emitFunctionAddressInto materialises a code label address. The trap vector
+// has to point at a function that is never called in the usual FoxC sense, so
+// the compiler exposes its entry label directly.
+func (g *gen) emitFunctionAddressInto(label, dst string) error {
+	high, low, ok := splitRegister(dst)
+	if !ok {
+		g.emit("MOV " + label + " " + dst)
+		return nil
+	}
+	g.emit("MOV @hi(" + label + ") " + high)
+	g.emit("MOV @lo(" + label + ") " + low)
 	return nil
 }
 
@@ -2093,7 +2336,7 @@ func (g *gen) emitDerefStore(ptrExpr Expr, valueExpr Expr) error {
 }
 
 func (g *gen) emitArrayStore(slot storage, index Expr, value Expr) error {
-	isPackedByte := slot.typ.Base == TypeU8 && slot.typ.Ptr == 0
+	isPackedByte := slot.typ.Base == TypeU8 && slot.typ.Ptr == 0 && !g.em2Am1Mode
 	isU32 := slot.typ.Ptr == 0 && slot.typ.Base == TypeU32
 
 	if tmp := g.allocTemp(); tmp != "" {
@@ -2230,7 +2473,7 @@ func (g *gen) emitArrayLoadInto(slot storage, index Expr, dst string) error {
 			return nil
 		}
 	}
-	if !(slot.typ.Base == TypeU8 && slot.typ.Ptr == 0) {
+	if !(slot.typ.Base == TypeU8 && slot.typ.Ptr == 0 && !g.em2Am1Mode) {
 		g.emit("LOD " + dst + " X")
 		return nil
 	}
@@ -2277,7 +2520,7 @@ func (g *gen) emitArrayLoadInto(slot storage, index Expr, dst string) error {
 }
 
 func (g *gen) emitArrayAddress(slot storage, index Expr) error {
-	isPackedByte := slot.typ.Base == TypeU8 && slot.typ.Ptr == 0
+	isPackedByte := slot.typ.Base == TypeU8 && slot.typ.Ptr == 0 && !g.em2Am1Mode
 	isU32 := slot.typ.Ptr == 0 && slot.typ.Base == TypeU32
 
 	if tmp := g.allocTemp(); tmp != "" {
@@ -2476,7 +2719,7 @@ func (g *gen) countLocalsInStmt(st Stmt) int {
 	switch n := st.(type) {
 	case *VarDeclStmt:
 		if n.Decl.IsArray {
-			return arrayWordCount(n.Decl.Type.Base, n.Decl.ArrayLen)
+			return arrayWordCount(n.Decl.Type.Base, n.Decl.ArrayLen, g.em2Am1Mode)
 		}
 		return g.wordCount(n.Decl.Type)
 	case *IfStmt:

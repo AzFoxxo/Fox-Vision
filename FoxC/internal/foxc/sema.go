@@ -51,12 +51,39 @@ func check(prog *Program, opts CompileOptions) error {
 	s.funcs["out_port"] = funcSig{ret: Type{Base: TypeVoid}, params: []Type{{Base: TypeU16}, {Base: TypeU16}}}
 	s.funcs["in_port32"] = funcSig{ret: Type{Base: TypeU32}, params: []Type{{Base: TypeU16}}}
 	s.funcs["out_port32"] = funcSig{ret: Type{Base: TypeVoid}, params: []Type{{Base: TypeU16}, {Base: TypeU32}}}
+	// Variable-port forms patch the immediate port word of a nearby IN/OUT
+	// instruction at runtime. Port numbers are still u16.
+	s.funcs["in_port_v"] = funcSig{ret: Type{Base: TypeU16}, params: []Type{{Base: TypeU16}}}
+	s.funcs["out_port_v"] = funcSig{ret: Type{Base: TypeVoid}, params: []Type{{Base: TypeU16}, {Base: TypeU16}}}
+	s.funcs["in_port32_v"] = funcSig{ret: Type{Base: TypeU32}, params: []Type{{Base: TypeU16}}}
+	s.funcs["out_port32_v"] = funcSig{ret: Type{Base: TypeVoid}, params: []Type{{Base: TypeU16}, {Base: TypeU32}}}
 	s.funcs["am"] = funcSig{ret: Type{Base: TypeU16}, params: []Type{}}
 	s.funcs["set_am"] = funcSig{ret: Type{Base: TypeVoid}, params: []Type{{Base: TypeU16}}}
 	s.funcs["em"] = funcSig{ret: Type{Base: TypeU16}, params: []Type{}}
 	s.funcs["set_em"] = funcSig{ret: Type{Base: TypeVoid}, params: []Type{{Base: TypeU16}}}
 	s.funcs["os_return"] = funcSig{ret: Type{Base: TypeVoid}, params: []Type{}}
 	s.funcs["os_start"] = funcSig{ret: Type{Base: TypeVoid}, params: []Type{osStartAddr}}
+
+	// ISA V2.2 trap ABI. syscall is checked specially so pointer arguments
+	// are passed as raw machine words.
+	s.funcs["syscall"] = funcSig{ret: Type{Base: TypeU32}, params: []Type{
+		{Base: TypeU16}, {Base: TypeU32}, {Base: TypeU32}, {Base: TypeU32},
+		{Base: TypeU32}, {Base: TypeU32}, {Base: TypeU32},
+	}}
+	s.funcs["sysret"] = funcSig{ret: Type{Base: TypeVoid}, params: []Type{}}
+	s.funcs["sys_setvec"] = funcSig{ret: Type{Base: TypeVoid}, params: []Type{{Base: TypeU32}}}
+	s.funcs["sys_setksp"] = funcSig{ret: Type{Base: TypeVoid}, params: []Type{{Base: TypeU32}}}
+	s.funcs["sys_setquant"] = funcSig{ret: Type{Base: TypeVoid}, params: []Type{{Base: TypeU32}}}
+	s.funcs["sys_irq"] = funcSig{ret: Type{Base: TypeVoid}, params: []Type{{Base: TypeU16}}}
+	s.funcs["sys_setdb"] = funcSig{ret: Type{Base: TypeVoid}, params: []Type{{Base: TypeU32}}}
+	s.funcs["sys_sethb"] = funcSig{ret: Type{Base: TypeVoid}, params: []Type{{Base: TypeU32}}}
+	s.funcs["sys_setcb"] = funcSig{ret: Type{Base: TypeVoid}, params: []Type{{Base: TypeU32}}}
+	s.funcs["get_stack_top"] = funcSig{ret: Type{Base: TypeU16}, params: []Type{}}
+	s.funcs["set_stack_top"] = funcSig{ret: Type{Base: TypeVoid}, params: []Type{{Base: TypeU16}}}
+	s.funcs["get_frame_base"] = funcSig{ret: Type{Base: TypeU16}, params: []Type{}}
+	s.funcs["set_frame_base"] = funcSig{ret: Type{Base: TypeVoid}, params: []Type{{Base: TypeU16}}}
+	s.funcs["errno"] = funcSig{ret: Type{Base: TypeU16}, params: []Type{}}
+	s.funcs["halt"] = funcSig{ret: Type{Base: TypeVoid}, params: []Type{}}
 
 	for _, g := range prog.Globals {
 		if g.Type.Base == TypeVoid && g.Type.Ptr == 0 {
@@ -409,6 +436,18 @@ func (s *semantic) exprType(e Expr) (Type, error) {
 		return Type{Base: TypeU8}, nil
 	case *StringLit:
 		return Type{Base: TypeU8, Ptr: 1}, nil
+	case *CastExpr:
+		if n.Type.Base == TypeVoid && n.Type.Ptr == 0 {
+			return Type{Base: TypeInvalid}, fmt.Errorf("cannot cast to void")
+		}
+		st, err := s.exprType(n.X)
+		if err != nil {
+			return Type{Base: TypeInvalid}, err
+		}
+		if st.Base == TypeVoid && st.Ptr == 0 {
+			return Type{Base: TypeInvalid}, fmt.Errorf("cannot cast void expression")
+		}
+		return n.Type, nil
 	case *IdentExpr:
 		t, ok := s.lookupVar(n.Name)
 		if !ok {
@@ -464,14 +503,21 @@ func (s *semantic) exprType(e Expr) (Type, error) {
 			if tx.Ptr == 0 {
 				return Type{Base: TypeInvalid}, fmt.Errorf("cannot dereference non-pointer type %s", tx)
 			}
+			if tx.Ptr == 1 && tx.Base == TypeVoid {
+				return Type{Base: TypeInvalid}, fmt.Errorf("cannot dereference void pointer")
+			}
 			return Type{Base: tx.Base, Ptr: tx.Ptr - 1}, nil
 		}
 		if n.Op == "&" {
-			// address-of: operand must be lvalue (IdentExpr or IndexExpr)
+			// address-of: operand must be lvalue (IdentExpr or IndexExpr),
+			// or a function name for the trap-vector entry point.
 			switch a := n.X.(type) {
 			case *IdentExpr:
 				t, ok := s.lookupVar(a.Name)
 				if !ok {
+					if _, isFunc := s.funcs[a.Name]; isFunc {
+						return Type{Base: TypeU32}, nil
+					}
 					return Type{Base: TypeInvalid}, fmt.Errorf("unknown variable %q", a.Name)
 				}
 				// address of array yields pointer to element
@@ -554,11 +600,32 @@ func (s *semantic) exprType(e Expr) (Type, error) {
 		}
 		return Type{Base: rt.Base}, nil
 	case *CallExpr:
-		if !s.extendedMode && (n.Callee == "in_port" || n.Callee == "out_port" || n.Callee == "in_port32" || n.Callee == "out_port32" || n.Callee == "am" || n.Callee == "set_am" || n.Callee == "em" || n.Callee == "set_em" || n.Callee == "get_memory_size") {
+		if !s.extendedMode && (n.Callee == "in_port" || n.Callee == "out_port" || n.Callee == "in_port32" || n.Callee == "out_port32" ||
+			n.Callee == "in_port_v" || n.Callee == "out_port_v" || n.Callee == "in_port32_v" || n.Callee == "out_port32_v" ||
+			n.Callee == "am" || n.Callee == "set_am" || n.Callee == "em" || n.Callee == "set_em" || n.Callee == "get_memory_size") {
 			return Type{Base: TypeInvalid}, fmt.Errorf("%s requires extended mode", n.Callee)
 		}
-		if !s.em2Am1Mode && (n.Callee == "in_port32" || n.Callee == "out_port32" || n.Callee == "get_memory_size") {
+		if !s.em2Am1Mode && (n.Callee == "in_port32" || n.Callee == "out_port32" ||
+			n.Callee == "in_port32_v" || n.Callee == "out_port32_v" || n.Callee == "get_memory_size") {
 			return Type{Base: TypeInvalid}, fmt.Errorf("%s requires 32-bit mode (--mode em2_am1)", n.Callee)
+		}
+		if n.Callee == "syscall" {
+			// The ABI takes a syscall number plus six untyped machine words.
+			// Pointer arguments are passed through unchanged, so this call is
+			// deliberately not checked against a fixed parameter list.
+			if len(n.Args) != 7 {
+				return Type{Base: TypeInvalid}, fmt.Errorf("syscall expects 7 arguments")
+			}
+			for _, arg := range n.Args {
+				at, err := s.exprType(arg)
+				if err != nil {
+					return Type{Base: TypeInvalid}, err
+				}
+				if at.Base == TypeVoid && at.Ptr == 0 {
+					return Type{Base: TypeInvalid}, fmt.Errorf("syscall argument cannot be void")
+				}
+			}
+			return Type{Base: TypeU32}, nil
 		}
 		sig, ok := s.funcs[n.Callee]
 		if !ok {
@@ -588,6 +655,14 @@ func assignable(dst, src Type) bool {
 		return true
 	}
 	if dst.Ptr != 0 || src.Ptr != 0 {
+		// void * is compatible with every object pointer. All FoxOS pointers
+		// in a 32-bit image are stored as word addresses, so no conversion is
+		// required at the representation level.
+		if dst.Ptr > 0 && src.Ptr > 0 {
+			if (dst.Base == TypeVoid && dst.Ptr == 1) || (src.Base == TypeVoid && src.Ptr == 1) {
+				return true
+			}
+		}
 		return false
 	}
 	// allow widening u8 -> u16/u32 and u16 -> u32 for non-pointer values

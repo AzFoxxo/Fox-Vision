@@ -143,6 +143,18 @@ Format (bits):
 - `0x0204` — `A` held with Left Shift (modifier bit 9 => 0x02 << 8 = 0x0200; combined value `0x0204`)
 - `0x2800` — Enter held (HID usage `0x28`, no modifiers)
 
+### Host shortcuts
+
+- `Super+Q` (left or right GUI/OS key plus `Q`) asks FoxOS to terminate the
+  foreground application and return to FoxSH. The host consumes the chord, so
+  no `Q` keystroke is forwarded to the guest.
+- Internally the emulator delivers an ISA V2.2 trap with cause `2` to the
+  resident kernel. This works even for programs that never read the guest TTY
+  or keyboard port.
+- The shortcut is ignored while the resident kernel/shell owns the CPU, so it
+  cannot terminate FoxSH itself. A window manager may reserve the same chord;
+  FoxVision can only act on key events it receives.
+
 ---
 
 ## VF16Mouse

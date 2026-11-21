@@ -488,10 +488,10 @@ class IRBuilder
         if (opcode is "IN" or "OUT")
             return true;
 
-        if (opcode == "OSRET" && operandCount != 0)
+        if (opcode is "OSRET" or "SYS" or "SYSRET" && operandCount != 0)
         {
             diagnostics.Add(Diagnostic.Error(
-                "Opcode 'OSRET' does not take operands.",
+                $"Opcode '{opcode}' does not take operands.",
                 sourceFile,
                 sourceLine.LineNumber,
                 1,

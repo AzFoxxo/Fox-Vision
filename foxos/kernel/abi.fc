@@ -1,0 +1,1098 @@
+// abi.fc - FoxOS resident-kernel syscall and process ABI
+// -------------------------------------------------------
+// The processor delivers SYS and timer traps to abi_trap() through VEC. The
+// trap frame at 0x70000 holds the user state; this file implements:
+//
+//   * the syscall dispatcher (terminal, files, memory, processes)
+//   * a small round-robin scheduler with preemptive timer switches
+//   * per-process data/heap/code windows (DB/HB/CB)
+//   * fork/exec/wait with private address spaces
+//
+// FoxOS has no privilege levels or MMU, so isolation is cooperative. The
+// kernel never relies on user pointers directly; it translates the three
+// documented virtual windows into the current process's physical bases.
+
+#include <abi.fh>
+
+// --- Scheduler -------------------------------------------------------------
+
+u32 TASK_MAX        = 8;
+u32 FD_MAX          = 8;
+u32 NO_TASK         = 0xFFFFFFFF;
+
+u32 ST_FREE         = 0;
+u32 ST_READY        = 1;
+u32 ST_RUN          = 2;
+u32 ST_BLOCK        = 3;
+u32 ST_ZOMBIE       = 4;
+
+// Physical windows. Each task owns one data window, one heap window and one
+// code window. Strides leave room for the largest foreground image and for
+// programs that grow their heap.
+// Task data windows live after the resident text, embedded programs and the
+// kernel's relocated globals, and end below the trap frame at 0x70000.
+u32 ABI_DB_BASE     = 0x00048000;
+u32 ABI_DB_STRIDE   = 0x00005000;
+u32 ABI_DB_WORDS    = 0x00004C78;
+u32 ABI_HB_BASE     = 0x10000000;
+u32 ABI_HB_STRIDE   = 0x00400000;
+u32 ABI_CB_BASE     = 0x00100000;
+u32 ABI_CB_STRIDE   = 0x00100000;
+u32 ABI_CODE_LIMIT  = 0x000FF000;
+
+u32 abi_inited      = 0;
+u32 abi_cur         = 0xFFFFFFFF;
+u32 abi_next_pid    = 1;
+u32 abi_quantum     = 0x00010000;
+u32 abi_kstack      = 0x0000E000;
+u32 abi_shell       = 0;
+
+u32 task_state[8];
+u32 task_pid[8];
+u32 task_ppid[8];
+u32 task_db[8];
+u32 task_hb[8];
+u32 task_cb[8];
+u32 task_code[8];
+u32 task_heap[8];
+u32 task_exit[8];
+u32 task_wait[8];
+u32 task_waitptr[8];
+u32 task_frame[320];
+
+u32 task_fd_slot[64];
+u32 task_fd_pos[64];
+
+// --- Trap-frame helpers ----------------------------------------------------
+
+u32 abi_peek32(u32 addr)
+{
+    return (u32)peek(addr) | (((u32)peek(addr + 1)) << 16);
+}
+
+void abi_poke32(u32 addr, u32 value)
+{
+    poke(addr, value & 0xFFFF);
+    poke(addr + 1, (value >> 16) & 0xFFFF);
+}
+
+u32 abi_arg(u32 index)
+{
+    return abi_peek32(ABI_TRAP + 10 + index * 2);
+}
+
+void abi_set_result(u32 value)
+{
+    abi_poke32(ABI_TRAP + 5, value);
+}
+
+void abi_set_errno(u32 value)
+{
+    abi_poke32(ABI_TRAP + 7, value);
+}
+
+void abi_ok(u32 value)
+{
+    abi_set_errno(0);
+    abi_set_result(value);
+    sysret();
+}
+
+void abi_fail(u32 err)
+{
+    abi_set_errno(err);
+    abi_set_result(SYS_ERR);
+    sysret();
+}
+
+void abi_frame_save(u32 task)
+{
+    u32 base = task * ABI_FRAME_WORDS;
+    u32 i = 0;
+
+    while (i < ABI_FRAME_WORDS)
+    {
+        task_frame[base + i] = (u32)peek(ABI_TRAP + i);
+        i = i + 1;
+    }
+}
+
+void abi_frame_load(u32 task)
+{
+    u32 base = task * ABI_FRAME_WORDS;
+    u32 i = 0;
+
+    while (i < ABI_FRAME_WORDS)
+    {
+        poke(ABI_TRAP + i, task_frame[base + i] & 0xFFFF);
+        i = i + 1;
+    }
+}
+
+void abi_saved_set_x(u32 task, u32 value)
+{
+    u32 base = task * ABI_FRAME_WORDS;
+
+    task_frame[base + 5] = value & 0xFFFF;
+    task_frame[base + 6] = (value >> 16) & 0xFFFF;
+    task_frame[base + 7] = 0;
+    task_frame[base + 8] = 0;
+}
+
+// --- User address translation ---------------------------------------------
+
+u32 abi_translate(u32 task, u32 addr)
+{
+    if (addr >= ABI_USER_DATA && addr < ABI_USER_DATA_END)
+    {
+        return task_db[task] + (addr - ABI_USER_DATA);
+    }
+    if (addr >= ABI_USER_HEAP && addr < ABI_USER_HEAP_END)
+    {
+        return task_hb[task] + (addr - ABI_USER_HEAP);
+    }
+    if (addr >= ABI_USER_CODE && addr < ABI_USER_CODE_END)
+    {
+        return task_cb[task] + (addr - ABI_USER_CODE);
+    }
+    return addr;
+}
+
+u16 abi_user_byte(u32 addr)
+{
+    return (u16)peek(abi_translate(abi_cur, addr));
+}
+
+void abi_put_user32(u32 task, u32 addr, u32 value)
+{
+    u32 phys = abi_translate(task, addr);
+
+    poke(phys, value & 0xFFFF);
+    poke(phys + 1, (value >> 16) & 0xFFFF);
+}
+
+// Copy up to LINE_MAX-1 bytes of a NUL-terminated user string into line[].
+u32 abi_copy_string(u32 addr)
+{
+    u32 i = 0;
+    u16 c = abi_user_byte(addr);
+
+    while (i + 1 < LINE_MAX && c != 0)
+    {
+        line[i] = c;
+        i = i + 1;
+        c = abi_user_byte(addr + i);
+    }
+    return i;
+}
+
+// Copy the whole 64-word path buffer from user space.
+void abi_copy_line(u32 addr)
+{
+    u32 i = 0;
+
+    while (i < LINE_MAX)
+    {
+        line[i] = abi_user_byte(addr + i);
+        i = i + 1;
+    }
+}
+
+// --- Task table ------------------------------------------------------------
+
+void abi_clear_fds(u32 task)
+{
+    u32 i = 0;
+
+    while (i < FD_MAX)
+    {
+        task_fd_slot[task * FD_MAX + i] = 0;
+        task_fd_pos[task * FD_MAX + i] = 0;
+        i = i + 1;
+    }
+}
+
+void abi_free_task(u32 task)
+{
+    task_state[task] = ST_FREE;
+    task_pid[task] = 0;
+    task_ppid[task] = NO_TASK;
+    task_code[task] = 0;
+    task_heap[task] = ABI_USER_HEAP;
+    task_exit[task] = 0;
+    task_wait[task] = 0;
+    task_waitptr[task] = 0;
+    abi_clear_fds(task);
+}
+
+u32 abi_alloc_task(u32 parent)
+{
+    u32 i = 0;
+    u32 t = NO_TASK;
+
+    while (i < TASK_MAX)
+    {
+        if (task_state[i] == ST_FREE)
+        {
+            t = i;
+            i = TASK_MAX;
+        }
+        else
+        {
+            i = i + 1;
+        }
+    }
+    if (t == NO_TASK)
+    {
+        return NO_TASK;
+    }
+
+    task_state[t] = ST_READY;
+    task_pid[t] = abi_next_pid;
+    abi_next_pid = abi_next_pid + 1;
+    task_ppid[t] = parent;
+    task_db[t] = ABI_DB_BASE + t * ABI_DB_STRIDE;
+    task_hb[t] = ABI_HB_BASE + t * ABI_HB_STRIDE;
+    task_cb[t] = ABI_CB_BASE + t * ABI_CB_STRIDE;
+    task_code[t] = 0;
+    task_heap[t] = ABI_USER_HEAP;
+    task_exit[t] = 0;
+    task_wait[t] = 0;
+    task_waitptr[t] = 0;
+    abi_clear_fds(t);
+    return t;
+}
+
+void abi_zero(u32 addr, u32 words)
+{
+    u32 i = 0;
+
+    while (i < words)
+    {
+        poke(addr + i, 0);
+        i = i + 1;
+    }
+}
+
+void abi_copy_words(u32 from, u32 to, u32 words)
+{
+    u32 i = 0;
+
+    while (i < words)
+    {
+        poke(to + i, peek(from + i));
+        i = i + 1;
+    }
+}
+
+void abi_init_frame(u32 task)
+{
+    u32 base = task * ABI_FRAME_WORDS;
+    u32 i = 0;
+
+    while (i < ABI_FRAME_WORDS)
+    {
+        task_frame[base + i] = 0;
+        i = i + 1;
+    }
+
+    // PC, SP
+    task_frame[base + 1] = ABI_USER_CODE & 0xFFFF;
+    task_frame[base + 2] = (ABI_USER_CODE >> 16) & 0xFFFF;
+    task_frame[base + 3] = ABI_USER_STACK & 0xFFFF;
+    task_frame[base + 4] = (ABI_USER_STACK >> 16) & 0xFFFF;
+
+    // IRQ enabled, process windows, 32-bit word addressing.
+    task_frame[base + 26] = 1;
+    task_frame[base + 27] = task_db[task] & 0xFFFF;
+    task_frame[base + 28] = (task_db[task] >> 16) & 0xFFFF;
+    task_frame[base + 29] = task_hb[task] & 0xFFFF;
+    task_frame[base + 30] = (task_hb[task] >> 16) & 0xFFFF;
+    task_frame[base + 31] = task_cb[task] & 0xFFFF;
+    task_frame[base + 32] = (task_cb[task] >> 16) & 0xFFFF;
+    task_frame[base + 33] = 0;
+    task_frame[base + 34] = 2;
+    task_frame[base + 35] = abi_quantum & 0xFFFF;
+    task_frame[base + 36] = (abi_quantum >> 16) & 0xFFFF;
+}
+
+// --- Scheduler -------------------------------------------------------------
+
+void abi_enter_kernel(u32 pc);
+
+void abi_idle()
+{
+    halt();
+}
+
+void abi_schedule()
+{
+    u32 t = abi_cur;
+    u32 seen = 0;
+
+    while (seen < TASK_MAX)
+    {
+        t = t + 1;
+        if (t >= TASK_MAX)
+        {
+            t = 0;
+        }
+        if (task_state[t] == ST_READY)
+        {
+            abi_cur = t;
+            task_state[t] = ST_RUN;
+            abi_frame_load(t);
+            sysret();
+        }
+        seen = seen + 1;
+    }
+
+    if (abi_shell != 0)
+    {
+        abi_enter_kernel(abi_shell);
+    }
+    abi_enter_kernel((u32)&abi_idle);
+}
+
+void abi_enter_kernel(u32 pc)
+{
+    u32 i = 0;
+
+    while (i < ABI_FRAME_WORDS)
+    {
+        poke(ABI_TRAP + i, 0);
+        i = i + 1;
+    }
+    abi_poke32(ABI_TRAP + 1, pc);
+    abi_poke32(ABI_TRAP + 3, ABI_KSTACK);
+    poke(ABI_TRAP + 33, 0);
+    poke(ABI_TRAP + 34, 2);
+    abi_poke32(ABI_TRAP + 35, abi_quantum);
+
+    // The kernel resumes with a fresh software frame stack.
+    set_stack_top((u16)abi_kstack);
+    set_frame_base((u16)abi_kstack);
+    sysret();
+}
+
+void abi_enter_user(u32 task)
+{
+    abi_cur = task;
+    task_state[task] = ST_RUN;
+    abi_frame_load(task);
+    sysret();
+}
+
+void abi_preempt()
+{
+    abi_frame_save(abi_cur);
+    task_state[abi_cur] = ST_READY;
+    abi_schedule();
+}
+
+// --- Process syscalls ------------------------------------------------------
+
+void abi_kill_others(u32 keep)
+{
+    u32 i = 0;
+
+    while (i < TASK_MAX)
+    {
+        if (i != keep && task_state[i] != ST_FREE)
+        {
+            abi_free_task(i);
+        }
+        i = i + 1;
+    }
+}
+
+void abi_notify_parent(u32 child)
+{
+    u32 parent = task_ppid[child];
+    u32 target = 0;
+
+    if (parent == NO_TASK)
+    {
+        return;
+    }
+    if (task_state[parent] != ST_BLOCK)
+    {
+        return;
+    }
+
+    target = task_wait[parent];
+    if (target == 0 || target == 0xFFFFFFFF || target == task_pid[child])
+    {
+        if (task_waitptr[parent] != 0)
+        {
+            abi_put_user32(parent, task_waitptr[parent], task_exit[child]);
+        }
+        abi_saved_set_x(parent, task_pid[child]);
+        task_state[parent] = ST_READY;
+        task_wait[parent] = 0;
+        task_waitptr[parent] = 0;
+        abi_free_task(child);
+    }
+}
+
+u32 abi_find_zombie(u32 pid)
+{
+    u32 i = 0;
+
+    while (i < TASK_MAX)
+    {
+        if (task_state[i] == ST_ZOMBIE && task_ppid[i] == abi_cur)
+        {
+            if (pid == 0 || pid == 0xFFFFFFFF || pid == task_pid[i])
+            {
+                return i;
+            }
+        }
+        i = i + 1;
+    }
+    return NO_TASK;
+}
+
+u32 abi_has_child(u32 pid)
+{
+    u32 i = 0;
+
+    while (i < TASK_MAX)
+    {
+        if (task_state[i] != ST_FREE && task_ppid[i] == abi_cur)
+        {
+            if (pid == 0 || pid == 0xFFFFFFFF || pid == task_pid[i])
+            {
+                return 1;
+            }
+        }
+        i = i + 1;
+    }
+    return 0;
+}
+
+void abi_sys_exit()
+{
+    u32 status = abi_arg(1);
+    u32 self = abi_cur;
+    u32 pid = task_pid[self];
+
+    task_exit[self] = status;
+    task_state[self] = ST_ZOMBIE;
+
+    if (pid == 1)
+    {
+        abi_kill_others(self);
+    }
+    else
+    {
+        abi_notify_parent(self);
+    }
+    abi_schedule();
+}
+
+// Host-requested termination (Super+Q). Unlike SYS_EXIT this tears down the
+// whole foreground job, including forked children, and returns to FoxSH. The
+// CPU raises this as trap cause 2; it is not a guest syscall.
+void abi_host_quit()
+{
+    u32 self = abi_cur;
+
+    if (self == NO_TASK)
+    {
+        abi_schedule();
+        return;
+    }
+
+    task_exit[self] = 130;
+    task_state[self] = ST_ZOMBIE;
+    abi_kill_others(self);
+    abi_schedule();
+}
+
+void abi_sys_fork()
+{
+    u32 parent = abi_cur;
+    u32 child = abi_alloc_task(parent);
+    u32 used = 0;
+    u32 i = 0;
+    u32 base = 0;
+
+    if (child == NO_TASK)
+    {
+        abi_fail(EAGAIN);
+    }
+
+    abi_copy_words(task_db[parent], task_db[child], ABI_DB_WORDS);
+    used = task_heap[parent] - ABI_USER_HEAP;
+    if (used != 0)
+    {
+        abi_copy_words(task_hb[parent], task_hb[child], used);
+    }
+    if (task_code[parent] != 0)
+    {
+        abi_copy_words(task_cb[parent], task_cb[child], task_code[parent]);
+    }
+    task_code[child] = task_code[parent];
+    task_heap[child] = task_heap[parent];
+
+    // The child resumes after the fork call with X = 0.
+    while (i < ABI_FRAME_WORDS)
+    {
+        task_frame[child * ABI_FRAME_WORDS + i] = (u32)peek(ABI_TRAP + i);
+        i = i + 1;
+    }
+    base = child * ABI_FRAME_WORDS;
+    task_frame[base + 5] = 0;
+    task_frame[base + 6] = 0;
+    task_frame[base + 7] = 0;
+    task_frame[base + 8] = 0;
+    task_frame[base + 27] = task_db[child] & 0xFFFF;
+    task_frame[base + 28] = (task_db[child] >> 16) & 0xFFFF;
+    task_frame[base + 29] = task_hb[child] & 0xFFFF;
+    task_frame[base + 30] = (task_hb[child] >> 16) & 0xFFFF;
+    task_frame[base + 31] = task_cb[child] & 0xFFFF;
+    task_frame[base + 32] = (task_cb[child] >> 16) & 0xFFFF;
+
+    abi_ok(task_pid[child]);
+}
+
+void abi_sys_wait()
+{
+    u32 pid = abi_arg(1);
+    u32 status_ptr = abi_arg(2);
+    u32 child = abi_find_zombie(pid);
+    u32 cpid = 0;
+
+    if (child != NO_TASK)
+    {
+        if (status_ptr != 0)
+        {
+            abi_put_user32(abi_cur, status_ptr, task_exit[child]);
+        }
+        cpid = task_pid[child];
+        abi_free_task(child);
+        abi_ok(cpid);
+    }
+
+    if (abi_has_child(pid) == 0)
+    {
+        abi_fail(ECHILD);
+    }
+
+    abi_frame_save(abi_cur);
+    task_state[abi_cur] = ST_BLOCK;
+    task_wait[abi_cur] = pid;
+    task_waitptr[abi_cur] = status_ptr;
+    abi_schedule();
+}
+
+void abi_sys_exec()
+{
+    u32 path = abi_arg(1);
+    u32 len = abi_copy_string(path);
+    u32 slot = fs_resolve_path(0, (u16)len);
+    u32 size = 0;
+    u32 i = 0;
+    u32 used = 0;
+
+    if (slot == ROOT_SLOT || slot == NOT_FOUND)
+    {
+        abi_fail(ENOENT);
+    }
+    fs_read_entry(slot);
+    if (fs_e_type != 1)
+    {
+        abi_fail(ENOENT);
+    }
+    size = fs_e_size;
+    if (size == 0 || size > ABI_CODE_LIMIT)
+    {
+        abi_fail(EINVAL);
+    }
+
+    disk_read_begin(fs_data_base(slot), size);
+    while (i < size)
+    {
+        poke(task_cb[abi_cur] + i, in_port32(6));
+        i = i + 1;
+    }
+    task_code[abi_cur] = size;
+
+    // A new image starts with empty data and heap.
+    abi_zero(task_db[abi_cur], ABI_DB_WORDS);
+    used = task_heap[abi_cur] - ABI_USER_HEAP;
+    if (used != 0)
+    {
+        abi_zero(task_hb[abi_cur], used);
+    }
+    task_heap[abi_cur] = ABI_USER_HEAP;
+
+    abi_init_frame(abi_cur);
+    abi_frame_load(abi_cur);
+    sysret();
+}
+
+void abi_sys_sbrk()
+{
+    u32 increment = abi_arg(1);
+    u32 old = task_heap[abi_cur];
+    u32 next = old + increment;
+    u32 i = 0;
+    u32 phys = 0;
+
+    if (increment == 0)
+    {
+        abi_ok(old);
+    }
+    if (next < old || next > ABI_USER_HEAP_END)
+    {
+        abi_fail(ENOMEM);
+    }
+    phys = task_hb[abi_cur] + (old - ABI_USER_HEAP);
+    while (i < increment)
+    {
+        poke(phys + i, 0);
+        i = i + 1;
+    }
+    task_heap[abi_cur] = next;
+    abi_ok(old);
+}
+
+// --- File syscalls ---------------------------------------------------------
+
+void abi_read_file(u32 fd, u32 buf, u32 count)
+{
+    u32 t = abi_cur;
+    u32 idx = fd - 3;
+    u32 entry = task_fd_slot[t * FD_MAX + idx];
+    u32 slot = entry - 1;
+    u32 pos = task_fd_pos[t * FD_MAX + idx];
+    u32 type = 0;
+    u32 size = 0;
+    u32 n = count;
+    u32 i = 0;
+
+    if (entry == 0)
+    {
+        abi_fail(EBADF);
+    }
+    fs_read_entry(slot);
+    type = fs_e_type;
+    size = fs_e_size;
+    if (pos >= size)
+    {
+        abi_ok(0);
+    }
+    if (pos + n > size)
+    {
+        n = size - pos;
+    }
+    if (type == FILE_TEXT)
+    {
+        disk_bytes_read_at(fs_data_base(slot), pos, n);
+        while (i < n)
+        {
+            poke(abi_translate(t, buf + i), disk_bytes_read());
+            i = i + 1;
+        }
+    }
+    else
+    {
+        disk_read_begin(fs_data_base(slot) + pos, n);
+        while (i < n)
+        {
+            poke(abi_translate(t, buf + i), in_port32(6));
+            i = i + 1;
+        }
+    }
+    task_fd_pos[t * FD_MAX + idx] = pos + n;
+    abi_ok(n);
+}
+
+void abi_write_file(u32 fd, u32 buf, u32 count)
+{
+    u32 t = abi_cur;
+    u32 idx = fd - 3;
+    u32 entry = task_fd_slot[t * FD_MAX + idx];
+    u32 slot = entry - 1;
+    u32 pos = task_fd_pos[t * FD_MAX + idx];
+    u32 type = 0;
+    u32 parent = 0;
+    u32 namelen = 0;
+    u32 size = 0;
+    u32 new_size = 0;
+    u32 limit = 0;
+    u32 i = 0;
+
+    if (entry == 0)
+    {
+        abi_fail(EBADF);
+    }
+    fs_read_entry(slot);
+    type = fs_e_type;
+    parent = fs_e_parent;
+    namelen = fs_e_namelen;
+    size = fs_e_size;
+    limit = FILE_CHUNK_WORDS;
+    if (type == FILE_TEXT) { limit = FILE_CHUNK_WORDS * 4; }
+    if (pos + count > limit)
+    {
+        abi_fail(EFBIG);
+    }
+
+    if (type == FILE_TEXT)
+    {
+        disk_bytes_write_at(fs_data_base(slot), pos, count);
+    }
+    else
+    {
+        disk_write_begin(fs_data_base(slot) + pos, count);
+    }
+    while (i < count)
+    {
+        if (type == FILE_TEXT) { disk_bytes_write(abi_user_byte(buf + i)); }
+        else                   { out_port32(6, (u32)abi_user_byte(buf + i)); }
+        i = i + 1;
+    }
+    task_fd_pos[t * FD_MAX + idx] = pos + count;
+    new_size = pos + count;
+    if (new_size > size)
+    {
+        fs_write_entry(slot, type, parent, namelen, new_size);
+    }
+    abi_ok(count);
+}
+
+void abi_sys_write()
+{
+    u32 fd = abi_arg(1);
+    u32 buf = abi_arg(2);
+    u32 count = abi_arg(3);
+
+    if (fd == ABI_STDOUT || fd == ABI_STDERR)
+    {
+        u32 i = 0;
+        while (i < count)
+        {
+            tty_putc32(abi_user_byte(buf + i));
+            i = i + 1;
+        }
+        abi_ok(count);
+    }
+    if (fd >= 3 && fd < 3 + FD_MAX)
+    {
+        abi_write_file(fd, buf, count);
+    }
+    abi_fail(EBADF);
+}
+
+void abi_sys_read()
+{
+    u32 fd = abi_arg(1);
+    u32 buf = abi_arg(2);
+    u32 count = abi_arg(3);
+
+    if (fd == ABI_STDIN)
+    {
+        u32 i = 0;
+        u16 c = tty_getc();
+
+        while (i < count && c != 0)
+        {
+            poke(abi_translate(abi_cur, buf + i), c);
+            i = i + 1;
+            c = tty_getc();
+        }
+        abi_ok(i);
+    }
+    if (fd >= 3 && fd < 3 + FD_MAX)
+    {
+        abi_read_file(fd, buf, count);
+    }
+    abi_fail(EBADF);
+}
+
+void abi_sys_open()
+{
+    u32 path = abi_arg(1);
+    u32 flags = abi_arg(2);
+    u32 len = abi_copy_string(path);
+    u32 slot = fs_resolve_path(0, (u16)len);
+    u32 i = 0;
+    u32 t = abi_cur;
+
+    if (slot == NOT_FOUND && (flags & O_CREAT) != 0)
+    {
+        slot = fs_create(0, (u16)len, FILE_TEXT);
+    }
+    if (slot == ROOT_SLOT || slot == NOT_FOUND)
+    {
+        abi_fail(ENOENT);
+    }
+    if ((flags & O_TRUNC) != 0)
+    {
+        fs_read_entry(slot);
+        if (fs_e_type == FILE_PROGRAM || fs_e_type == FILE_TEXT)
+        {
+            fs_write_entry(slot, fs_e_type, fs_e_parent, fs_e_namelen, 0);
+        }
+    }
+
+    while (i < FD_MAX)
+    {
+        if (task_fd_slot[t * FD_MAX + i] == 0)
+        {
+            task_fd_slot[t * FD_MAX + i] = slot + 1;
+            task_fd_pos[t * FD_MAX + i] = 0;
+            abi_ok(3 + i);
+        }
+        i = i + 1;
+    }
+    abi_fail(EMFILE);
+}
+
+void abi_sys_close()
+{
+    u32 fd = abi_arg(1);
+    u32 t = abi_cur;
+
+    if (fd < 3 || fd >= 3 + FD_MAX)
+    {
+        abi_fail(EBADF);
+    }
+    task_fd_slot[t * FD_MAX + (fd - 3)] = 0;
+    task_fd_pos[t * FD_MAX + (fd - 3)] = 0;
+    abi_ok(0);
+}
+
+void abi_sys_lseek()
+{
+    u32 fd = abi_arg(1);
+    u32 off = abi_arg(2);
+    u32 t = abi_cur;
+    u32 idx = 0;
+
+    if (fd < 3 || fd >= 3 + FD_MAX)
+    {
+        abi_fail(EBADF);
+    }
+    idx = fd - 3;
+    if (task_fd_slot[t * FD_MAX + idx] == 0)
+    {
+        abi_fail(EBADF);
+    }
+    task_fd_pos[t * FD_MAX + idx] = off;
+    abi_ok(off);
+}
+
+// --- FoxFS compatibility syscalls -----------------------------------------
+
+void abi_sys_fs_resolve()
+{
+    u32 line_ptr = abi_arg(1);
+    u32 start = abi_arg(2);
+    u32 end = abi_arg(3);
+
+    abi_copy_line(line_ptr);
+    abi_ok(fs_resolve_path((u16)start, (u16)end));
+}
+
+void abi_sys_fs_create()
+{
+    u32 line_ptr = abi_arg(1);
+    u32 start = abi_arg(2);
+    u32 end = abi_arg(3);
+    u32 type = abi_arg(4);
+
+    abi_copy_line(line_ptr);
+    abi_ok(fs_create((u16)start, (u16)end, type));
+}
+
+void abi_sys_fs_remove()
+{
+    u32 line_ptr = abi_arg(1);
+    u32 start = abi_arg(2);
+    u32 end = abi_arg(3);
+
+    abi_copy_line(line_ptr);
+    abi_ok(fs_remove((u16)start, (u16)end));
+}
+
+void abi_sys_fs_entry()
+{
+    u32 slot = abi_arg(1);
+    u32 type_ptr = abi_arg(2);
+    u32 parent_ptr = abi_arg(3);
+    u32 namelen_ptr = abi_arg(4);
+    u32 size_ptr = abi_arg(5);
+
+    fs_read_entry(slot);
+    if (type_ptr != 0) { abi_put_user32(abi_cur, type_ptr, fs_e_type); }
+    if (parent_ptr != 0) { abi_put_user32(abi_cur, parent_ptr, fs_e_parent); }
+    if (namelen_ptr != 0) { abi_put_user32(abi_cur, namelen_ptr, fs_e_namelen); }
+    if (size_ptr != 0) { abi_put_user32(abi_cur, size_ptr, fs_e_size); }
+    abi_ok(0);
+}
+
+void abi_sys_fs_write_entry()
+{
+    u32 slot = abi_arg(1);
+    u32 type = abi_arg(2);
+    u32 parent = abi_arg(3);
+    u32 namelen = abi_arg(4);
+    u32 size = abi_arg(5);
+
+    fs_write_entry(slot, type, parent, namelen, size);
+    abi_ok(0);
+}
+
+// --- Dispatcher ------------------------------------------------------------
+
+void abi_syscall()
+{
+    u32 nr = abi_arg(0);
+
+    // Every handler ends in sysret(), so these checks are alternatives even
+    // though they are written sequentially.
+    if (nr == SYS_EXIT)             { abi_sys_exit(); }
+    if (nr == SYS_WRITE)            { abi_sys_write(); }
+    if (nr == SYS_READ)             { abi_sys_read(); }
+    if (nr == SYS_OPEN)             { abi_sys_open(); }
+    if (nr == SYS_CLOSE)            { abi_sys_close(); }
+    if (nr == SYS_LSEEK)            { abi_sys_lseek(); }
+    if (nr == SYS_SBRK)             { abi_sys_sbrk(); }
+    if (nr == SYS_GETPID)           { abi_ok(task_pid[abi_cur]); }
+    if (nr == SYS_GETPPID)
+    {
+        if (task_ppid[abi_cur] == NO_TASK) { abi_ok(0); }
+        abi_ok(task_pid[task_ppid[abi_cur]]);
+    }
+    if (nr == SYS_FORK)             { abi_sys_fork(); }
+    if (nr == SYS_EXEC)             { abi_sys_exec(); }
+    if (nr == SYS_WAIT)             { abi_sys_wait(); }
+    if (nr == SYS_YIELD)
+    {
+        abi_frame_save(abi_cur);
+        task_state[abi_cur] = ST_READY;
+        abi_schedule();
+    }
+    if (nr == SYS_FS_RESOLVE)       { abi_sys_fs_resolve(); }
+    if (nr == SYS_FS_CREATE)        { abi_sys_fs_create(); }
+    if (nr == SYS_FS_REMOVE)        { abi_sys_fs_remove(); }
+    if (nr == SYS_FS_ENTRY)         { abi_sys_fs_entry(); }
+    if (nr == SYS_FS_WRITE_ENTRY)   { abi_sys_fs_write_entry(); }
+
+    abi_fail(EINVAL);
+}
+
+void abi_trap_handle(u32 cause)
+{
+    if (cause == ABI_TRAP_QUIT)
+    {
+        abi_host_quit();
+        return;
+    }
+    if (cause == ABI_TRAP_TIMER)
+    {
+        abi_preempt();
+    }
+    abi_syscall();
+}
+
+// abi_trap is entered by VEC, not called. Reset the kernel software stack so
+// abandoned syscall frames cannot accumulate across traps.
+void abi_trap()
+{
+    set_stack_top((u16)abi_kstack);
+    set_frame_base((u16)abi_kstack);
+    abi_trap_handle((u32)peek(ABI_TRAP));
+}
+
+// --- Boot / image loading --------------------------------------------------
+
+void abi_init()
+{
+    abi_kstack = (u32)get_stack_top();
+    abi_cur = NO_TASK;
+    abi_next_pid = 1;
+    abi_shell = 0;
+    sys_setvec((u32)&abi_trap);
+    sys_setksp(ABI_KSTACK);
+    sys_setquant(abi_quantum);
+    sys_irq(0);
+    abi_inited = 1;
+}
+
+void abi_set_shell(u32 entry)
+{
+    abi_shell = entry;
+}
+
+// Start a program whose words are already in the 32-bit disk. Does not
+// return on success.
+void abi_start_disk(u32 disk_word, u32 word_count)
+{
+    u32 task = 0;
+    u32 i = 0;
+
+    if (word_count == 0 || word_count > ABI_CODE_LIMIT)
+    {
+        return;
+    }
+    task = abi_alloc_task(NO_TASK);
+    if (task == NO_TASK)
+    {
+        return;
+    }
+    abi_zero(task_db[task], ABI_DB_WORDS);
+    disk_read_begin(disk_word, word_count);
+    while (i < word_count)
+    {
+        poke(task_cb[task] + i, in_port32(6));
+        i = i + 1;
+    }
+    task_code[task] = word_count;
+    abi_init_frame(task);
+    abi_enter_user(task);
+}
+
+// Start a program embedded in the ROM image.
+void abi_start_embedded(u32 data_offset, u32 word_count)
+{
+    u32 task = 0;
+    u32 i = 0;
+
+    if (word_count == 0 || word_count > ABI_CODE_LIMIT)
+    {
+        return;
+    }
+    task = abi_alloc_task(NO_TASK);
+    if (task == NO_TASK)
+    {
+        return;
+    }
+    abi_zero(task_db[task], ABI_DB_WORDS);
+    while (i < word_count)
+    {
+        poke(task_cb[task] + i, peek(data_offset + i));
+        i = i + 1;
+    }
+    task_code[task] = word_count;
+    abi_init_frame(task);
+    abi_enter_user(task);
+}
+
+// ---------------------------------------------------------------------------
+// Compatibility entry points used by the resident kernel and the shell.
+// ---------------------------------------------------------------------------
+
+void kernel_exec(u32 disk_word, u32 word_count)
+{
+    abi_start_disk(disk_word, word_count);
+}
+
+void kernel_exec_embedded(u32 rom_offset, u32 word_count)
+{
+    abi_start_embedded(rom_offset, word_count);
+}

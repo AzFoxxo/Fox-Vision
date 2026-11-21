@@ -102,6 +102,7 @@ namespace FoxVision
                     _processor.SetKeyboardReport(keyboardReport);
                     return true;
                 },
+                () => _processor.RequestQuitForeground(),
                 (buttons, wheel, dx, dy) =>
                 {
                     _processor.SetMouseState(buttons, (sbyte)wheel, (sbyte)dx, (sbyte)dy);

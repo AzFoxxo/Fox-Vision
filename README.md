@@ -24,6 +24,12 @@ The project is composed of four main components:
 - [X] Linker
 - [X] Decompiler
 - [X] Virtual machine
+- [X] FoxOS syscall ABI with preemptive processes (`fork`/`exec`/`wait`), `malloc`/`free` and Unix-like I/O
+
+FoxOS applications include only `foxos/foxos.fh`. The syscall table, memory
+windows and process model are documented in [docs/abi.md](docs/abi.md); the OS
+itself is described in [docs/foxos.md](docs/foxos.md). The ISA V2.2 trap and
+window extensions are in [docs/isa.md](docs/isa.md).
 
 ## Configuring Emulator Memory
 

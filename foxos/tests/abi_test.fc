@@ -1,0 +1,29 @@
+// ABI regression harness.
+//
+// Builds as a resident kernel image (load address 0), installs the trap
+// vector, then starts the foreground program embedded by foxos_pack.py as
+// the first user process. The user program prints PASS or FAIL; when all
+// processes finish the ABI falls back to abi_idle() and halts the machine.
+
+#include <kernel/kernel.fc>
+#include <foxfs/foxfs.fc>
+#include <kernel/abi.fc>
+
+void main()
+{
+    abi_init();
+    tty_puts("ABI test harness\r\n");
+
+    if (fs_valid() == 0)
+    {
+        fs_format();
+    }
+
+    if (peek(EMBED_BASE) == EMBED_MAGIC)
+    {
+        abi_start_embedded(EMBED_BASE + EMBED_DATA_OFFSET,
+                           peek(EMBED_BASE + EMBED_LEN_OFFSET));
+    }
+
+    tty_puts("FAIL abi (no embedded program)\r\n");
+}

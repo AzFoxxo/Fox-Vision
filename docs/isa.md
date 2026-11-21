@@ -1,11 +1,13 @@
-# Specification of the Fox Vision architecture (ISA V2.0 / V2.1)
+# Specification of the Fox Vision architecture (ISA V2.0 / V2.1 / V2.2)
 
 ## Processor
 
 The CPU is a single threaded 8MHz RISC chip. It uses the FoxVision architecture with support for FoxVision16 legacy operations and FoxVision32 extended operations (introduced in V2.0), featuring 32-bit registers and a 32-bit address bus with configurable 16-bit or 8-bit addressing modes.
 
 ISA V2.1 is an additive revision of V2.0. It introduces the read-only `MS`
-(Memory Size) register; all V2.0 registers and behaviour remain unchanged.
+(Memory Size) register. ISA V2.2 adds trap entry/return instructions, control
+registers for the trap vector and per-process address windows, and a periodic
+timer trap; all V2.0 and V2.1 registers and behaviour remain unchanged.
 
 ### Registers
 
@@ -37,6 +39,13 @@ Writing to an `L` sub-register updates bits 15–0 while preserving bits 31–16
 | 0xE  | R7       | 32-bit | Yes        | General-purpose register #7 (Introduced with ISA V1.11, extended to 32-bit in V2.0). Aliased by `R7L` and `R7H`.                                                                                                                                                                     |
 | 0xF  | AM       | 16-bit | Yes        | Addressing Mode control register (Introduced with ISA V2.0). Defaults to `0x0000`. `0` = 16-bit word addressing, `1` = 8-bit byte addressing. Usable independently from `EM`, but combined with `EM=2` for modern hardware.                                                          |
 | 0x1A | MS       | 32-bit | Read-only  | Memory Size register (Introduced with ISA V2.1). Reports the installed RAM size in 1 KiB units (for example `0x00400000` for 4 GiB). Available when `EM != 0`; a full 32-bit read requires `EM=2`.                                                                                   |
+| 0x1B | VEC      | 32-bit | Yes        | Trap vector address (ISA V2.2). `SYS`, timer and host-quit traps jump here.                                                                                                                                                                                                          |
+| 0x1C | IRQEN    | 16-bit | Yes        | Interrupt enable flag (ISA V2.2). `1` enables the timer trap.                                                                                                                                                                                                                        |
+| 0x1D | KSP      | 32-bit | Yes        | Kernel stack pointer saved/restored across traps (ISA V2.2).                                                                                                                                                                                                                         |
+| 0x1E | DB       | 32-bit | Yes        | Data-window base register (ISA V2.2).                                                                                                                                                                                                                                                |
+| 0x1F | HB       | 32-bit | Yes        | Heap-window base register (ISA V2.2).                                                                                                                                                                                                                                                |
+| 0x30 | CB       | 32-bit | Yes        | Code-window base register (ISA V2.2).                                                                                                                                                                                                                                                |
+| 0x31 | QUANT    | 32-bit | Yes        | Timer quantum in cycles (ISA V2.2). `0` disables periodic traps.                                                                                                                                                                                                                     |
 
 #### 16-Bit Sub-Registers (H / L Versions)
 
@@ -138,9 +147,9 @@ jump** form instead:
 
 - The operand is encoded as a Direct Memory Address (`10`).
 - Two operand words follow the opcode: the low 16 bits first, then the high
-  16 bits. The instruction therefore occupies three words.
+16 bits. The instruction therefore occupies three words.
 - The processor combines the two words into a 32-bit target:
-  `(high << 16) | low`.
+`(high << 16) | low`.
 
 A register operand remains a register-indirect jump (`JMP X` reaches the full
 32-bit value in `X`). In 16-bit modes the wide form is never emitted.
@@ -308,7 +317,7 @@ Behaviour:
 - No instructions are fetched or executed during WAIT state
 - `CYC` continues to increment normally
 - Execution resumes when:
-  - `(CYC - start) >= SRC`
+- `(CYC - start) >= SRC`
 
 ---
 
@@ -375,13 +384,15 @@ Port I/O and FoxOS process-control instructions use the following encodings:
 - `0000 0000` `0011 0010` - `OSRET` - Return from a FoxOS foreground program to the resident OS at address `0`
 - `0000 0000` `0011 0001` - `OUT` `SRC PORT` - Write a value from register `SRC` to port `PORT` (16-bit or 32-bit, per the rules above)
 
-`OSRET` is the only FoxOS-specific CPU opcode. A resident OS starts a
-foreground image with a jump to that image's load address; there is no
-separate `OSSTART` opcode. In `EM = 2` a target above `0xFFFF` uses either the
-wide jump form (two operand words, emitted automatically for labels by
-Fox16ASM) or a register-indirect jump (`JMP X`) with the address materialised
-in a 32-bit register. The FoxC `os_start(address)` built-in emits the
-appropriate form, while `os_return()` emits `OSRET`.
+`OSRET` is the legacy FoxOS process-return opcode. It restarts a resident image
+at address `0` and is used by low-linked kernel code. Foreground programs built
+with a load address above `0xFFFF` finish with `SYS` (`SYS_EXIT`) instead; the
+FoxC `os_return()` built-in chooses the correct form for the target image. A
+resident OS starts a foreground image with a synthetic trap frame and
+`SYSRET`; there is no separate `OSSTART` opcode. In `EM = 2` a target above
+`0xFFFF` uses either the wide jump form (two operand words, emitted
+automatically for labels by Fox16ASM) or a register-indirect jump (`JMP X`)
+with the address materialised in a 32-bit register.
 
 ### Addressing Mode (AM) and 32-bit Architecture (V2.0)
 
@@ -392,12 +403,12 @@ ISA V2.0 introduces the **Addressing Mode (`AM`)** register and the **32-bit Add
 `EM` and `AM` represent orthogonal controls over the memory architecture:
 
 - **`EM` (Extension Mode)** selects the **memory address space width**:
-  - `EM = 0` (`0x0000`): **Legacy 16-bit Address Space** (64K words addressable, 4K ROM limit).
-  - `EM = 1` (`0x0001`): **Extended 16-bit Address Space** (up to 32K words ROM, port I/O enabled).
-  - `EM = 2` (`0x0002`): **32-bit Memory Address Space** (unlocks 32-bit address bus for memory addressing).
+- `EM = 0` (`0x0000`): **Legacy 16-bit Address Space** (64K words addressable, 4K ROM limit).
+- `EM = 1` (`0x0001`): **Extended 16-bit Address Space** (up to 32K words ROM, port I/O enabled).
+- `EM = 2` (`0x0002`): **32-bit Memory Address Space** (unlocks 32-bit address bus for memory addressing).
 - **`AM` (Addressing Mode)** selects the **memory addressing granularity**:
-  - `AM = 0` (`0x0000`): **16-bit Word Addressing** (each address unit indexes a 16-bit word).
-  - `AM = 1` (`0x0001`): **8-bit Byte Addressing** (each address unit indexes an individual 8-bit byte).
+- `AM = 0` (`0x0000`): **16-bit Word Addressing** (each address unit indexes a 16-bit word).
+- `AM = 1` (`0x0001`): **8-bit Byte Addressing** (each address unit indexes an individual 8-bit byte).
 
 `AM=1` and `EM=2` can be used completely independently. Byte addressing (`AM=1`) is the usual choice for modern hardware with a conventional 32-bit byte-addressed memory space. Word addressing (`AM=0`) remains the natural fit for word-oriented toolchains whose labels, globals, stack slots and pointers are all counted in 16-bit words; the FoxC compiler is an example and starts V2 programs with `EM=2, AM=0`.
 
@@ -463,14 +474,62 @@ MOV MS R0       ; R0 = RAM size in KiB
 Writing `MS` is illegal; the assembler rejects it as a destination and the CPU
 raises an illegal-destination error if such an instruction is executed.
 
+#### Traps, windows and preemptive scheduling (ISA V2.2)
+
+ISA V2.2 adds two instructions and seven control registers:
+
+- `0000 0000` `0011 0011` - `SYS` - enter the trap handler at `VEC`. The opcode
+consumes its two operand words. The cause word written to the trap frame is
+`0`.
+- `0000 0000` `0011 0100` - `SYSRET` - return from the trap handler using the
+frame at `VEC`.
+
+`VEC` points to a 40-word trap frame. On entry the CPU saves the cause, user
+PC, SP, X, Y, status, R0–R7, the interrupt flag, `DB`, `HB`, `CB`, `AM`, `EM`
+and `QUANT`. `SYSRET` restores that state, so a resident kernel can deliver a
+syscall or timer trap and resume the interrupted process exactly where it
+stopped.
+
+When `IRQEN = 1` and `QUANT != 0`, the processor raises a trap with cause `1`
+every `QUANT` cycles. Traps are only delivered while running user code; the
+handler starts with interrupts disabled and may re-enable them before
+returning. A time slice is therefore a hardware property, not a cooperative
+yield.
+
+Cause `2` is reserved for a host-requested quit (the FoxVision `Super+Q`
+shortcut). The emulator may deliver this trap while user code is running; the
+operating system's trap handler decides how to terminate the foreground job.
+Kernels without a handler can ignore the cause.
+
+The `DB`, `HB` and `CB` registers relocate three logical windows used by
+processes:
+
+| Window | Logical range               | Relocated by |
+| ------ | --------------------------- | ------------ |
+| Data   | `$A000` – `$EC77`           | `DB`         |
+| Heap   | `0x20000000` – `0x203FFFFF` | `HB`         |
+| Code   | `0x00100000` – `0x008FFFFF` | `CB`         |
+
+A logical address in one of these ranges is translated by adding the
+corresponding base register minus the range start. Addresses outside the
+windows are physical. `DB` applies in both kernel and user mode; `HB` and `CB`
+are consulted only for user code. FoxOS initializes kernel `DB = 0x00043000`,
+so resident globals emitted at `$D000` live physically at `0x43000`, above the
+resident text. This is an address *window* mechanism, not an MMU: it provides
+per-process data and code windows but no privilege rings or page protection.
+
+FoxOS uses these facilities to implement `fork`, `exec`, `wait`, preemptive
+multitasking and `malloc`/`free`. The software contract is documented in
+[abi.md](abi.md).
+
 #### 32-bit Registers and High/Low Sub-Registers
 
 To allow flexible manipulation of 32-bit addresses and data within a 16-bit instruction format:
 - Core registers (`R0`–`R7`, `X`, `Y`, `PC`, `SP`, `CYC`) are 32 bits wide. ISA V2.1 adds the 32-bit read-only `MS` register.
 - For each register, a High (`H`) and Low (`L`) 16-bit sub-register is provided:
-  - Base register (e.g. `R0`): full 32-bit value (`[31:0]`). Used to hold 32-bit memory pointers or 32-bit calculation values.
-  - Low sub-register (e.g. `R0L`): lower 16 bits (`[15:0]`). Reading/writing affects only bits 15–0 while preserving bits 31–16 of the base register.
-  - High sub-register (e.g. `R0H`): upper 16 bits (`[31:16]`). Reading/writing affects only bits 31–16 while preserving bits 15–0 of the base register.
+- Base register (e.g. `R0`): full 32-bit value (`[31:0]`). Used to hold 32-bit memory pointers or 32-bit calculation values.
+- Low sub-register (e.g. `R0L`): lower 16 bits (`[15:0]`). Reading/writing affects only bits 15–0 while preserving bits 31–16 of the base register.
+- High sub-register (e.g. `R0H`): upper 16 bits (`[31:16]`). Reading/writing affects only bits 31–16 while preserving bits 15–0 of the base register.
 
 For example, a 32-bit address pointer can be constructed using 16-bit immediate moves:
 ```assembly
@@ -542,8 +601,8 @@ The Fox Vision architecture memory space is determined by the Extension Mode (`E
 Under 16-bit address space modes, memory addresses are 16 bits wide:
 
 - **When `AM = 0` (16-bit word addressing)**: The device has a total of 65,536 ushort (64K words / 128 KB) of addressable space. Each address indexes a 16-bit word:
-  - **Legacy mode (`EM = 0x0000, AM = 0x0000`)**: `0x0000 - 0x0FFF` ROM (4K words), `0xEC78 - 0xFFFF` VRAM, remaining space available for RAM and VRAM.
-  - **Extension mode (`EM = 0x0001, AM = 0x0000`)**: ROM may expand up to 32K words; VRAM remains fixed at 5000 bytes (`0xEC78 - 0xFFFF`); memory-mapped I/O is removed except for VRAM; port I/O enabled.
+- **Legacy mode (`EM = 0x0000, AM = 0x0000`)**: `0x0000 - 0x0FFF` ROM (4K words), `0xEC78 - 0xFFFF` VRAM, remaining space available for RAM and VRAM.
+- **Extension mode (`EM = 0x0001, AM = 0x0000`)**: ROM may expand up to 32K words; VRAM remains fixed at 5000 bytes (`0xEC78 - 0xFFFF`); memory-mapped I/O is removed except for VRAM; port I/O enabled.
 - **When `AM = 1` (8-bit byte addressing)**: Addresses index 8-bit bytes within a 16-bit address space (up to 64 KB total addressable memory).
 
 ### 32-bit Memory Address Space (`EM = 0x0002`, V2.0)
@@ -551,14 +610,14 @@ Under 16-bit address space modes, memory addresses are 16 bits wide:
 Writing `0x0002` to `EM` enables a full 32-bit address bus for memory:
 
 - **When `AM = 0` (16-bit word addressing)**:
-  - Memory is addressed in 16-bit words across a 32-bit address space.
-  - Up to $2^{32}$ words (8 GB) of addressable space.
+- Memory is addressed in 16-bit words across a 32-bit address space.
+- Up to $2^{32}$ words (8 GB) of addressable space.
 - **When `AM = 1` (8-bit byte addressing — Modern Hardware Target)**:
-  - **Address Bus**: Full 32-bit address bus providing 4 GB (4,294,967,296 bytes) of addressable space.
-  - **Addressing Granularity**: 8-bit (byte-addressed). Address increments reference individual 8-bit bytes.
-  - **Pointers**: Full 32-bit registers (`R0`–`R7`, `X`, `Y`, `SP`, `PC`) serve as 32-bit memory addresses and base pointers.
-  - **Sub-Registers**: `R0L`–`R7L`, `XL`, `YL`, etc., manipulate 16-bit word values or address offsets.
-  - **Stack Pointer**: `SP` acts as a 32-bit pointer to the top of the stack in memory.
+- **Address Bus**: Full 32-bit address bus providing 4 GB (4,294,967,296 bytes) of addressable space.
+- **Addressing Granularity**: 8-bit (byte-addressed). Address increments reference individual 8-bit bytes.
+- **Pointers**: Full 32-bit registers (`R0`–`R7`, `X`, `Y`, `SP`, `PC`) serve as 32-bit memory addresses and base pointers.
+- **Sub-Registers**: `R0L`–`R7L`, `XL`, `YL`, etc., manipulate 16-bit word values or address offsets.
+- **Stack Pointer**: `SP` acts as a 32-bit pointer to the top of the stack in memory.
 
 See [port_devices.md](port_devices.md) for port device specifications and port mappings.
 

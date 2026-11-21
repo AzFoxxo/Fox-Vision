@@ -1,0 +1,126 @@
+// ABI foreground regression program.
+//
+// Runs as a user process under tests/abi_test.fc. It exercises the syscall
+// path, malloc/free, fork, waitpid, exit and preemptive scheduling:
+//
+//   * one child spins in user code without making any syscalls
+//   * a second child exits immediately
+//   * the parent waits only for the second child
+//
+// If the timer did not preempt the spinner, the parent would never observe
+// the quick child's exit.
+
+#include <foxos.fh>
+
+void fail(u8 *why)
+{
+    tty_puts("FAIL ");
+    tty_puts(why);
+    tty_newline();
+    exit(1);
+}
+
+void main()
+{
+    u8 *block = (u8 *)0;
+    u8 abi_file_path[8] = "ABITXT";
+    u8 abi_file_data[8] = "abcdef";
+    u8 abi_file_patch[4] = "XY";
+    u8 abi_file_read[8];
+    u32 spinner = 0;
+    u32 quick = 0;
+    u32 status = 0;
+    u32 got = 0;
+    u32 fd = 0;
+    u32 slot = 0;
+    u32 i = 0;
+
+    tty_puts("ABI user start\r\n");
+
+    if (getpid() != 1)
+    {
+        fail("pid");
+    }
+
+    block = malloc(32);
+    if (block == (u8 *)0)
+    {
+        fail("malloc");
+    }
+    *(block) = 'F';
+    *(block + 1) = 0;
+    if (*(block) != 'F')
+    {
+        fail("heap");
+    }
+    free(block);
+
+    spinner = fork();
+    if (spinner == 0)
+    {
+        // Deliberately never yields or traps.
+        while (1)
+        {
+        }
+    }
+    if (spinner == SYS_ERR)
+    {
+        fail("fork spinner");
+    }
+
+    quick = fork();
+    if (quick == 0)
+    {
+        exit(22);
+    }
+    if (quick == SYS_ERR)
+    {
+        fail("fork quick");
+    }
+
+    got = waitpid(quick, &status);
+    if (got != quick)
+    {
+        fail("waitpid pid");
+    }
+    if (status != 22)
+    {
+        fail("waitpid status");
+    }
+
+    // Byte-packed text through the open/read/write syscalls, including a
+    // write at a byte offset inside a 32-bit word.
+    fd = open(&abi_file_path[0], O_CREAT | O_TRUNC);
+    if (fd == SYS_ERR) { fail("open text"); }
+    if (write(fd, &abi_file_data[0], 6) != 6) { fail("write text"); }
+    if (lseek(fd, 2) != 2) { fail("lseek text"); }
+    if (write(fd, &abi_file_patch[0], 2) != 2) { fail("patch text"); }
+    if (close(fd) == SYS_ERR) { fail("close text"); }
+
+    i = 0;
+    while (i < 6)
+    {
+        line[i] = abi_file_path[i];
+        i = i + 1;
+    }
+    slot = fs_resolve_path(0, 6);
+    if (slot == NOT_FOUND) { fail("resolve text"); }
+    fs_read_entry(slot);
+    if (fs_e_type != FILE_TEXT) { fail("text type"); }
+    if (fs_e_size != 6) { fail("text size"); }
+
+    fd = open(&abi_file_path[0], 0);
+    if (fd == SYS_ERR) { fail("reopen text"); }
+    got = read(fd, &abi_file_read[0], 6);
+    if (got != 6) { fail("read text"); }
+    if (abi_file_read[0] != 'a' || abi_file_read[1] != 'b' ||
+        abi_file_read[2] != 'X' || abi_file_read[3] != 'Y' ||
+        abi_file_read[4] != 'e' || abi_file_read[5] != 'f')
+    {
+        fail("text data");
+    }
+    if (close(fd) == SYS_ERR) { fail("close reread"); }
+
+    tty_puts("PASS ABI\r\n");
+    exit(0);
+}

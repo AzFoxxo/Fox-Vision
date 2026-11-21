@@ -6,22 +6,30 @@ FoxOS is a small 32-bit operating system for the Fox Vision machine. It is the
 `foxos/` project, built from `kernel/kernel.fc`, `foxfs/foxfs.fc`,
 `foxsh/foxsh.fc`, and `apps/graphics_demo/graphics_demo.fc`.
 
-FoxOS targets the V2.0 ISA in `--mode em2_am1`:
+FoxOS targets the V2.2 ISA in `--mode em2_am1`:
 
 - `EM = 2` — 32-bit registers, 32-bit data width, 32-bit memory address bus.
 - `AM = 0` — word addressing, so one address unit is one 16-bit memory word.
 - Storage — a 4 GiB **VF32HardDisk** on **port 6**, driven over the 32-bit bus.
+- Traps — `SYS` for syscalls, `SYSRET` for return, and a periodic timer trap
+  for preemptive scheduling.
+
+User programs see a Unix-like process ABI with `fork`, `exec`, `waitpid`,
+`exit`, `getpid`, file descriptors, `sbrk` and `malloc`/`free`. See
+[abi.md](abi.md) for the syscall table and memory layout.
 
 The resident kernel (`kernel` + `foxfs`) and the interactive shell (`foxsh`)
 are separate ROM images. `build/foxos.bin` never contains shell code; the
 bootable shell is `build/foxsh.bin`, and `build/foxos-with-demo.bin` is that
 image with a foreground program packed in.
 
-FoxOS runs a single foreground program at a time. `run PATH` block-copies a
-file from the disk to the `0x100000` program area and transfers control to it.
-Program files contain raw 16-bit machine words. Programs must be assembled or
-compiled with a `0x100000` load address, and can return control to the resident
-kernel with the `OSRET` instruction.
+FoxOS runs foreground programs as processes in the `0x00100000` code window.
+`run PATH` block-copies a file from the disk into the current process, and
+`install` copies packed ROM programs into `/bin`. Each process gets a private
+data window (`$A000`–`$EC77`), heap window (`0x20000000`–`0x203FFFFF`) and code
+window. Programs are compiled with a `0x100000` load address and include only
+`<foxos.fh>`; they finish with `exit()`/`os_return()`, which emits a `SYS`
+exit syscall. The timer shares CPU time between runnable processes.
 
 ## Building
 
@@ -40,6 +48,7 @@ produce:
 | `foxos/build/foxsh.bin`           | Bootable shell image                          |
 | `foxos/build/graphics_demo.bin`   | Foreground demo at `0x100000`                 |
 | `foxos/build/edit.bin`            | Foreground text editor at `0x100000`          |
+| `foxos/build/brainfuck.bin`       | Foreground Brainfuck interpreter              |
 | `foxos/build/foxos-with-demo.bin` | Shell image with the demo and editor embedded |
 
 If the tools are already installed, use the Makefile directly:
@@ -64,13 +73,15 @@ foxvision --rom foxos/build/foxos-with-demo.bin
 The disk image defaults to `~/vf16/ports/vf32harddisk/port6.img`. Override it
 with `FOXVISION_PORT6_HARDDISK_PATH=/path/to/disk.img`.
 
-For separate compiler stages, the resident kernel is:
+The resident images include the kernel, filesystem and syscall ABI. `boot.fc`
+is the single entry point; its includes pull in the public and internal halves
+of each module. Resident text now extends past `$A000`, so globals are linked
+at `$D000`:
 
 ```sh
-cat foxos/kernel/kernel.fc foxos/foxfs/foxfs.fc foxos/kernel/boot.fc \
-  > /tmp/foxos-image.fc
-foxc -i /tmp/foxos-image.fc -o foxos/build/foxos.bin \
-  --mode em2_am1 --strict-format --load-address 0
+foxc -i foxos/kernel/boot.fc -o foxos/build/foxos.bin \
+  --mode em2_am1 --mapper 2 --rom-version 3 --strict-format \
+  -I foxos --load-address 0 --global-base 0xD000
 ```
 
 To build a foreground graphics program for the OS user area:
@@ -82,13 +93,13 @@ foxc -i foxos/apps/graphics_demo/graphics_demo.fc \
 ```
 
 `tools/foxos_pack.py` embeds a foreground program into the OS ROM at word
-address `0x10000`:
+address `0x20000`:
 
 ```sh
 python3 tools/foxos_pack.py foxos/build/foxsh.bin \
   --embed-program foxos/build/graphics_demo.bin \
   --embed-name graphics \
-  --embed-address 0x10000 \
+  --embed-address 0x20000 \
   --output foxos/build/foxos-with-demo.bin
 ```
 
@@ -107,21 +118,34 @@ run /bin/graphics
 
 ## Memory map
 
-FoxOS addresses memory in 16-bit words (`AM=0`):
+FoxOS addresses memory in 16-bit words (`AM=0`). FoxC emits logical addresses;
+`DB`, `HB` and `CB` relocate data, heap and code references before they reach
+RAM:
 
-| Range               | Contents                                               |
-| ------------------- | ------------------------------------------------------ |
-| `0x0000` – `0x97FF` | Kernel and shell image, constant data                  |
-| `0x9800` – `0x9FFF` | FoxC software stack (frames grow upward from `0x9800`) |
-| `0xA000` – `0xEC77` | FoxC globals                                           |
-| `0xEC78` – `0xFFFF` | VRAM                                                   |
-| `0x00010000`        | Embedded foreground programs placed by `foxos_pack.py` |
-| `0x00100000`        | Foreground program load and execution area             |
+| Logical range               | Contents / physical placement                              |
+| --------------------------- | ---------------------------------------------------------- |
+| `0x0000` – `0xCFFF`         | Early resident kernel, shell and syscall ABI text           |
+| `0xD000` – `0xEC77`         | Resident globals and kernel stack, physically `0x43000`–`0x47C77` |
+| `0xEC78` – `0xFFFF`         | VRAM                                                       |
+| `0x00020000`                | Embedded foreground programs placed by `foxos_pack.py`      |
+| `0x00048000` – `0x0006FC77` | Process data windows (`DB`), one per task slot               |
+| `0x00070000`                | Trap frame (`VEC`) and saved process frames                 |
+| `0x00100000` – `0x008FFFFF` | Process code windows (`CB`)                                 |
+| `0x20000000` – `0x203FFFFF` | Process heap windows (`HB`)                                 |
 
-The 32-bit (EM=2) layout reserves code space up to `0x9800`, about 39 000
-words. The shell image is roughly 34 000 words, which is why the embedded
-programs were moved up to `0x10000` and foreground programs run from
-`0x100000`.
+Resident instruction fetches are physical, so the kernel text can extend past
+`$CFFF`. Resident data accesses in `$A000`–`$EC77` are relocated by `DB`; the
+emulator initializes kernel `DB = 0x00043000`, placing globals emitted at
+`$D000` and the kernel stack in physical memory at `0x43000`–`0x47C77`, above
+the text. Foreground processes instead see `0xA000`–`0xEC77` as their private
+data window, with their own `DB`, `HB` and `CB` bases, so `fork` can copy a
+process without copying the resident OS.
+
+The resident shell is about 75 000 words with the ABI included, so its globals
+are emitted at `$D000` and relocated above the text. Embedded programs start at
+`0x20000`; foreground programs are linked at `0x100000`. Task data windows are
+placed at physical `0x48000 + slot * 0x5000`, above the resident text and the
+embedded records, and end below the trap frame at `0x70000`.
 
 ## VF32HardDisk protocol
 
@@ -160,11 +184,18 @@ FoxFS version `8` uses 32-bit words throughout. Metadata occupies words
 | 2052–10243 | Entry names: sixteen 32-bit words per slot, one ASCII character each |
 |     10244– | File data, one `0x1FF000`-word chunk per slot                        |
 
-An entry record uses one 32-bit word per field: type (`0` free, `1` file,
-`2` directory), parent slot (`512` means the root), name length, and size in
-32-bit words. Packing an entry into a single four-word record lets a lookup
-read one slot with one four-word disk transaction instead of three separate
-table accesses.
+An entry record uses one 32-bit word per field: type (`0` free, `1` program,
+`2` directory, `3` text), parent slot (`512` means the root), name length, and
+size. Type 1 stores legacy word-packed program data, so its size is in 32-bit
+words; type 3 stores four ASCII bytes per word, so its size is in bytes and host
+file managers show the text directly. Packing an entry into a single four-word
+record lets a lookup read one slot with one four-word disk transaction instead
+of three separate table accesses.
+
+Type 3 text files are understood by `edit`, BASIC `LOAD`, the shell `disp`
+command, the Brainfuck interpreter, and the `open`/`read`/`write` syscalls (with
+byte offsets). Type 1 remains word-addressed for compiled ROMs, so `run`/`exec`
+still work unchanged.
 
 Each slot has a fixed data chunk of `0x1FF000` words (just under 8 MiB). All
 512 chunks plus the metadata still fit inside the 2³⁰ 32-bit words in the
@@ -199,19 +230,32 @@ current and parent directories. The prompt displays the current path.
 
 The shell reads and writes ASCII through port 4 and treats Enter as carriage
 return (`0x0D`). It emits CRLF (`0x0D`, `0x0A`) for terminal line endings.
-Programs return to the resident kernel with `OSRET`.
+Programs return to the kernel with `exit()` (a `SYS_EXIT` syscall); the shell
+itself remains resident and is resumed by the scheduler when its children
+exit. Pressing the host `Super+Q` shortcut while a guest program is running
+raises trap cause `2`; the kernel terminates the foreground job (including any
+forked children) and resumes FoxSH. The shortcut has no effect at the shell
+prompt. Because VRAM overlaps the tail of the resident image, the emulator
+restores that range from its boot-time copy before delivering the quit trap, so
+a graphics program cannot leave corrupted shell code behind.
 
-## Regression test
+## Regression tests
 
-`make check` builds `tests/foxfs32_test.fc` against the kernel and filesystem,
-formats a fresh sparse image, then exercises:
+`make check` builds four images and runs each headlessly with a fresh sparse
+disk:
 
-- the v8 header and four-word entry records;
-- directory creation and child lookup;
-- sixteen-character names, duplicate rejection, and reserved `.`/`..` names;
-- 32-bit single-word metadata and data accesses;
-- a multi-word block write and read over the port-6 bus;
-- absolute-path resolution, trailing slashes, and `..` handling;
-- directory, current-directory, and slot reuse rules.
+- `tests/foxfs32_test.fc` checks the v8 header, four-word entry records,
+  directory creation and lookup, name rules, 32-bit disk I/O, path resolution
+  and slot reuse. It prints `PASS`.
+- `tests/abi_test.fc` embeds `tests/abi_user.fc` as a user process and checks
+  syscalls, `malloc`/`free`, preempted children and `waitpid` status. It prints
+  `PASS ABI`.
+- `tests/editor_test.fc` embeds `tests/editor_test_user.fc`, which uses the
+  editor core through `<foxos.fh>` to load a file, edit it, save it and verify
+  the result on disk. It prints `PASS EDITOR`.
+- `tests/exec_test.fc` stores `tests/exec_user.fc` in FoxFS and runs it through
+  the kernel's external-program path, covering the shell's `<program>` command.
+  It prints `PASS EXEC`.
 
-The test prints `PASS` on success and the Makefile target fails if it does not.
+The Makefile target fails if any image omits its success marker or prints
+`FAIL`.

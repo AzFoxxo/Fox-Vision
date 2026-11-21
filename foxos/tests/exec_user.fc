@@ -1,0 +1,14 @@
+// Disk-load regression: external program.
+//
+// The resident harness stores this image in FoxFS and asks the kernel to load
+// it back into a free task code window, exactly like the shell's `<program>`
+// command. Reaching main() means the kernel loaded the file from the disk
+// rather than executing the embedded ROM record in place.
+
+#include <foxos.fh>
+
+void main()
+{
+    tty_puts("PASS EXEC\r\n");
+    exit(0);
+}

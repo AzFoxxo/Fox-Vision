@@ -10,10 +10,10 @@
 //   2              entry count (512)
 //   3              first data word (10244)
 //   4..2051        entry records, 4 words each for slots 0..511:
-//                    +0 type: 0=free 1=file 2=directory
+//                    +0 type: 0=free 1=program 2=directory 3=text
 //                    +1 parent slot (ROOT_SLOT means the root directory)
 //                    +2 name length
-//                    +3 size in 32-bit words (files only)
+//                    +3 size: words for type 1, bytes for type 3
 //   2052..10243    entry names (16 words/slot, one ASCII char per word)
 //   10244..        file data, one FILE_CHUNK_WORDS block per slot
 //

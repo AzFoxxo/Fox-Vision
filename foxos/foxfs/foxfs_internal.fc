@@ -66,7 +66,11 @@ void fs_list(u32 parent, u16 long_format)
             if (long_format)
             {
                 if (fs_e_type == 2) { tty_puts("dir  "); }
-                else                { tty_puts("file "); }
+                else
+                {
+                    if (fs_e_type == 3) { tty_puts("text "); }
+                    else                { tty_puts("file "); }
+                }
             }
             fs_name_print(slot);
             if (fs_e_type == 2) { tty_putc('/'); }
@@ -74,7 +78,8 @@ void fs_list(u32 parent, u16 long_format)
             {
                 tty_puts("  ");
                 tty_putu32(fs_e_size);
-                tty_puts(" words");
+                if (fs_e_type == 3) { tty_puts(" bytes"); }
+                else                { tty_puts(" words"); }
             }
             tty_newline();
             count = count + 1;
@@ -100,7 +105,14 @@ void fs_df()
         if (fs_e_type != 0)
         {
             used = used + 1;
-            if (fs_e_type == 1) { data_words = data_words + fs_e_size; }
+            if (fs_e_type == FILE_PROGRAM) { data_words = data_words + fs_e_size; }
+            else
+            {
+                if (fs_e_type == FILE_TEXT)
+                {
+                    data_words = data_words + (fs_e_size + 3) / 4;
+                }
+            }
         }
         slot = slot + 1;
     }

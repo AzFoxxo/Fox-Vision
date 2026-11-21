@@ -1,0 +1,64 @@
+// Resident harness for the disk-load regression test.
+//
+// Formats a fresh disk, copies the embedded program into a FoxFS file, then
+// runs it with the kernel's external-program path. This covers the shell's
+// `<program>` command without needing interactive input and guards the task
+// data/code windows against overlapping the resident image.
+
+#include <kernel/kernel.fc>
+#include <foxfs/foxfs.fc>
+#include <kernel/abi.fc>
+
+u8 exec_test_name[8] = "EXEC";
+
+void main()
+{
+    u32 i = 0;
+    u32 len = 0;
+    u32 src = 0;
+    u32 slot = 0;
+
+    abi_init();
+
+    if (fs_valid() == 0)
+    {
+        fs_format();
+    }
+
+    if (peek(EMBED_BASE) != EMBED_MAGIC)
+    {
+        tty_puts("FAIL exec (no embedded program)\r\n");
+        return;
+    }
+    len = peek(EMBED_BASE + EMBED_LEN_OFFSET);
+    src = EMBED_BASE + EMBED_DATA_OFFSET;
+
+    line_len = 4;
+    while (i < 4)
+    {
+        line[i] = exec_test_name[i];
+        i = i + 1;
+    }
+
+    slot = fs_create(0, 4, 1);
+    if (slot == ROOT_SLOT || slot == NOT_FOUND)
+    {
+        tty_puts("FAIL exec (create)\r\n");
+        return;
+    }
+    fs_write_entry(slot, 1, ROOT_SLOT, 4, len);
+
+    disk_write_begin(fs_data_base(slot), len);
+    i = 0;
+    while (i < len)
+    {
+        out_port32(6, peek(src + i));
+        i = i + 1;
+    }
+
+    // The kernel allocates an empty task and copies the file into its code
+    // window before entering user mode.
+    abi_start_disk(fs_data_base(slot), len);
+
+    tty_puts("FAIL exec (not started)\r\n");
+}

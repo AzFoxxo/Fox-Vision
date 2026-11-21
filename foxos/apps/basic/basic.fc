@@ -1,0 +1,1947 @@
+// basic.fc - Tiny BASIC interpreter for FoxOS
+//
+// Built as a foreground program at 0x100000 and run from the shell:
+//   run /bin/basic
+//
+// Type a numbered line to store a program, then RUN. For example:
+//   10 PRINT "HELLO FROM FOXOS"
+//   20 GOTO 10
+//   RUN
+//
+// Commands:
+//   <number> text   store or replace a program line
+//   <number>        delete a program line
+//   LIST            list the program
+//   RUN             execute the program
+//   NEW             clear the program
+//   LOAD path       load a numbered BASIC program from FoxFS
+//                   (path may be quoted, e.g. LOAD "/home/test.bas")
+//   DEMO            load a small example program
+//   CLS             clear the screen
+//   HELP            show this help
+//   QUIT / BYE      return to the shell
+//
+// Statements:
+//   PRINT expr | "text" [;|, ...]
+//   LET var = expr          (LET is optional)
+//   INPUT var
+//   IF expr THEN statement  (THEN <line> is shorthand for GOTO <line>)
+//   GOTO line
+//   GOSUB line / RETURN
+//   FOR var = start TO end [STEP n] / NEXT [var]
+//   POKE addr, value        write a 16-bit word at a word address
+//   POKE8 addr, value       write an 8-bit byte at a byte address
+//   POKE32 addr, low [, high]  write a 32-bit value at a word address
+//   PEEK addr, var          read a 16-bit word into a variable
+//   PEEK8 addr, var         read an 8-bit byte into a variable
+//   PEEK32L/H addr, var     read the low/high word of a 32-bit value
+//   OUT port, value         write a 16-bit word to an I/O port
+//   OUT8 port, value        write the low byte to an I/O port
+//   OUT32 port, low[, high] write a 32-bit value to an I/O port
+//   IN port, var            read a 16-bit word from an I/O port
+//   IN8 port, var           read the low byte from an I/O port
+//   IN32 port, low[, high]  read low/high words from an I/O port
+//   END
+//   REM comment
+//
+// Expressions support + - * /, parentheses, comparisons
+// (= <> < > <= >=), decimal and &H/0x hex literals, single-letter
+// variables A-Z with values 0-65535, memory reads, and port reads:
+//   PEEK(addr) PEEK8(addr) PEEK32L(addr) PEEK32H(addr)
+//   IN(port) IN8(port) IN32L(port) IN32H(port)
+//
+// Addresses are full 32-bit values. POKE8/PEEK8 take byte addresses;
+// POKE/PEEK/POKE32/PEEK32L/PEEK32H take word addresses. Ports are
+// 16-bit values; IN32/OUT32 use two 32-bit bus transfers.
+//
+// Uses <foxos.fh> for terminal I/O.
+
+#include <foxos.fh>
+
+// ---------------------------------------------------------------------------
+// Program storage: up to 100 sorted lines of 60 characters.
+// ---------------------------------------------------------------------------
+u16 prog_text[6000];          // 100 lines * 60 characters
+u16 prog_num[100];
+u16 prog_len[100];
+u16 prog_count = 0;
+
+// Single-letter variables A-Z.
+u16 vars[26];
+
+// Current statement parsing state. line[]/line_len come from <foxos.fh>.
+u16 pos = 0;
+u16 tok[12];
+u16 tok_len = 0;
+
+// Execution state.
+u16 cur_pc = 0;
+u16 ctrl_target = 0;          // GOTO/GOSUB line number
+u16 ctrl_pc = 0;              // direct program-index jump (NEXT, RETURN)
+u16 running = 0;
+
+u16 gosub_stack[16];
+u16 gosub_sp = 0;
+
+u16 loop_var[8];
+u16 loop_end[8];
+u16 loop_step[8];
+u16 loop_neg[8];
+u16 loop_body[8];
+u16 loop_sp = 0;
+
+// File-loading scratch buffer.
+u16 load_line[64];
+u16 load_len = 0;
+u16 load_count = 0;
+
+// ---------------------------------------------------------------------------
+// Memory access helpers
+//
+// FoxOS runs with word addressing (AM=0), so LOD/STR move one 16-bit word.
+// An 8-bit address maps to word address/2: even bytes are the low half of the
+// word, odd bytes the high half. 32-bit values occupy two consecutive words,
+// low word first. These helpers reuse FoxC's poke/peek and foxlib's fox_poke32
+// / fox_peek32, so no compiler changes are required.
+// ---------------------------------------------------------------------------
+
+u16 mem_peek(u32 addr)
+{
+    return peek(addr);
+}
+
+void mem_poke(u32 addr, u16 value)
+{
+    poke(addr, value);
+}
+
+u16 mem_peek8(u32 addr)
+{
+    u32 waddr = addr >> 1;
+    u16 w = peek(waddr);
+
+    if ((addr & 1) == 0)
+    {
+        return w & 255;
+    }
+    return (w >> 8) & 255;
+}
+
+void mem_poke8(u32 addr, u16 value)
+{
+    u32 waddr = addr >> 1;
+    u16 w = peek(waddr);
+    u16 b = value & 255;
+
+    if ((addr & 1) == 0)
+    {
+        w = (w & 0xFF00) | b;
+    }
+    else
+    {
+        w = (w & 0x00FF) | (b << 8);
+    }
+    poke(waddr, w);
+}
+
+u16 mem_peek32(u32 addr)
+{
+    return (u16)(fox_peek32(addr) & 0xFFFF);
+}
+
+u16 mem_peek32h(u32 addr)
+{
+    return (u16)((fox_peek32(addr) >> 16) & 0xFFFF);
+}
+
+void mem_poke32(u32 addr, u16 low, u16 high)
+{
+    fox_poke32(addr, ((u32)high << 16) | low);
+}
+
+// Port helpers. FoxC port immediates are fixed at compile time, so the BASIC
+// wrappers use the variable-port builtins that patch the port operand at run time.
+u16 port_in(u16 port)
+{
+    return in_port_v(port);
+}
+
+u16 port_in8(u16 port)
+{
+    return in_port_v(port) & 255;
+}
+
+u16 port_in32l(u16 port)
+{
+    return (u16)in_port32_v(port);
+}
+
+u16 port_in32h(u16 port)
+{
+    return (u16)((in_port32_v(port) >> 16) & 0xFFFF);
+}
+
+void port_out(u16 port, u16 value)
+{
+    out_port_v(port, value);
+}
+
+void port_out8(u16 port, u16 value)
+{
+    out_port_v(port, value & 255);
+}
+
+void port_out32(u16 port, u16 low, u16 high)
+{
+    out_port32_v(port, ((u32)high << 16) | low);
+}
+
+// ---------------------------------------------------------------------------
+// Small character helpers
+// ---------------------------------------------------------------------------
+
+u16 is_space(u16 c)
+{
+    return c == ' ' || c == 9;
+}
+
+u16 is_digit(u16 c)
+{
+    return c >= '0' && c <= '9';
+}
+
+u16 hex_digit(u16 c)
+{
+    if (c >= '0' && c <= '9') { return c - '0'; }
+    if (c >= 'A' && c <= 'F') { return c - 'A' + 10; }
+    if (c >= 'a' && c <= 'f') { return c - 'a' + 10; }
+    return 255;
+}
+
+u16 is_hex_digit(u16 c)
+{
+    return hex_digit(c) != 255;
+}
+
+u16 is_alpha(u16 c)
+{
+    return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z');
+}
+
+u16 to_upper(u16 c)
+{
+    if (c >= 'a' && c <= 'z')
+    {
+        return c - 32;
+    }
+    return c;
+}
+
+u16 var_index(u16 c)
+{
+    c = to_upper(c);
+    if (c >= 'A' && c <= 'Z')
+    {
+        return c - 'A';
+    }
+    return 26;
+}
+
+void skip_spaces()
+{
+    while (pos < line_len && is_space(line[pos]))
+    {
+        pos = pos + 1;
+    }
+}
+
+void read_word()
+{
+    tok_len = 0;
+    while (pos < line_len && (is_alpha(line[pos]) || is_digit(line[pos])))
+    {
+        if (tok_len < 11)
+        {
+            tok[tok_len] = to_upper(line[pos]);
+            tok_len = tok_len + 1;
+        }
+        pos = pos + 1;
+    }
+}
+
+// Compare the current token with an uppercase C string.
+u16 tok_eq(u8 *s)
+{
+    u16 i = 0;
+
+    while (i < tok_len)
+    {
+        if (tok[i] != *s)
+        {
+            return 0;
+        }
+        s = s + 1;
+        i = i + 1;
+    }
+    return *s == 0;
+}
+
+void basic_error(u8 *msg)
+{
+    tty_puts(msg);
+    if (running != 0)
+    {
+        tty_puts(" AT ");
+        tty_putu32(prog_num[cur_pc]);
+    }
+    tty_newline();
+}
+
+u16 syntax_error()
+{
+    basic_error("?SYNTAX ERROR");
+    return 1;
+}
+
+// ---------------------------------------------------------------------------
+// Expression parser (recursive descent)
+// ---------------------------------------------------------------------------
+
+u16 parse_expr();
+u16 parse_add();
+u16 parse_mul();
+u16 parse_unary();
+u16 parse_primary();
+
+u32 parse_addr();
+u32 parse_addr_add();
+u32 parse_addr_mul();
+u32 parse_addr_unary();
+u32 parse_addr_primary();
+
+void basic_read_line();
+
+// Parse a hex literal in &Hxxxx, 0xxxxx, or $xxxx form.
+u32 parse_hex_number()
+{
+    u32 v = 0;
+    u16 d = 0;
+
+    if (line[pos] == '$')
+    {
+        pos = pos + 1;
+    }
+    else
+    {
+        if (line[pos] == '&' && pos + 1 < line_len &&
+            (line[pos + 1] == 'H' || line[pos + 1] == 'h'))
+        {
+            pos = pos + 2;
+        }
+        else
+        {
+            if (line[pos] == '0' && pos + 1 < line_len &&
+                (line[pos + 1] == 'X' || line[pos + 1] == 'x'))
+            {
+                pos = pos + 2;
+            }
+            else
+            {
+                return 0;
+            }
+        }
+    }
+
+    while (pos < line_len && is_hex_digit(line[pos]))
+    {
+        d = hex_digit(line[pos]);
+        v = v * 16 + d;
+        pos = pos + 1;
+    }
+    return v;
+}
+
+// Full 32-bit expression grammar for memory addresses. It deliberately has no
+// comparisons; ordinary BASIC values remain 16-bit.
+u32 parse_addr_primary()
+{
+    u32 v = 0;
+    u16 idx = 0;
+
+    skip_spaces();
+    if (pos >= line_len)
+    {
+        return 0;
+    }
+
+    if (line[pos] == '(')
+    {
+        pos = pos + 1;
+        v = parse_addr();
+        skip_spaces();
+        if (pos < line_len && line[pos] == ')')
+        {
+            pos = pos + 1;
+        }
+        return v;
+    }
+
+    if (line[pos] == '$' ||
+        (line[pos] == '&' && pos + 1 < line_len) ||
+        (line[pos] == '0' && pos + 1 < line_len &&
+         (line[pos + 1] == 'X' || line[pos + 1] == 'x')))
+    {
+        return parse_hex_number();
+    }
+
+    if (is_digit(line[pos]))
+    {
+        v = 0;
+        while (pos < line_len && is_digit(line[pos]))
+        {
+            v = v * 10 + (line[pos] - '0');
+            pos = pos + 1;
+        }
+        return v;
+    }
+
+    if (is_alpha(line[pos]))
+    {
+        idx = var_index(line[pos]);
+        pos = pos + 1;
+        if (idx < 26)
+        {
+            return vars[idx];
+        }
+    }
+    return 0;
+}
+
+u32 parse_addr_unary()
+{
+    u32 v = 0;
+
+    skip_spaces();
+    if (pos < line_len && line[pos] == '-')
+    {
+        pos = pos + 1;
+        v = parse_addr_unary();
+        return 0 - v;
+    }
+    if (pos < line_len && line[pos] == '+')
+    {
+        pos = pos + 1;
+        return parse_addr_unary();
+    }
+    return parse_addr_primary();
+}
+
+u32 parse_addr_mul()
+{
+    u32 v = parse_addr_unary();
+    u32 op = 0;
+    u32 rhs = 0;
+
+    while (1)
+    {
+        skip_spaces();
+        if (pos >= line_len)
+        {
+            return v;
+        }
+        op = line[pos];
+        if (op != '*' && op != '/')
+        {
+            return v;
+        }
+        pos = pos + 1;
+        rhs = parse_addr_unary();
+        if (op == '*')
+        {
+            v = v * rhs;
+        }
+        else
+        {
+            if (rhs != 0) { v = v / rhs; }
+            else          { v = 0; }
+        }
+    }
+    return v;
+}
+
+u32 parse_addr_add()
+{
+    u32 v = parse_addr_mul();
+    u32 op = 0;
+    u32 rhs = 0;
+
+    while (1)
+    {
+        skip_spaces();
+        if (pos >= line_len)
+        {
+            return v;
+        }
+        op = line[pos];
+        if (op != '+' && op != '-')
+        {
+            return v;
+        }
+        pos = pos + 1;
+        rhs = parse_addr_mul();
+        if (op == '+') { v = v + rhs; }
+        else           { v = v - rhs; }
+    }
+    return v;
+}
+
+u32 parse_addr()
+{
+    return parse_addr_add();
+}
+
+u16 parse_primary()
+{
+    u16 v = 0;
+    u16 idx = 0;
+    u16 start = 0;
+    u32 addr = 0;
+    u32 port = 0;
+
+    skip_spaces();
+    if (pos >= line_len)
+    {
+        return 0;
+    }
+
+    if (line[pos] == '(')
+    {
+        pos = pos + 1;
+        v = parse_expr();
+        skip_spaces();
+        if (pos < line_len && line[pos] == ')')
+        {
+            pos = pos + 1;
+        }
+        return v;
+    }
+
+    if (line[pos] == '$' ||
+        (line[pos] == '&' && pos + 1 < line_len) ||
+        (line[pos] == '0' && pos + 1 < line_len &&
+         (line[pos + 1] == 'X' || line[pos + 1] == 'x')))
+    {
+        return (u16)parse_hex_number();
+    }
+
+    if (is_digit(line[pos]))
+    {
+        v = 0;
+        while (pos < line_len && is_digit(line[pos]))
+        {
+            v = v * 10 + (line[pos] - '0');
+            pos = pos + 1;
+        }
+        return v;
+    }
+
+    if (is_alpha(line[pos]))
+    {
+        start = pos;
+        read_word();
+        if (tok_eq("PEEK") || tok_eq("PEEK8") ||
+            tok_eq("PEEK32L") || tok_eq("PEEK32H"))
+        {
+            skip_spaces();
+            if (pos < line_len && line[pos] == '(')
+            {
+                pos = pos + 1;
+                addr = parse_addr();
+                skip_spaces();
+                if (pos < line_len && line[pos] == ')')
+                {
+                    pos = pos + 1;
+                }
+            }
+            if (tok_eq("PEEK"))    { return mem_peek(addr); }
+            if (tok_eq("PEEK8"))   { return mem_peek8(addr); }
+            if (tok_eq("PEEK32L")) { return mem_peek32(addr); }
+            return mem_peek32h(addr);
+        }
+
+        if (tok_eq("IN") || tok_eq("IN8") ||
+            tok_eq("IN32L") || tok_eq("IN32H"))
+        {
+            skip_spaces();
+            if (pos < line_len && line[pos] == '(')
+            {
+                pos = pos + 1;
+                port = parse_addr();
+                skip_spaces();
+                if (pos < line_len && line[pos] == ')')
+                {
+                    pos = pos + 1;
+                }
+            }
+            if (tok_eq("IN"))     { return port_in((u16)port); }
+            if (tok_eq("IN8"))    { return port_in8((u16)port); }
+            if (tok_eq("IN32L"))  { return port_in32l((u16)port); }
+            return port_in32h((u16)port);
+        }
+
+        // Not a function: restore the cursor and parse a variable.
+        pos = start;
+        idx = var_index(line[pos]);
+        pos = pos + 1;
+        if (idx < 26)
+        {
+            return vars[idx];
+        }
+        return 0;
+    }
+
+    return 0;
+}
+
+u16 parse_unary()
+{
+    u16 v = 0;
+
+    skip_spaces();
+    if (pos < line_len && line[pos] == '-')
+    {
+        pos = pos + 1;
+        v = parse_unary();
+        return 0 - v;
+    }
+    if (pos < line_len && line[pos] == '+')
+    {
+        pos = pos + 1;
+        return parse_unary();
+    }
+    return parse_primary();
+}
+
+u16 parse_mul()
+{
+    u16 v = parse_unary();
+    u16 op = 0;
+    u16 rhs = 0;
+
+    while (1)
+    {
+        skip_spaces();
+        if (pos >= line_len)
+        {
+            return v;
+        }
+        op = line[pos];
+        if (op != '*' && op != '/')
+        {
+            return v;
+        }
+        pos = pos + 1;
+        rhs = parse_unary();
+        if (op == '*')
+        {
+            v = v * rhs;
+        }
+        else
+        {
+            if (rhs != 0)
+            {
+                v = v / rhs;
+            }
+            else
+            {
+                v = 0;
+            }
+        }
+    }
+    return v;
+}
+
+u16 parse_add()
+{
+    u16 v = parse_mul();
+    u16 op = 0;
+    u16 rhs = 0;
+
+    while (1)
+    {
+        skip_spaces();
+        if (pos >= line_len)
+        {
+            return v;
+        }
+        op = line[pos];
+        if (op != '+' && op != '-')
+        {
+            return v;
+        }
+        pos = pos + 1;
+        rhs = parse_mul();
+        if (op == '+')
+        {
+            v = v + rhs;
+        }
+        else
+        {
+            v = v - rhs;
+        }
+    }
+    return v;
+}
+
+u16 parse_expr()
+{
+    u16 v = parse_add();
+    u16 op = 0;
+    u16 rhs = 0;
+
+    skip_spaces();
+    if (pos >= line_len)
+    {
+        return v;
+    }
+
+    op = line[pos];
+    if (op == '=')
+    {
+        pos = pos + 1;
+        rhs = parse_add();
+        if (v == rhs) { return 1; }
+        return 0;
+    }
+    if (op == '<')
+    {
+        pos = pos + 1;
+        if (pos < line_len && line[pos] == '>')
+        {
+            pos = pos + 1;
+            rhs = parse_add();
+            if (v != rhs) { return 1; }
+            return 0;
+        }
+        if (pos < line_len && line[pos] == '=')
+        {
+            pos = pos + 1;
+            rhs = parse_add();
+            if (v <= rhs) { return 1; }
+            return 0;
+        }
+        rhs = parse_add();
+        if (v < rhs) { return 1; }
+        return 0;
+    }
+    if (op == '>')
+    {
+        pos = pos + 1;
+        if (pos < line_len && line[pos] == '=')
+        {
+            pos = pos + 1;
+            rhs = parse_add();
+            if (v >= rhs) { return 1; }
+            return 0;
+        }
+        rhs = parse_add();
+        if (v > rhs) { return 1; }
+        return 0;
+    }
+
+    return v;
+}
+
+// ---------------------------------------------------------------------------
+// Program storage helpers
+// ---------------------------------------------------------------------------
+
+u16 prog_find(u16 num)
+{
+    u16 i = 0;
+
+    while (i < prog_count)
+    {
+        if (prog_num[i] == num)
+        {
+            return i;
+        }
+        i = i + 1;
+    }
+    return 65535;
+}
+
+void prog_set(u16 num, u16 start, u16 end)
+{
+    u16 i = 0;
+    u16 j = 0;
+    u16 k = 0;
+    u16 len = end - start;
+
+    while (i < prog_count && prog_num[i] < num)
+    {
+        i = i + 1;
+    }
+
+    if (i < prog_count && prog_num[i] == num)
+    {
+        prog_len[i] = len;
+        j = 0;
+        while (j < len)
+        {
+            prog_text[i * 60 + j] = line[start + j];
+            j = j + 1;
+        }
+        return;
+    }
+
+    if (prog_count >= 100)
+    {
+        basic_error("?PROGRAM FULL");
+        return;
+    }
+
+    j = prog_count;
+    while (j > i)
+    {
+        prog_num[j] = prog_num[j - 1];
+        prog_len[j] = prog_len[j - 1];
+        k = 0;
+        while (k < 60)
+        {
+            prog_text[j * 60 + k] = prog_text[(j - 1) * 60 + k];
+            k = k + 1;
+        }
+        j = j - 1;
+    }
+
+    prog_num[i] = num;
+    prog_len[i] = len;
+    j = 0;
+    while (j < len)
+    {
+        prog_text[i * 60 + j] = line[start + j];
+        j = j + 1;
+    }
+    prog_count = prog_count + 1;
+}
+
+void prog_delete(u16 num)
+{
+    u16 i = 0;
+    u16 j = 0;
+    u16 k = 0;
+
+    while (i < prog_count && prog_num[i] != num)
+    {
+        i = i + 1;
+    }
+    if (i >= prog_count)
+    {
+        return;
+    }
+
+    j = i;
+    while (j + 1 < prog_count)
+    {
+        prog_num[j] = prog_num[j + 1];
+        prog_len[j] = prog_len[j + 1];
+        k = 0;
+        while (k < 60)
+        {
+            prog_text[j * 60 + k] = prog_text[(j + 1) * 60 + k];
+            k = k + 1;
+        }
+        j = j + 1;
+    }
+    prog_count = prog_count - 1;
+}
+
+void prog_set_cstr(u16 num, u8 *s)
+{
+    u16 i = 0;
+
+    while (*s != 0 && i < 60)
+    {
+        line[i] = *s;
+        s = s + 1;
+        i = i + 1;
+    }
+    prog_set(num, 0, i);
+}
+
+void basic_load_line(u16 idx)
+{
+    u16 i = 0;
+
+    line_len = prog_len[idx];
+    while (i < line_len)
+    {
+        line[i] = prog_text[idx * 60 + i];
+        i = i + 1;
+    }
+    pos = 0;
+}
+
+// ---------------------------------------------------------------------------
+// Statements
+// ---------------------------------------------------------------------------
+
+u16 st_let()
+{
+    u16 idx = 0;
+
+    skip_spaces();
+    if (pos >= line_len || is_alpha(line[pos]) == 0)
+    {
+        return syntax_error();
+    }
+    idx = var_index(line[pos]);
+    pos = pos + 1;
+    skip_spaces();
+    if (pos >= line_len || line[pos] != '=')
+    {
+        return syntax_error();
+    }
+    pos = pos + 1;
+    vars[idx] = parse_expr();
+    return 0;
+}
+
+u16 st_print()
+{
+    u16 suppress = 0;
+    u16 v = 0;
+    u16 done = 0;
+
+    while (done == 0)
+    {
+        skip_spaces();
+        if (pos >= line_len)
+        {
+            done = 1;
+        }
+        else
+        {
+            if (line[pos] == '"')
+            {
+                pos = pos + 1;
+                while (pos < line_len && line[pos] != '"')
+                {
+                    tty_putc(line[pos]);
+                    pos = pos + 1;
+                }
+                if (pos < line_len)
+                {
+                    pos = pos + 1;
+                }
+                suppress = 0;
+            }
+            else
+            {
+                if (line[pos] == ';')
+                {
+                    pos = pos + 1;
+                    suppress = 1;
+                }
+                else
+                {
+                    if (line[pos] == ',')
+                    {
+                        pos = pos + 1;
+                        tty_putc(' ');
+                        suppress = 0;
+                    }
+                    else
+                    {
+                        v = parse_expr();
+                        tty_putu32(v);
+                        suppress = 0;
+
+                        skip_spaces();
+                        if (pos >= line_len)
+                        {
+                            done = 1;
+                        }
+                        else
+                        {
+                            if (line[pos] != ';' && line[pos] != ',')
+                            {
+                                done = 1;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if (suppress == 0)
+    {
+        tty_newline();
+    }
+    return 0;
+}
+
+u16 st_input()
+{
+    u16 idx = 0;
+
+    skip_spaces();
+    if (pos >= line_len || is_alpha(line[pos]) == 0)
+    {
+        return syntax_error();
+    }
+    idx = var_index(line[pos]);
+    pos = pos + 1;
+
+    tty_puts("? ");
+    basic_read_line();
+
+    pos = 0;
+    vars[idx] = parse_expr();
+    return 0;
+}
+
+u16 exec_stmt();
+
+u16 st_if()
+{
+    u16 cond = 0;
+
+    cond = parse_expr();
+    skip_spaces();
+    read_word();
+    if (tok_eq("THEN") == 0)
+    {
+        return syntax_error();
+    }
+
+    if (cond == 0)
+    {
+        return 0;
+    }
+
+    skip_spaces();
+    if (pos >= line_len)
+    {
+        return 0;
+    }
+
+    // IF expr THEN 100 is shorthand for GOTO 100.
+    if (is_digit(line[pos]))
+    {
+        ctrl_target = parse_expr();
+        return 2;
+    }
+
+    return exec_stmt();
+}
+
+u16 st_goto()
+{
+    ctrl_target = parse_expr();
+    return 2;
+}
+
+u16 st_gosub()
+{
+    if (gosub_sp >= 16)
+    {
+        basic_error("?GOSUB STACK FULL");
+        return 1;
+    }
+    gosub_stack[gosub_sp] = cur_pc + 1;
+    gosub_sp = gosub_sp + 1;
+    ctrl_target = parse_expr();
+    return 3;
+}
+
+u16 st_return()
+{
+    if (gosub_sp == 0)
+    {
+        basic_error("?RETURN WITHOUT GOSUB");
+        return 1;
+    }
+    gosub_sp = gosub_sp - 1;
+    ctrl_pc = gosub_stack[gosub_sp];
+    return 6;
+}
+
+u16 st_for()
+{
+    u16 idx = 0;
+    u16 start = 0;
+    u16 end = 0;
+    u16 step = 1;
+    u16 neg = 0;
+
+    skip_spaces();
+    if (pos >= line_len || is_alpha(line[pos]) == 0)
+    {
+        return syntax_error();
+    }
+    idx = var_index(line[pos]);
+    pos = pos + 1;
+
+    skip_spaces();
+    if (pos >= line_len || line[pos] != '=')
+    {
+        return syntax_error();
+    }
+    pos = pos + 1;
+    start = parse_expr();
+
+    skip_spaces();
+    read_word();
+    if (tok_eq("TO") == 0)
+    {
+        return syntax_error();
+    }
+    end = parse_expr();
+
+    skip_spaces();
+    if (pos < line_len)
+    {
+        read_word();
+        if (tok_len > 0 && tok_eq("STEP"))
+        {
+            skip_spaces();
+            if (pos < line_len && line[pos] == '-')
+            {
+                neg = 1;
+                pos = pos + 1;
+            }
+            step = parse_expr();
+            if (step == 0)
+            {
+                step = 1;
+            }
+        }
+    }
+
+    if (loop_sp >= 8)
+    {
+        basic_error("?LOOP STACK FULL");
+        return 1;
+    }
+
+    loop_var[loop_sp] = idx;
+    loop_end[loop_sp] = end;
+    loop_step[loop_sp] = step;
+    loop_neg[loop_sp] = neg;
+    loop_body[loop_sp] = cur_pc + 1;
+    loop_sp = loop_sp + 1;
+
+    vars[idx] = start;
+    return 0;
+}
+
+u16 st_next()
+{
+    u16 i = 0;
+    u16 idx = 0;
+    u16 v = 0;
+
+    if (loop_sp == 0)
+    {
+        basic_error("?NEXT WITHOUT FOR");
+        return 1;
+    }
+    i = loop_sp - 1;
+
+    skip_spaces();
+    if (pos < line_len && is_alpha(line[pos]))
+    {
+        idx = var_index(line[pos]);
+        pos = pos + 1;
+        if (idx != loop_var[i])
+        {
+            basic_error("?NEXT VARIABLE MISMATCH");
+            return 1;
+        }
+    }
+
+    v = vars[loop_var[i]];
+    if (loop_neg[i] == 0)
+    {
+        v = v + loop_step[i];
+        vars[loop_var[i]] = v;
+        if (v <= loop_end[i])
+        {
+            ctrl_pc = loop_body[i];
+            return 6;
+        }
+    }
+    else
+    {
+        if (v < loop_step[i])
+        {
+            loop_sp = loop_sp - 1;
+            return 0;
+        }
+        v = v - loop_step[i];
+        vars[loop_var[i]] = v;
+        if (v >= loop_end[i])
+        {
+            ctrl_pc = loop_body[i];
+            return 6;
+        }
+    }
+
+    loop_sp = loop_sp - 1;
+    return 0;
+}
+
+// ---------------------------------------------------------------------------
+// Memory statements
+// ---------------------------------------------------------------------------
+
+u16 parse_comma()
+{
+    skip_spaces();
+    if (pos >= line_len || line[pos] != ',')
+    {
+        return syntax_error();
+    }
+    pos = pos + 1;
+    return 0;
+}
+
+u16 parse_var_target()
+{
+    u16 idx = 26;
+
+    skip_spaces();
+    if (pos < line_len && is_alpha(line[pos]))
+    {
+        idx = var_index(line[pos]);
+        pos = pos + 1;
+    }
+    if (idx >= 26)
+    {
+        syntax_error();
+        return 26;
+    }
+    return idx;
+}
+
+u16 st_poke()
+{
+    u32 addr = 0;
+    u16 value = 0;
+
+    addr = parse_addr();
+    if (parse_comma() != 0) { return 1; }
+    value = parse_expr();
+    mem_poke(addr, value);
+    return 0;
+}
+
+u16 st_poke8()
+{
+    u32 addr = 0;
+    u16 value = 0;
+
+    addr = parse_addr();
+    if (parse_comma() != 0) { return 1; }
+    value = parse_expr();
+    mem_poke8(addr, value);
+    return 0;
+}
+
+u16 st_poke32()
+{
+    u32 addr = 0;
+    u16 low = 0;
+    u16 high = 0;
+
+    addr = parse_addr();
+    if (parse_comma() != 0) { return 1; }
+    low = parse_expr();
+
+    skip_spaces();
+    if (pos < line_len && line[pos] == ',')
+    {
+        pos = pos + 1;
+        high = parse_expr();
+    }
+    mem_poke32(addr, low, high);
+    return 0;
+}
+
+u16 st_peek()
+{
+    u32 addr = 0;
+    u16 idx = 26;
+
+    addr = parse_addr();
+    if (parse_comma() != 0) { return 1; }
+    idx = parse_var_target();
+    if (idx >= 26) { return 1; }
+    vars[idx] = mem_peek(addr);
+    return 0;
+}
+
+u16 st_peek8()
+{
+    u32 addr = 0;
+    u16 idx = 26;
+
+    addr = parse_addr();
+    if (parse_comma() != 0) { return 1; }
+    idx = parse_var_target();
+    if (idx >= 26) { return 1; }
+    vars[idx] = mem_peek8(addr);
+    return 0;
+}
+
+u16 st_peek32l()
+{
+    u32 addr = 0;
+    u16 idx = 26;
+
+    addr = parse_addr();
+    if (parse_comma() != 0) { return 1; }
+    idx = parse_var_target();
+    if (idx >= 26) { return 1; }
+    vars[idx] = mem_peek32(addr);
+    return 0;
+}
+
+u16 st_peek32h()
+{
+    u32 addr = 0;
+    u16 idx = 26;
+
+    addr = parse_addr();
+    if (parse_comma() != 0) { return 1; }
+    idx = parse_var_target();
+    if (idx >= 26) { return 1; }
+    vars[idx] = mem_peek32h(addr);
+    return 0;
+}
+
+u16 st_out()
+{
+    u32 port = 0;
+    u16 value = 0;
+
+    port = parse_addr();
+    if (parse_comma() != 0) { return 1; }
+    value = parse_expr();
+    port_out((u16)port, value);
+    return 0;
+}
+
+u16 st_out8()
+{
+    u32 port = 0;
+    u16 value = 0;
+
+    port = parse_addr();
+    if (parse_comma() != 0) { return 1; }
+    value = parse_expr();
+    port_out8((u16)port, value);
+    return 0;
+}
+
+u16 st_out32()
+{
+    u32 port = 0;
+    u16 low = 0;
+    u16 high = 0;
+
+    port = parse_addr();
+    if (parse_comma() != 0) { return 1; }
+    low = parse_expr();
+
+    skip_spaces();
+    if (pos < line_len && line[pos] == ',')
+    {
+        pos = pos + 1;
+        high = parse_expr();
+    }
+    port_out32((u16)port, low, high);
+    return 0;
+}
+
+u16 st_in()
+{
+    u32 port = 0;
+    u16 idx = 26;
+
+    port = parse_addr();
+    if (parse_comma() != 0) { return 1; }
+    idx = parse_var_target();
+    if (idx >= 26) { return 1; }
+    vars[idx] = port_in((u16)port);
+    return 0;
+}
+
+u16 st_in8()
+{
+    u32 port = 0;
+    u16 idx = 26;
+
+    port = parse_addr();
+    if (parse_comma() != 0) { return 1; }
+    idx = parse_var_target();
+    if (idx >= 26) { return 1; }
+    vars[idx] = port_in8((u16)port);
+    return 0;
+}
+
+u16 st_in32()
+{
+    u32 port = 0;
+    u16 low_idx = 26;
+    u16 high_idx = 26;
+    u32 value = 0;
+
+    port = parse_addr();
+    if (parse_comma() != 0) { return 1; }
+    low_idx = parse_var_target();
+    if (low_idx >= 26) { return 1; }
+
+    skip_spaces();
+    if (pos < line_len && line[pos] == ',')
+    {
+        pos = pos + 1;
+        high_idx = parse_var_target();
+        if (high_idx >= 26) { return 1; }
+    }
+
+    value = in_port32_v((u16)port);
+    vars[low_idx] = (u16)(value & 0xFFFF);
+    if (high_idx < 26)
+    {
+        vars[high_idx] = (u16)((value >> 16) & 0xFFFF);
+    }
+    return 0;
+}
+
+u16 exec_stmt()
+{
+    u16 stmt_start = 0;
+
+    skip_spaces();
+    stmt_start = pos;
+    read_word();
+
+    if (tok_len == 0)
+    {
+        return 0;
+    }
+    if (tok_eq("PRINT")) { return st_print(); }
+    if (tok_eq("INPUT")) { return st_input(); }
+    if (tok_eq("IF"))    { return st_if(); }
+    if (tok_eq("GOTO"))  { return st_goto(); }
+    if (tok_eq("GOSUB")) { return st_gosub(); }
+    if (tok_eq("RETURN")){ return st_return(); }
+    if (tok_eq("FOR"))   { return st_for(); }
+    if (tok_eq("NEXT"))  { return st_next(); }
+    if (tok_eq("POKE"))  { return st_poke(); }
+    if (tok_eq("POKE8")) { return st_poke8(); }
+    if (tok_eq("POKE32")){ return st_poke32(); }
+    if (tok_eq("PEEK"))    { return st_peek(); }
+    if (tok_eq("PEEK8"))   { return st_peek8(); }
+    if (tok_eq("PEEK32L")) { return st_peek32l(); }
+    if (tok_eq("PEEK32H")) { return st_peek32h(); }
+    if (tok_eq("OUT"))     { return st_out(); }
+    if (tok_eq("OUT8"))    { return st_out8(); }
+    if (tok_eq("OUT32"))   { return st_out32(); }
+    if (tok_eq("IN"))      { return st_in(); }
+    if (tok_eq("IN8"))     { return st_in8(); }
+    if (tok_eq("IN32"))    { return st_in32(); }
+    if (tok_eq("END"))   { return 1; }
+    if (tok_eq("REM"))   { return 0; }
+    if (tok_eq("LET"))   { return st_let(); }
+    if (tok_eq("CLS"))
+    {
+        tty_putc(27); tty_puts("[2J");
+        tty_putc(27); tty_puts("[H");
+        return 0;
+    }
+
+    // A lone variable name starts an assignment with an implicit LET.
+    if (tok_len == 1)
+    {
+        pos = stmt_start;
+        return st_let();
+    }
+
+    return syntax_error();
+}
+
+// ---------------------------------------------------------------------------
+// Terminal input
+// ---------------------------------------------------------------------------
+
+void basic_read_line()
+{
+    u16 c = 0;
+
+    line_len = 0;
+    while (1)
+    {
+        c = tty_getc();
+        if (c != 0)
+        {
+            if (c == 13 || c == 10)
+            {
+                tty_newline();
+                return;
+            }
+            if (c == 8 || c == 127)
+            {
+                if (line_len > 0)
+                {
+                    line_len = line_len - 1;
+                    tty_putc(8);
+                    tty_putc(' ');
+                    tty_putc(8);
+                }
+            }
+            else
+            {
+                if (c >= 32 && c < 127)
+                {
+                    if (line_len < 60)
+                    {
+                        line[line_len] = c;
+                        line_len = line_len + 1;
+                        tty_putc(c);
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Immediate-mode commands
+// ---------------------------------------------------------------------------
+
+void basic_list()
+{
+    u16 i = 0;
+    u16 j = 0;
+
+    while (i < prog_count)
+    {
+        tty_putu32(prog_num[i]);
+        tty_putc(' ');
+        j = 0;
+        while (j < prog_len[i])
+        {
+            tty_putc(prog_text[i * 60 + j]);
+            j = j + 1;
+        }
+        tty_newline();
+        i = i + 1;
+    }
+}
+
+// Finish one source line read from a FoxFS file. Blank and malformed lines
+// are skipped; numbered lines are stored in the normal program buffer.
+void load_finish_line()
+{
+    u16 i = 0;
+    u16 j = 0;
+    u16 num = 0;
+    u16 digits = 0;
+    u16 body = 0;
+    u16 body_len = 0;
+
+    while (load_len > 0 && is_space(load_line[load_len - 1]))
+    {
+        load_len = load_len - 1;
+    }
+    if (load_len == 0)
+    {
+        return;
+    }
+
+    while (digits < 4 && i < load_len && is_digit(load_line[i]))
+    {
+        num = num * 10 + (load_line[i] - '0');
+        digits = digits + 1;
+        i = i + 1;
+    }
+    while (i < load_len && is_space(load_line[i]))
+    {
+        i = i + 1;
+    }
+    if (digits == 0 || i >= load_len)
+    {
+        load_len = 0;
+        return;
+    }
+
+    body = i;
+    body_len = load_len - body;
+    j = 0;
+    while (j < body_len)
+    {
+        line[j] = load_line[body + j];
+        j = j + 1;
+    }
+    prog_set(num, 0, body_len);
+    load_count = load_count + 1;
+    load_len = 0;
+}
+
+// Load a numbered BASIC source file from FoxFS. Returns 1 on success.
+u16 basic_load_file(u16 start, u16 end)
+{
+    u32 slot = 0;
+    u32 count = 0;
+    u32 i = 0;
+    u32 w = 0;
+    u32 byte_mode = 0;
+    u16 ch = 0;
+
+    if (end <= start)
+    {
+        basic_error("?BAD FILENAME");
+        return 0;
+    }
+
+    slot = fs_resolve_path(start, end);
+    if (slot == ROOT_SLOT || slot == NOT_FOUND)
+    {
+        tty_puts("File not found.\r\n");
+        return 0;
+    }
+
+    fs_read_entry(slot);
+    if (fs_e_type != FILE_PROGRAM && fs_e_type != FILE_TEXT)
+    {
+        tty_puts("Not a file.\r\n");
+        return 0;
+    }
+
+    count = fs_e_size;
+    if (count == 0)
+    {
+        tty_puts("Empty file.\r\n");
+        return 0;
+    }
+    byte_mode = fs_e_type == FILE_TEXT;
+    if (byte_mode == 1)
+    {
+        if (count > FILE_CHUNK_WORDS * 4)
+        {
+            tty_puts("File too large.\r\n");
+            return 0;
+        }
+        disk_bytes_read_begin(fs_data_base(slot), count);
+    }
+    else
+    {
+        if (count > FILE_CHUNK_WORDS)
+        {
+            tty_puts("File too large.\r\n");
+            return 0;
+        }
+        disk_read_begin(fs_data_base(slot), count);
+    }
+
+    // Do not disturb the current program until the file is known to be usable.
+    prog_count = 0;
+    load_count = 0;
+    load_len = 0;
+
+    while (i < count)
+    {
+        if (byte_mode == 1) { w = disk_bytes_read(); }
+        else                { w = in_port32(6); }
+        i = i + 1;
+        ch = (u16)(w & 255);
+
+        if (ch == 10)
+        {
+            load_finish_line();
+        }
+        else
+        {
+            if (ch == 13 || ch == 0)
+            {
+                // Ignore CR and NUL padding.
+            }
+            else
+            {
+                if (is_space(ch)) { ch = ' '; }
+                if ((ch >= 32 && ch < 127) && load_len < 63)
+                {
+                    load_line[load_len] = ch;
+                    load_len = load_len + 1;
+                }
+            }
+        }
+    }
+    if (load_len > 0)
+    {
+        load_finish_line();
+    }
+
+    if (prog_count == 0)
+    {
+        tty_puts("No BASIC lines found.\r\n");
+        return 0;
+    }
+
+    tty_puts("Loaded ");
+    tty_putu32(load_count);
+    tty_puts(" line(s).\r\n");
+    return 1;
+}
+
+void basic_help()
+{
+    tty_puts("FoxOS Tiny BASIC\r\n");
+    tty_puts("  <number> text  store a line   <number>  delete a line\r\n");
+    tty_puts("  LIST  RUN  NEW  LOAD path  DEMO  CLS  HELP  QUIT\r\n");
+    tty_puts("  LOAD path accepts an optional quoted path\r\n");
+    tty_puts("Statements: PRINT, LET, INPUT, IF..THEN, GOTO, GOSUB,\r\n");
+    tty_puts("            RETURN, FOR..TO..STEP, NEXT, END, REM\r\n");
+    tty_puts("Memory:     POKE a,v  POKE8 a,v  POKE32 a,low[,high]\r\n");
+    tty_puts("            PEEK a,v  PEEK8 a,v  PEEK32L/H a,v\r\n");
+    tty_puts("Ports:      OUT p,v  OUT8 p,v  OUT32 p,low[,high]\r\n");
+    tty_puts("            IN p,v  IN8 p,v  IN32 p,low[,high]\r\n");
+    tty_puts("Functions:  PEEK(a) PEEK8(a) PEEK32L(a) PEEK32H(a)\r\n");
+    tty_puts("            IN(p) IN8(p) IN32L(p) IN32H(p)\r\n");
+    tty_puts("Variables: A-Z, values 0-65535; addresses are 32-bit\r\n");
+}
+
+void basic_demo()
+{
+    prog_count = 0;
+    prog_set_cstr(10, "REM FoxOS Tiny BASIC demo");
+    prog_set_cstr(20, "FOR I = 1 TO 10");
+    prog_set_cstr(30, "PRINT \"HELLO FROM FOXOS BASIC \"; I");
+    prog_set_cstr(40, "NEXT I");
+    prog_set_cstr(50, "PRINT \"DONE\"");
+    tty_puts("Demo loaded. Type LIST or RUN.\r\n");
+}
+
+u16 basic_enter_line()
+{
+    u16 num = 0;
+    u16 digits = 0;
+    u16 start = 0;
+    u16 end = 0;
+
+    while (pos < line_len && is_digit(line[pos]))
+    {
+        if (digits >= 4)
+        {
+            basic_error("?LINE NUMBER TOO BIG");
+            return 1;
+        }
+        num = num * 10 + (line[pos] - '0');
+        digits = digits + 1;
+        pos = pos + 1;
+    }
+
+    if (num == 0)
+    {
+        basic_error("?LINE NUMBER MUST BE 1-9999");
+        return 1;
+    }
+
+    skip_spaces();
+    start = pos;
+    end = line_len;
+    while (end > start && is_space(line[end - 1]))
+    {
+        end = end - 1;
+    }
+
+    if (end == start)
+    {
+        prog_delete(num);
+        return 1;
+    }
+
+    prog_set(num, start, end);
+    return 1;
+}
+
+void basic_run()
+{
+    u16 code = 0;
+    u16 i = 0;
+    u16 stop = 0;
+
+    if (prog_count == 0)
+    {
+        tty_puts("NO PROGRAM\r\n");
+        return;
+    }
+
+    i = 0;
+    while (i < 26)
+    {
+        vars[i] = 0;
+        i = i + 1;
+    }
+    gosub_sp = 0;
+    loop_sp = 0;
+    cur_pc = 0;
+    running = 1;
+
+    while (cur_pc < prog_count && stop == 0)
+    {
+        basic_load_line(cur_pc);
+        code = exec_stmt();
+
+        if (code == 1)
+        {
+            stop = 1;
+        }
+        else
+        {
+            if (code == 2 || code == 3)
+            {
+                i = prog_find(ctrl_target);
+                if (i == 65535)
+                {
+                    basic_error("?UNDEFINED LINE");
+                    stop = 1;
+                }
+                else
+                {
+                    cur_pc = i;
+                }
+            }
+            else
+            {
+                if (code == 6)
+                {
+                    cur_pc = ctrl_pc;
+                }
+                else
+                {
+                    cur_pc = cur_pc + 1;
+                }
+            }
+        }
+    }
+
+    running = 0;
+    tty_puts("READY\r\n");
+}
+
+// Returns 0 when the user asked to quit, 1 otherwise.
+void basic_load_command()
+{
+    u16 start = 0;
+    u16 end = 0;
+
+    skip_spaces();
+    if (pos >= line_len)
+    {
+        tty_puts("Filename: ");
+        basic_read_line();
+        start = 0;
+        end = line_len;
+    }
+    else
+    {
+        if (line[pos] == '"')
+        {
+            pos = pos + 1;
+            start = pos;
+            while (pos < line_len && line[pos] != '"')
+            {
+                pos = pos + 1;
+            }
+            end = pos;
+            if (pos < line_len)
+            {
+                pos = pos + 1;
+            }
+        }
+        else
+        {
+            start = pos;
+            end = line_len;
+        }
+    }
+
+    while (end > start && is_space(line[end - 1]))
+    {
+        end = end - 1;
+    }
+    basic_load_file(start, end);
+}
+
+u16 basic_immediate()
+{
+    pos = 0;
+    skip_spaces();
+    if (pos >= line_len)
+    {
+        return 1;
+    }
+
+    if (is_digit(line[pos]))
+    {
+        return basic_enter_line();
+    }
+
+    read_word();
+
+    if (tok_eq("RUN"))  { basic_run(); return 1; }
+    if (tok_eq("LIST")) { basic_list(); return 1; }
+    if (tok_eq("NEW"))
+    {
+        prog_count = 0;
+        tty_puts("NEW\r\n");
+        return 1;
+    }
+    if (tok_eq("LOAD")) { basic_load_command(); return 1; }
+    if (tok_eq("DEMO")) { basic_demo(); return 1; }
+    if (tok_eq("CLS"))
+    {
+        tty_putc(27); tty_puts("[2J");
+        tty_putc(27); tty_puts("[H");
+        return 1;
+    }
+    if (tok_eq("HELP")) { basic_help(); return 1; }
+    if (tok_eq("QUIT")) { return 0; }
+    if (tok_eq("BYE"))  { return 0; }
+
+    // Anything else is an immediate statement, e.g. PRINT 2+2 or LET A=5.
+    pos = 0;
+    running = 0;
+    exec_stmt();
+    return 1;
+}
+
+// ---------------------------------------------------------------------------
+// Entry point
+// ---------------------------------------------------------------------------
+
+void main()
+{
+    u16 done = 0;
+
+    tty_puts("FoxOS Tiny BASIC\r\n");
+    tty_puts("Type HELP for commands, or DEMO then RUN.\r\n");
+
+    while (done == 0)
+    {
+        tty_puts("> ");
+        basic_read_line();
+        if (basic_immediate() == 0)
+        {
+            done = 1;
+        }
+    }
+
+    os_return();
+}

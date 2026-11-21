@@ -31,6 +31,9 @@ FoxC is a compiler written in Go for a practical C-like subset that targets Fox1
     - `vblank()` block until the next frame VBlank
     - `in_port(port)` read from a port (extended mode; port 0–65535 in `em2_am1` mode, 0–7 in `extended`)
     - `out_port(port, value)` write to a port (extended mode; same port range)
+    - `in_port32(port)` / `out_port32(port, value)` 32-bit port transfers (`em2_am1` mode only)
+    - `in_port_v(port)` / `out_port_v(port, value)` variable-port forms; the port operand is patched at run time (extended mode)
+    - `in_port32_v(port)` / `out_port32_v(port, value)` variable-port 32-bit forms (`em2_am1` mode only)
     - `am()` read the `AM` register (addressing-mode; `em2_am1` mode only)
     - `set_am(value)` write the `AM` register (`em2_am1` mode only)
     - `em()` read the `EM` register (extended-memory mode; `em2_am1` mode only)

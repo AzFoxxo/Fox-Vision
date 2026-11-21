@@ -168,3 +168,10 @@ type CallExpr struct {
 }
 
 func (*CallExpr) exprNode() {}
+
+type CastExpr struct {
+	Type Type
+	X    Expr
+}
+
+func (*CastExpr) exprNode() {}

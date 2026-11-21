@@ -17,15 +17,17 @@ func main() {
 	mode := flag.String("mode", "legacy", "target machine mode (legacy|extended|em2_am1)")
 	strictFormat := flag.Bool("strict-format", false, "enforce ROM size compliance for the selected mode")
 	loadAddressText := flag.String("load-address", "0", "load address (decimal, 0x-prefixed hexadecimal, or $ hexadecimal)")
+	globalBaseText := flag.String("global-base", "0", "override the global storage base (word address)")
 	mapper := flag.String("mapper", "", "ROM mapper (0|rom4k, 1|rom32k, 2|rombyte8_32); default depends on mode")
 	romVersion := flag.String("rom-version", "", "extended ROM header version (1, 2, or 3); default depends on mode")
+
 	var includeDirs stringSlice
 	flag.Var(&includeDirs, "I", "add header search directory (repeatable)")
 	flag.Var(&includeDirs, "include-dir", "add header search directory (repeatable)")
 	asmOnly := flag.Bool("asm", false, "assemble only: output Fox16ASM instead of binary ROM")
 	flag.BoolVar(asmOnly, "a", false, "short for --asm")
 	flag.Usage = func() {
-		fmt.Fprintln(os.Stderr, "usage: foxc -i <input.fc> [-o output] [--mode legacy|extended|em2_am1] [--load-address address] [--mapper 0|1|2] [--rom-version 1|2|3] [-I DIR] [--include-dir DIR] [--strict-format] [-a|--asm]")
+		fmt.Fprintln(os.Stderr, "usage: foxc -i <input.fc> [-o output] [--mode legacy|extended|em2_am1] [--load-address address] [--global-base address] [--mapper 0|1|2] [--rom-version 1|2|3] [-I DIR] [--include-dir DIR] [--strict-format] [-a|--asm]")
 		fmt.Fprintln(os.Stderr, "")
 		fmt.Fprintln(os.Stderr, "Modes:")
 		fmt.Fprintln(os.Stderr, "  legacy    16-bit address space, X/Y plus stack evaluation")
@@ -53,6 +55,15 @@ func main() {
 		os.Exit(2)
 	}
 
+	globalBase, err := foxc.ParseLoadAddress(*globalBaseText)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "invalid global base: %v\n", err)
+		os.Exit(2)
+	}
+	if globalBase > 0xFFFF {
+		fmt.Fprintf(os.Stderr, "invalid global base: must fit in a 16-bit word address\n")
+		os.Exit(2)
+	}
 	if err := validateMapper(*mapper); err != nil {
 		fmt.Fprintf(os.Stderr, "invalid mapper: %v\n", err)
 		os.Exit(2)
@@ -66,6 +77,7 @@ func main() {
 	asm, err := foxc.CompileWithOptions(string(src), foxc.CompileOptions{
 		Mode:        *mode,
 		LoadAddress: loadAddress,
+		GlobalBase:  globalBase,
 		SourcePath:  *in,
 		IncludeDirs: includeDirs,
 	})

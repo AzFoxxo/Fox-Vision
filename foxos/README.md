@@ -37,8 +37,12 @@ foxos/
     │   └── graphics_demo.fc  ← 16-colour scrolling-gradient demo
     ├── edit/
     │   └── edit.fc           ← full-screen text editor
-    └── brainfuck/
-        └── brainfuck.fc      ← Brainfuck interpreter
+    ├── brainfuck/
+    │   └── brainfuck.fc      ← Brainfuck interpreter
+    ├── basic/
+    │   └── basic.fc          ← tiny BASIC interpreter
+    └── f32asm/
+        └── f32asm.fc         ← in-OS f32 assembler
 ```
 
 ## Quick Start
@@ -101,6 +105,7 @@ header: just the API support code is compiled into each application ROM.
 Low-level hardware interface:
 - `disk_read_begin` / `disk_write_begin` — start a 32-bit block transaction on port 6
 - `disk_read` / `disk_write` — single-word metadata helpers
+- `disk_bytes_read_at` / `disk_bytes_write_at` — byte-packed text I/O with byte offsets
 - `tty_putc` / `tty_puts` / `tty_getc` — port 4 (VF16TTY) terminal I/O
 - `kernel_exec(disk_word, word_count)` — block-copy a program from the disk to
   `0x100000` and jump to it
@@ -130,7 +135,8 @@ of the cartridge:
 - `fs_valid()` — check the magic/version header
 - `fs_list(parent, long_format)` — list a directory, optionally with types and sizes
 - `fs_df()` — print entry usage and the per-file size limit
-- `fs_create(start, end, type)` — create a file (1) or directory (2)
+- `fs_create(start, end, type)` — create a program (1), directory (2) or
+  byte-packed text file (3)
 - `fs_remove(start, end)` — remove an entry
 - `fs_resolve_path` / `fs_resolve_dir` — walk a path to a slot
 - `fs_current_dir` — persistent working-directory state
@@ -138,7 +144,9 @@ of the cartridge:
 Each slot has a four-word record (type, parent, name length, size) followed by
 a sixteen-word name field, so entries support names up to sixteen ASCII
 characters. File data starts at word `10244`, with one `0x1FF000`-word
-(just under 8 MiB) chunk per slot.
+(just under 8 MiB) chunk per slot. Type 1 sizes are in words; type 3 text sizes
+are in bytes and pack four ASCII characters per word, so host editors can read
+those files without conversion.
 
 A fresh 4 GiB image is sparse. `fs_format()` only rewrites the 10244-word
 metadata region and never erases the data area. It also installs the standard
@@ -160,6 +168,49 @@ Foreground application loaded at **0x100000**:
 - Paints 5 000 pixels with a cycling 16-colour palette, synced to `vblank()`
 - Installed with: `install` → then `run /bin/graphics`
 
+### `apps/basic/basic.fc`
+Small line-numbered BASIC interpreter, loaded at **0x100000**:
+- Type numbered lines, then `RUN`; `LIST`, `NEW`, `LOAD`, `DEMO`, `CLS`, `HELP`
+  and `QUIT` are available as immediate commands
+- `LOAD path` reads a numbered BASIC source file from FoxFS; paths may be
+  quoted, e.g. `LOAD "/home/test.bas"`
+- Supports `PRINT`, `LET`, `INPUT`, `IF..THEN`, `GOTO`, `GOSUB`/`RETURN`,
+  `FOR..TO..STEP`/`NEXT`, `END` and `REM`, with A-Z variables (0-65535)
+- Memory access: `POKE`, `POKE8`, `POKE32`, `PEEK`, `PEEK8`, `PEEK32L` and
+  `PEEK32H`. `PEEK` functions can be used in expressions, e.g.
+  `PRINT PEEK8(0x30000)`. Hex literals use `&Hxxxx` or `0xXXXX`
+- Port I/O: `OUT`, `OUT8`, `OUT32`, `IN`, `IN8`, and `IN32`, plus the
+  `IN(port)`, `IN8(port)`, `IN32L(port)` and `IN32H(port)` expression functions;
+  ports may be decimal, hex, or variables
+- Installed with: `install` → then `run /bin/basic`
+
+### `apps/f32asm/f32asm.fc`
+A small assembler for the 32-bit Fox ISA that runs **inside FoxOS**, loaded at
+**0x100000**:
+- `run /bin/f32asm` prompts for a FoxFS source path and an output path
+- Reads type-3 text files (and legacy word-encoded text) from FoxFS
+- Writes a type-1 program file containing one 16-bit instruction word per
+  32-bit disk word, with no ROM header, so `run` can execute it directly
+- Supports labels (`:name`, including forward references), `%decimal` and
+  `$hex` literals, all documented registers, `PORTn` port immediates,
+  `@const`, `<NAME>` substitution, `@segment code|data`, `@word`, and
+  `@lo(name)` / `@hi(name)`
+- Recognises all V2 opcodes, including the two-operand rewrites (`AXY`→`ADD`,
+  `ORA`→`OR`, `BSL`→`SHL`, …); jumps to labels use the wide two-word form
+  because user programs load at `0x100000`
+- Appends a `NOP` / `HLT` footer, matching `fox16asm`
+- Installed with: `install` → then `run /bin/f32asm`
+
+Example source file:
+
+```asm
+; /home/hello.asm
+:start
+    MOV %65 R0
+    OUT R0 PORT4
+    HLT
+```
+
 ## Memory map
 
 | Range (word addresses) | Use |
@@ -168,7 +219,7 @@ Foreground application loaded at **0x100000**:
 | `0xA000` – *(end of globals)* | FoxC globals, growing upward |
 | *(end of globals)* – `0xEC77` | FoxC software stack, growing upward |
 | `0xEC78` – `0xFFFF` | VRAM |
-| `0x00010000` | Programs embedded by `foxos_pack.py` |
+| `0x00020000` | Programs embedded by `foxos_pack.py` |
 | `0x00100000` | Foreground program load and execution area |
 
 In 32-bit (`EM=2`) builds FoxC places globals at `0xA000`. The software call
@@ -176,7 +227,7 @@ stack starts at the first free word after the globals, so an application with
 large global arrays (such as the editor's text buffer) cannot have its frames
 overwrite its globals. The hardware stack starts just below the VRAM window
 and grows downward; at least 1024 words must remain between the globals and
-VRAM or compilation fails. The embedded programs sit at `0x10000`, and
+VRAM or compilation fails. The embedded programs sit at `0x20000`, and
 foreground programs run from `0x100000`, so `foxos_pack.py` requires
 foreground images built with `--load-address 0x100000`.
 
@@ -184,12 +235,15 @@ foreground images built with `--load-address 0x100000`.
 
 | Target   | Description                                              |
 |----------|----------------------------------------------------------|
-| `make`   | Build kernel + shell + demo and pack the combined ROM    |
+| `make`   | Build kernel + shell + apps and pack the combined ROM    |
 | `make os`| Resident kernel ROM only (`build/foxos.bin`, no shell)   |
 | `make shell` | Bootable shell image (`build/foxsh.bin`)             |
 | `make demo` | Build graphics demo ROM only (`build/graphics_demo.bin`) |
 | `make edit` | Build editor ROM only (`build/edit.bin`) |
-| `make pack` | Embed demo into shell image → `build/foxos-with-demo.bin` |
+| `make bf` | Build Brainfuck ROM only (`build/brainfuck.bin`) |
+| `make basic` | Build Tiny BASIC ROM only (`build/basic.bin`) |
+| `make f32asm` | Build in-OS f32 assembler ROM only (`build/f32asm.bin`) |
+| `make pack` | Embed apps into shell image → `build/foxos-with-demo.bin` |
 | `make check` | Run the 32-bit FoxFS regression test                |
 | `make run`  | Launch FoxVision with the combined ROM                |
 | `make clean`| Remove `build/`                                      |

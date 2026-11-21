@@ -1,0 +1,1256 @@
+// f32asm.fc - a small assembler for the 32-bit Fox ISA, running inside FoxOS
+//
+// Built as a foreground program at 0x100000 and run from the shell:
+//   run /bin/f32asm
+//
+// The program prompts for a FoxFS source file and an output name, assembles a
+// useful subset of the EFox16/f32 assembly language (the dialect used by
+// Fox16ASM with --mode em2_am1), and writes a FoxOS type-1 program file that
+// can be started directly with `run`.
+//
+// Supported source syntax:
+//   ; comment               comment to end of line
+//   :name                   label (address of the next word)
+//   %123 / $ABCD            decimal / hexadecimal 16-bit immediate
+//   R0, R0L, X, XH, EM ...  register operands (full list in docs/assembly.md)
+//   PORT4 / PORT6           symbolic port immediates
+//   name                    label reference (32-bit address)
+//   @lo(name) / @hi(name)   low/high 16-bit half of a label address
+//   <NAME>                  @const substitution
+//   @const NAME VALUE       define a constant (once, in pass 1)
+//   @segment code|data      switch segment
+//   @word VALUE             raw word in a data segment
+//
+// All instructions from Fox16Shared/Opcodes.cs are recognised, including the
+// two-operand rewrites (AXY->ADD, ORA->OR, BSL->SHL, AND->AND2, ...). Jumps to
+// labels are
+// automatically encoded with the 32-bit wide form because FoxOS loads user
+// programs at 0x100000. A NOP/HLT footer is appended, matching fox16asm.
+//
+// Output files contain one 16-bit program word per 32-bit FoxFS word, exactly
+// like the files written by the shell's `install` command. They deliberately
+// have no ROM container header: FoxOS stores bare payload words.
+
+#include <foxos.fh>
+
+// ---------------------------------------------------------------------------
+// Limits (globals are at 0xA000; keep well below the VRAM window)
+// ---------------------------------------------------------------------------
+
+u16 SRC_MAX       = 6000;   // source characters
+u16 LINE_MAX_SRC  = 80;     // characters per source line
+u16 MAX_TOKENS    = 24;     // tokens per line
+u16 TOKEN_LEN     = 16;     // characters per token
+u16 MAX_OPS       = 60;     // opcode table entries
+u16 MAX_LABELS    = 96;
+u16 MAX_CONSTS    = 48;
+u16 MAX_WORDS     = 3000;   // generated program words
+
+u16 src[6000];
+u16 src_len = 0;
+u16 src_pos = 0;
+
+u16 cur[80];
+u16 cur_len = 0;
+
+u16 tok_chars[384];
+u16 tok_start[24];
+u16 tok_len[24];
+u16 tok_count = 0;
+
+u32 LOAD_BASE = 0x00100000;
+
+u16 op_names[360];
+u16 op_name_len[60];
+u16 op_codes[60];
+u16 op_count = 0;
+
+u16 reg_names[320];
+u16 reg_name_len[64];
+u16 reg_ids[64];
+u16 reg_count = 0;
+
+u16 lbl_names[1536];
+u16 lbl_len[96];
+u16 lbl_lo[96];
+u16 lbl_hi[96];
+u16 lbl_count = 0;
+
+u16 const_names[768];
+u16 const_name_len[48];
+u16 const_tokens[768];
+u16 const_token_len[48];
+u16 const_count = 0;
+
+u16 out_words[3000];
+u16 out_count = 0;
+
+u16 asm_error = 0;
+u16 asm_line  = 0;
+u32 word_addr = 0;
+u16 data_seg  = 0;
+u16 res_depth = 0;
+
+// Operand resolution results.
+u16 res_kind = 1;       // 0 = register, 1 = immediate/label address
+u16 res_lo = 0;
+u16 res_hi = 0;
+u16 res_reg = 0;
+u16 res_is_label = 0;
+
+// Scratch operand used by resolve_operand().
+u16 op_chars[16];
+u16 op_len = 0;
+
+// Resolved operands for the instruction being emitted.
+u16 arg0_lo = 0;
+u16 arg0_hi = 0;
+u16 arg0_type = 1;
+u16 arg1_lo = 0;
+u16 arg1_hi = 0;
+u16 arg1_type = 1;
+
+u16 path_buf[64];
+u16 path_len = 0;
+
+u16 j = 0;   // shared scratch index for the assembly pass
+
+// ---------------------------------------------------------------------------
+// Forward declarations
+// ---------------------------------------------------------------------------
+
+void asm_fail(u16 line_no, u8 *msg);
+void copy_string(u16 table_id, u16 base, u8 *s, u16 limit);
+void add_op(u8 *name, u16 code);
+void add_reg(u8 *name, u16 id);
+u16 upper(u16 c);
+u16 is_sep(u16 c);
+u16 is_digit(u16 c);
+u16 hex_digit(u16 c);
+u16 tok_eq_str(u16 t, u8 *s);
+u16 chars_eq(u16 table_id, u16 base, u16 stored_len, u16 length);
+u16 next_line();
+void tokenize();
+void load_token(u16 t);
+void load_const_token(u16 index);
+u16 reg_id_chars();
+u16 find_label_chars();
+u16 find_const_chars();
+void add_label_chars(u16 lo, u16 hi);
+void add_const_entry(u16 name_tok, u16 value_tok);
+void resolve_operand();
+u16 lookup_opcode(u16 t, u16 nops);
+u16 scratch_is_wide(u16 depth);
+u16 token_is_wide(u16 t);
+u16 is_jump(u16 code);
+u16 is_mem_operand(u16 code, u16 index);
+u16 operand_type(u16 code, u16 index, u16 kind, u16 wide);
+void emit_word(u16 value);
+void assemble_pass(u16 pass);
+u16 load_source(u32 slot);
+void read_line();
+void store_path();
+void write_output(u16 start, u16 end);
+void init_tables();
+
+// ---------------------------------------------------------------------------
+// Small helpers
+// ---------------------------------------------------------------------------
+
+void asm_fail(u16 line_no, u8 *msg)
+{
+    if (asm_error != 0) { return; }
+    asm_error = 1;
+    asm_line = line_no;
+    tty_puts("line ");
+    tty_putu32(line_no);
+    tty_puts(": ");
+    tty_puts(msg);
+    tty_newline();
+}
+
+u16 upper(u16 c)
+{
+    if (c >= 'a' && c <= 'z') { return c - 32; }
+    return c;
+}
+
+u16 is_sep(u16 c)
+{
+    return c == ' ' || c == 9 || c == ',';
+}
+
+u16 is_digit(u16 c)
+{
+    return c >= '0' && c <= '9';
+}
+
+u16 hex_digit(u16 c)
+{
+    if (c >= '0' && c <= '9') { return c - '0'; }
+    if (c >= 'A' && c <= 'F') { return c - 'A' + 10; }
+    if (c >= 'a' && c <= 'f') { return c - 'a' + 10; }
+    return 255;
+}
+
+// Compare token t with an ASCII string, ignoring case.
+u16 tok_eq_str(u16 t, u8 *s)
+{
+    u16 i = 0;
+    if (t >= tok_count) { return 0; }
+    while (i < tok_len[t])
+    {
+        if (upper(*s) != tok_chars[t * TOKEN_LEN + i]) { return 0; }
+        s = s + 1;
+        i = i + 1;
+    }
+    return *s == 0;
+}
+
+void copy_string(u16 table_id, u16 base, u8 *s, u16 limit)
+{
+    u16 i = 0;
+    u16 c = 0;
+    while (i < limit && *s != 0)
+    {
+        c = upper(*s);
+        if (table_id == 0)
+        {
+            op_names[base + i] = c;
+        }
+        else
+        {
+            if (table_id == 1)
+            {
+                reg_names[base + i] = c;
+            }
+            else
+            {
+                if (table_id == 2)
+                {
+                    const_names[base + i] = c;
+                }
+                else
+                {
+                    const_tokens[base + i] = c;
+                }
+            }
+        }
+        s = s + 1;
+        i = i + 1;
+    }
+}
+
+void add_op(u8 *name, u16 code)
+{
+    u16 n = 0;
+    if (op_count >= MAX_OPS) { return; }
+    copy_string(0, op_count * 6, name, 6);
+    while (n < 6 && op_names[op_count * 6 + n] != 0) { n = n + 1; }
+    op_name_len[op_count] = n;
+    op_codes[op_count] = code;
+    op_count = op_count + 1;
+}
+
+void add_reg(u8 *name, u16 id)
+{
+    u16 n = 0;
+    if (reg_count >= 64) { return; }
+    copy_string(1, reg_count * 5, name, 5);
+    while (n < 5 && reg_names[reg_count * 5 + n] != 0) { n = n + 1; }
+    reg_name_len[reg_count] = n;
+    reg_ids[reg_count] = id;
+    reg_count = reg_count + 1;
+}
+
+void init_tables()
+{
+    // Opcodes, from Fox16Shared/src/Opcodes.cs.
+    add_op("NOP", 0);    add_op("LFM", 1);    add_op("WTM", 2);
+    add_op("SRA", 3);    add_op("AXY", 4);    add_op("SXY", 5);
+    add_op("MXY", 6);    add_op("DXY", 7);    add_op("EQU", 8);
+    add_op("LEQ", 9);    add_op("JPZ", 10);   add_op("JNZ", 11);
+    add_op("JMP", 12);   add_op("CLR", 13);   add_op("HLT", 14);
+    add_op("BSL", 15);   add_op("BSR", 16);   add_op("AND", 17);
+    add_op("ORA", 18);   add_op("XOR", 19);   add_op("DWR", 20);
+    add_op("ILM", 21);   add_op("IWR", 22);   add_op("INC", 23);
+    add_op("DEC", 24);   add_op("MOV", 25);   add_op("STR", 26);
+    add_op("LOD", 27);   add_op("CMP", 28);   add_op("JEQ", 29);
+    add_op("JNE", 30);   add_op("JLT", 31);   add_op("JGT", 32);
+    add_op("JLE", 33);   add_op("JGE", 34);   add_op("ADD", 35);
+    add_op("SUB", 36);   add_op("MUL", 37);   add_op("DIV", 38);
+    add_op("AND2", 39);  add_op("OR", 40);    add_op("XOR2", 41);
+    add_op("SHL", 42);   add_op("SHR", 43);   add_op("PUSH", 44);
+    add_op("POP", 45);   add_op("WAIT", 46);  add_op("VBLANK", 47);
+    add_op("VBL", 47);   add_op("IN", 48);    add_op("OUT", 49);
+    add_op("OSRET", 50); add_op("SYS", 51);   add_op("SYSRET", 52);
+
+    // Registers, from Fox16ASM/src/data/RegisterId.cs.
+    add_reg("X", 0x00);    add_reg("Y", 0x01);    add_reg("PC", 0x02);
+    add_reg("STATUS", 0x03); add_reg("SP", 0x04); add_reg("CYC", 0x05);
+    add_reg("EM", 0x06);   add_reg("R0", 0x07);   add_reg("R1", 0x08);
+    add_reg("R2", 0x09);   add_reg("R3", 0x0A);   add_reg("R4", 0x0B);
+    add_reg("R5", 0x0C);   add_reg("R6", 0x0D);   add_reg("R7", 0x0E);
+    add_reg("AM", 0x0F);   add_reg("XL", 0x10);   add_reg("XH", 0x11);
+    add_reg("YL", 0x12);   add_reg("YH", 0x13);   add_reg("PCL", 0x14);
+    add_reg("PCH", 0x15);  add_reg("SPL", 0x16);  add_reg("SPH", 0x17);
+    add_reg("CYCL", 0x18); add_reg("CYCH", 0x19); add_reg("MS", 0x1A);
+    add_reg("VEC", 0x1B);  add_reg("IRQEN", 0x1C); add_reg("KSP", 0x1D);
+    add_reg("DB", 0x1E);   add_reg("HB", 0x1F);   add_reg("CB", 0x30);
+    add_reg("QUANT", 0x31);
+    add_reg("R0L", 0x20);  add_reg("R0H", 0x21);  add_reg("R1L", 0x22);
+    add_reg("R1H", 0x23);  add_reg("R2L", 0x24);  add_reg("R2H", 0x25);
+    add_reg("R3L", 0x26);  add_reg("R3H", 0x27);  add_reg("R4L", 0x28);
+    add_reg("R4H", 0x29);  add_reg("R5L", 0x2A);  add_reg("R5H", 0x2B);
+    add_reg("R6L", 0x2C);  add_reg("R6H", 0x2D);  add_reg("R7L", 0x2E);
+    add_reg("R7H", 0x2F);
+}
+
+// ---------------------------------------------------------------------------
+// Source lines and tokens
+// ---------------------------------------------------------------------------
+
+// Copy the next source line into cur[], upper-case, without comments.
+u16 next_line()
+{
+    u16 c = 0;
+    u16 comment = 0;
+    u16 done = 0;
+
+    if (src_pos >= src_len) { return 0; }
+    cur_len = 0;
+    while (src_pos < src_len && done == 0)
+    {
+        c = src[src_pos];
+        src_pos = src_pos + 1;
+        if (c == 10)
+        {
+            done = 1;
+        }
+        else
+        {
+            if (c == ';') { comment = 1; }
+            if (comment == 0 && cur_len < LINE_MAX_SRC - 1)
+            {
+                cur[cur_len] = upper(c);
+                cur_len = cur_len + 1;
+            }
+        }
+    }
+    while (cur_len > 0 && is_sep(cur[cur_len - 1])) { cur_len = cur_len - 1; }
+    return 1;
+}
+
+void tokenize()
+{
+    u16 i = 0;
+    u16 t = 0;
+    u16 j = 0;
+    u16 done = 0;
+
+    tok_count = 0;
+    while (i < cur_len && tok_count < MAX_TOKENS && done == 0)
+    {
+        while (i < cur_len && is_sep(cur[i])) { i = i + 1; }
+        if (i >= cur_len)
+        {
+            done = 1;
+        }
+        else
+        {
+            t = tok_count;
+            j = 0;
+            while (i < cur_len && is_sep(cur[i]) == 0)
+            {
+                if (j < TOKEN_LEN - 1)
+                {
+                    tok_chars[t * TOKEN_LEN + j] = cur[i];
+                    j = j + 1;
+                }
+                i = i + 1;
+            }
+            tok_len[t] = j;
+            tok_count = tok_count + 1;
+        }
+    }
+}
+
+void load_token(u16 t)
+{
+    u16 i = 0;
+    op_len = tok_len[t];
+    if (op_len > TOKEN_LEN - 1) { op_len = TOKEN_LEN - 1; }
+    while (i < op_len)
+    {
+        op_chars[i] = tok_chars[t * TOKEN_LEN + i];
+        i = i + 1;
+    }
+}
+
+void load_const_token(u16 index)
+{
+    u16 i = 0;
+    op_len = const_token_len[index];
+    if (op_len > TOKEN_LEN - 1) { op_len = TOKEN_LEN - 1; }
+    while (i < op_len)
+    {
+        op_chars[i] = const_tokens[index * TOKEN_LEN + i];
+        i = i + 1;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Symbols
+// ---------------------------------------------------------------------------
+
+u16 chars_eq(u16 table_id, u16 base, u16 stored_len, u16 length)
+{
+    u16 i = 0;
+    u16 c = 0;
+    if (length == 0 || length != stored_len) { return 0; }
+    while (i < length)
+    {
+        if (table_id == 0)
+        {
+            c = reg_names[base + i];
+        }
+        else
+        {
+            if (table_id == 1)
+            {
+                c = lbl_names[base + i];
+            }
+            else
+            {
+                c = const_names[base + i];
+            }
+        }
+        if (c != op_chars[i]) { return 0; }
+        i = i + 1;
+    }
+    return 1;
+}
+
+u16 reg_id_chars()
+{
+    u16 i = 0;
+    while (i < reg_count)
+    {
+        if (chars_eq(0, i * 5, reg_name_len[i], op_len) == 1) { return reg_ids[i]; }
+        i = i + 1;
+    }
+    return 0xFFFF;
+}
+
+u16 find_label_chars()
+{
+    u16 i = 0;
+    while (i < lbl_count)
+    {
+        if (chars_eq(1, i * 16, lbl_len[i], op_len) == 1) { return i; }
+        i = i + 1;
+    }
+    return 0xFFFF;
+}
+
+u16 find_const_chars()
+{
+    u16 i = 0;
+    while (i < const_count)
+    {
+        if (chars_eq(2, i * 16, const_name_len[i], op_len) == 1) { return i; }
+        i = i + 1;
+    }
+    return 0xFFFF;
+}
+
+void add_label_chars(u16 lo, u16 hi)
+{
+    u16 i = 0;
+    u16 n = 0;
+    if (lbl_count >= MAX_LABELS) { asm_fail(asm_line, "too many labels"); return; }
+
+    // op_chars holds the label name, copied from token 0 after the colon.
+    n = op_len;
+    if (n == 0 || n > 16) { asm_fail(asm_line, "invalid label"); return; }
+    i = 0;
+    while (i < n)
+    {
+        lbl_names[lbl_count * 16 + i] = op_chars[i];
+        i = i + 1;
+    }
+    lbl_len[lbl_count] = n;
+    lbl_lo[lbl_count] = lo;
+    lbl_hi[lbl_count] = hi;
+    lbl_count = lbl_count + 1;
+}
+
+void add_label_token(u16 t, u16 lo, u16 hi)
+{
+    u16 i = 0;
+    u16 n = 0;
+
+    if (tok_len[t] < 2) { asm_fail(asm_line, "invalid label"); return; }
+    n = tok_len[t] - 1;
+    if (n > TOKEN_LEN - 1) { n = TOKEN_LEN - 1; }
+    op_len = n;
+    while (i < n)
+    {
+        op_chars[i] = tok_chars[t * TOKEN_LEN + 1 + i];
+        i = i + 1;
+    }
+    add_label_chars(lo, hi);
+}
+
+void add_const_entry(u16 name_tok, u16 value_tok)
+{
+    u16 i = 0;
+    u16 n = 0;
+
+    if (const_count >= MAX_CONSTS) { asm_fail(asm_line, "too many constants"); return; }
+    n = tok_len[name_tok];
+    if (n == 0 || n > 16) { asm_fail(asm_line, "invalid constant name"); return; }
+    i = 0;
+    while (i < n)
+    {
+        const_names[const_count * 16 + i] = tok_chars[name_tok * TOKEN_LEN + i];
+        i = i + 1;
+    }
+    const_name_len[const_count] = n;
+
+    n = tok_len[value_tok];
+    if (n > TOKEN_LEN - 1) { n = TOKEN_LEN - 1; }
+    i = 0;
+    while (i < n)
+    {
+        const_tokens[const_count * TOKEN_LEN + i] = tok_chars[value_tok * TOKEN_LEN + i];
+        i = i + 1;
+    }
+    const_token_len[const_count] = n;
+    const_count = const_count + 1;
+}
+
+// ---------------------------------------------------------------------------
+// Operand resolution
+// ---------------------------------------------------------------------------
+
+void resolve_operand()
+{
+    u32 value = 0;
+    u16 d = 0;
+    u16 i = 0;
+    u16 idx = 0;
+    u16 half = 0;
+    u16 name_start = 0;
+    u16 name_len = 0;
+
+    res_kind = 1;
+    res_lo = 0;
+    res_hi = 0;
+    res_reg = 0;
+    res_is_label = 0;
+
+    if (op_len == 0) { asm_fail(asm_line, "missing operand"); return; }
+
+    if (reg_id_chars() != 0xFFFF)
+    {
+        res_kind = 0;
+        res_reg = reg_id_chars();
+        return;
+    }
+
+    if (op_chars[0] == '%')
+    {
+        i = 1;
+        while (i < op_len)
+        {
+            if (is_digit(op_chars[i]) == 0) { asm_fail(asm_line, "bad decimal literal"); return; }
+            value = value * 10 + (op_chars[i] - '0');
+            i = i + 1;
+        }
+        res_lo = (u16)(value & 0xFFFF);
+        res_hi = (u16)((value >> 16) & 0xFFFF);
+        return;
+    }
+
+    if (op_chars[0] == '$')
+    {
+        i = 1;
+        while (i < op_len)
+        {
+            d = hex_digit(op_chars[i]);
+            if (d == 255) { asm_fail(asm_line, "bad hex literal"); return; }
+            value = value * 16 + d;
+            i = i + 1;
+        }
+        res_lo = (u16)(value & 0xFFFF);
+        res_hi = (u16)((value >> 16) & 0xFFFF);
+        return;
+    }
+
+    // @lo(name) / @hi(name)
+    if (op_len >= 7 && op_chars[0] == '@' &&
+        ((op_chars[1] == 'L' && op_chars[2] == 'O') ||
+         (op_chars[1] == 'H' && op_chars[2] == 'I')) &&
+        op_chars[3] == '(' && op_chars[op_len - 1] == ')')
+    {
+        half = op_chars[1];
+        name_start = 4;
+        name_len = op_len - 5;
+        i = 0;
+        while (i < name_len)
+        {
+            op_chars[i] = op_chars[name_start + i];
+            i = i + 1;
+        }
+        op_len = name_len;
+        idx = find_label_chars();
+        if (idx == 0xFFFF) { asm_fail(asm_line, "unknown label in @lo/@hi"); return; }
+        if (half == 'L') { res_lo = lbl_lo[idx]; }
+        else             { res_lo = lbl_hi[idx]; }
+        return;
+    }
+
+    if (op_chars[0] == '<')
+    {
+        if (op_len < 3 || op_chars[op_len - 1] != '>')
+        {
+            asm_fail(asm_line, "bad constant reference");
+            return;
+        }
+        i = 0;
+        while (i < op_len - 2)
+        {
+            op_chars[i] = op_chars[1 + i];
+            i = i + 1;
+        }
+        op_len = op_len - 2;
+        idx = find_const_chars();
+        if (idx == 0xFFFF) { asm_fail(asm_line, "unknown constant"); return; }
+        res_depth = res_depth + 1;
+        if (res_depth > 2) { asm_fail(asm_line, "constant recursion"); return; }
+        load_const_token(idx);
+        resolve_operand();
+        res_depth = res_depth - 1;
+        return;
+    }
+
+    // PORTn is an immediate port number.
+    if (op_len > 4 && op_chars[0] == 'P' && op_chars[1] == 'O' &&
+        op_chars[2] == 'R' && op_chars[3] == 'T')
+    {
+        i = 4;
+        while (i < op_len)
+        {
+            if (is_digit(op_chars[i]) == 0) { asm_fail(asm_line, "bad port operand"); return; }
+            value = value * 10 + (op_chars[i] - '0');
+            i = i + 1;
+        }
+        res_lo = (u16)(value & 0xFFFF);
+        return;
+    }
+
+    // Anything else is a label address.
+    idx = find_label_chars();
+    if (idx == 0xFFFF) { asm_fail(asm_line, "unknown label"); return; }
+    res_lo = lbl_lo[idx];
+    res_hi = lbl_hi[idx];
+    res_is_label = 1;
+}
+
+// ---------------------------------------------------------------------------
+// Encoding
+// ---------------------------------------------------------------------------
+
+u16 lookup_opcode(u16 t, u16 nops)
+{
+    u16 i = 0;
+    u16 code = 0;
+    u16 j = 0;
+    u16 match = 0;
+
+    while (i < op_count)
+    {
+        match = 1;
+        if (tok_len[t] != op_name_len[i]) { match = 0; }
+        else
+        {
+            j = 0;
+            while (j < tok_len[t])
+            {
+                if (op_names[i * 6 + j] != tok_chars[t * TOKEN_LEN + j]) { match = 0; }
+                j = j + 1;
+            }
+        }
+        if (match == 1)
+        {
+            code = op_codes[i];
+            // Fox16ASM rewrites overloaded two-operand mnemonics to their
+            // extended forms; mirror that table here.
+            if (nops == 2)
+            {
+                if (code == 4)  { code = 35; }  // AXY  -> ADD
+                if (code == 5)  { code = 36; }  // SXY  -> SUB
+                if (code == 6)  { code = 37; }  // MXY  -> MUL
+                if (code == 7)  { code = 38; }  // DXY  -> DIV
+                if (code == 15) { code = 42; }  // BSL  -> SHL
+                if (code == 16) { code = 43; }  // BSR  -> SHR
+                if (code == 17) { code = 39; }  // AND  -> AND2
+                if (code == 18) { code = 40; }  // ORA  -> OR
+                if (code == 19) { code = 41; }  // XOR  -> XOR2
+            }
+            return code;
+        }
+        i = i + 1;
+    }
+    return 0xFFFF;
+}
+
+// Decide whether a jump operand needs the two-word wide form without looking
+// up label values (labels are not all known during the first pass).
+u16 scratch_is_wide(u16 depth)
+{
+    u32 value = 0;
+    u16 i = 0;
+    u16 d = 0;
+    u16 idx = 0;
+
+    if (reg_id_chars() != 0xFFFF) { return 0; }
+    if (op_len == 0) { return 0; }
+    if (op_chars[0] == '@') { return 0; }  // @lo/@hi always produce 16 bits
+
+    if (op_chars[0] == '<')
+    {
+        if (op_len < 3 || op_chars[op_len - 1] != '>' || depth >= 2) { return 0; }
+        i = 0;
+        while (i < op_len - 2)
+        {
+            op_chars[i] = op_chars[1 + i];
+            i = i + 1;
+        }
+        op_len = op_len - 2;
+        idx = find_const_chars();
+        if (idx == 0xFFFF) { return 0; }
+        load_const_token(idx);
+        return scratch_is_wide(depth + 1);
+    }
+
+    if (op_chars[0] == '%' || op_chars[0] == '$' ||
+        (op_chars[0] == 'P' && op_len > 4 && op_chars[1] == 'O' &&
+         op_chars[2] == 'R' && op_chars[3] == 'T'))
+    {
+        i = 1;
+        if (op_chars[0] == 'P') { i = 4; }
+        while (i < op_len)
+        {
+            if (op_chars[0] == '$')
+            {
+                d = hex_digit(op_chars[i]);
+                if (d == 255) { return 0; }
+                value = value * 16 + d;
+            }
+            else
+            {
+                if (is_digit(op_chars[i]) == 0) { return 0; }
+                value = value * 10 + (op_chars[i] - '0');
+            }
+            i = i + 1;
+        }
+        if (value > 0xFFFF) { return 1; }
+        return 0;
+    }
+
+    // Any plain symbol is a label, and FoxOS loads programs at 0x100000.
+    return 1;
+}
+
+u16 token_is_wide(u16 t)
+{
+    if (t >= tok_count) { return 0; }
+    load_token(t);
+    return scratch_is_wide(0);
+}
+
+u16 is_jump(u16 code)
+{
+    if (code == 10 || code == 11 || code == 12) { return 1; }
+    if (code >= 29 && code <= 34) { return 1; }
+    return 0;
+}
+
+u16 is_mem_operand(u16 code, u16 index)
+{
+    if (code == 1 || code == 2) { return index == 0; }    // LFM, WTM
+    if (code == 26 || code == 27) { return index == 1; }  // STR, LOD
+    return 0;
+}
+
+u16 operand_type(u16 code, u16 index, u16 kind, u16 wide)
+{
+    if (index == 0 && wide != 0) { return 2; }            // wide jump target
+    if (is_mem_operand(code, index) != 0)
+    {
+        if (kind == 0) { return 3; }                      // register indirect
+        return 2;                                         // direct address
+    }
+    if (kind == 0) { return 0; }                          // register
+    return 1;                                             // immediate
+}
+
+void emit_word(u16 value)
+{
+    if (out_count >= MAX_WORDS)
+    {
+        asm_fail(asm_line, "program too large");
+        return;
+    }
+    out_words[out_count] = value;
+    out_count = out_count + 1;
+}
+
+// ---------------------------------------------------------------------------
+// Two-pass assembler
+// ---------------------------------------------------------------------------
+
+void assemble_pass(u16 pass)
+{
+    u16 line_no = 0;
+    u16 opidx = 0;
+    u16 nops = 0;
+    u16 code = 0;
+    u16 wide = 0;
+    u16 control = 0;
+    u16 handled = 0;
+    u16 label_style = 0;
+
+    if (pass == 1)
+    {
+        lbl_count = 0;
+        const_count = 0;
+    }
+    else
+    {
+        out_count = 0;
+    }
+    word_addr = LOAD_BASE;
+    data_seg = 0;
+    src_pos = 0;
+
+    while (asm_error == 0 && next_line() == 1)
+    {
+        line_no = line_no + 1;
+        tokenize();
+        asm_line = line_no;
+        handled = 0;
+
+        if (tok_count == 0)
+        {
+            handled = 1;
+        }
+        else
+        {
+            // Preprocessor directives.
+            if (tok_chars[0] == '@')
+            {
+                handled = 1;
+                if (tok_eq_str(0, "@const") != 0)
+                {
+                    if (tok_count != 3)
+                    {
+                        asm_fail(line_no, "bad @const");
+                    }
+                    else
+                    {
+                        if (pass == 1) { add_const_entry(1, 2); }
+                    }
+                }
+                else
+                {
+                    if (tok_eq_str(0, "@segment") != 0)
+                    {
+                        if (tok_count != 2)
+                        {
+                            asm_fail(line_no, "bad @segment");
+                        }
+                        else
+                        {
+                            if (tok_eq_str(1, "code") != 0)
+                            {
+                                data_seg = 0;
+                            }
+                            else
+                            {
+                                if (tok_eq_str(1, "data") != 0)
+                                {
+                                    data_seg = 1;
+                                }
+                                else
+                                {
+                                    asm_fail(line_no, "bad segment name");
+                                }
+                            }
+                        }
+                    }
+                    else
+                    {
+                        if (tok_eq_str(0, "@word") != 0)
+                        {
+                            if (data_seg == 0)
+                            {
+                                asm_fail(line_no, "@word outside data segment");
+                            }
+                            else
+                            {
+                                if (tok_count != 2)
+                                {
+                                    asm_fail(line_no, "bad @word");
+                                }
+                                else
+                                {
+                                    if (pass == 2)
+                                    {
+                                        load_token(1);
+                                        resolve_operand();
+                                        if (res_kind == 0)
+                                        {
+                                            asm_fail(line_no, "data word cannot be a register");
+                                        }
+                                        else
+                                        {
+                                            emit_word(res_lo);
+                                        }
+                                    }
+                                    word_addr = word_addr + 1;
+                                }
+                            }
+                        }
+                        else
+                        {
+                            asm_fail(line_no, "unknown directive");
+                        }
+                    }
+                }
+            }
+        }
+
+        // Label declaration, optionally followed by an instruction. Both
+        // ":name" and the "name:" spelling used by some sources are accepted.
+        label_style = 0;
+        if (handled == 0 && asm_error == 0)
+        {
+            if (tok_chars[0] == ':')
+            {
+                label_style = 1;
+            }
+            else
+            {
+                load_token(0);
+                if (op_len >= 2 && op_chars[op_len - 1] == ':')
+                {
+                    label_style = 2;
+                }
+            }
+        }
+        if (label_style != 0)
+        {
+            if (pass == 1)
+            {
+                load_token(0);
+                op_len = op_len - 1;
+                if (label_style == 1)
+                {
+                    j = 0;
+                    while (j < op_len)
+                    {
+                        op_chars[j] = op_chars[j + 1];
+                        j = j + 1;
+                    }
+                }
+                add_label_chars((u16)(word_addr & 0xFFFF),
+                                (u16)((word_addr >> 16) & 0xFFFF));
+            }
+            opidx = 1;
+            if (tok_count == 1) { handled = 1; }
+        }
+
+        if (handled == 0 && asm_error == 0)
+        {
+            if (data_seg != 0)
+            {
+                asm_fail(line_no, "expected @word in data segment");
+            }
+            else
+            {
+                nops = tok_count - opidx - 1;
+                if (nops > 2)
+                {
+                    asm_fail(line_no, "too many operands");
+                }
+                else
+                {
+                    code = lookup_opcode(opidx, nops);
+                    if (code == 0xFFFF)
+                    {
+                        asm_fail(line_no, "unknown opcode");
+                    }
+                    else
+                    {
+                        wide = 0;
+                        if (is_jump(code) != 0 && nops == 1)
+                        {
+                            wide = token_is_wide(opidx + 1);
+                        }
+
+                        if (pass == 1)
+                        {
+                            word_addr = word_addr + 1 + nops + wide;
+                        }
+                        else
+                        {
+                            // Resolve both operands before writing the opcode word.
+                            arg0_type = 0;
+                            arg0_lo = 0;
+                            arg0_hi = 0;
+                            arg1_type = 0;
+                            arg1_lo = 0;
+                            arg1_hi = 0;
+
+                            if (nops >= 1)
+                            {
+                                load_token(opidx + 1);
+                                resolve_operand();
+                                arg0_lo = res_lo;
+                                arg0_hi = res_hi;
+                                arg0_type = operand_type(code, 0, res_kind, wide);
+                            }
+                            if (nops >= 2)
+                            {
+                                load_token(opidx + 2);
+                                resolve_operand();
+                                arg1_lo = res_lo;
+                                arg1_hi = res_hi;
+                                arg1_type = operand_type(code, 1, res_kind, 0);
+                            }
+
+                            control = (nops & 3) | (arg0_type << 2) | (arg1_type << 4);
+                            emit_word((code << 8) | control);
+                            if (nops >= 1)
+                            {
+                                emit_word(arg0_lo);
+                                if (wide != 0) { emit_word(arg0_hi); }
+                            }
+                            if (nops >= 2) { emit_word(arg1_lo); }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // The host assembler appends a safe NOP/HLT footer.
+    if (pass == 2 && asm_error == 0)
+    {
+        emit_word(0x0000);
+        emit_word(0x000E);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// FoxFS input / output
+// ---------------------------------------------------------------------------
+
+u16 load_source(u32 slot)
+{
+    u32 count = 0;
+    u32 i = 0;
+    u32 w = 0;
+    u16 byte_mode = 0;
+    u16 c = 0;
+
+    fs_read_entry(slot);
+    if (fs_e_type == FILE_TEXT) { byte_mode = 1; }
+    count = fs_e_size;
+    if (count == 0) { return 0; }
+    if (byte_mode == 1)
+    {
+        if (count > SRC_MAX) { return 0; }
+        disk_bytes_read_begin(fs_data_base(slot), count);
+    }
+    else
+    {
+        if (count > SRC_MAX) { return 0; }
+        disk_read_begin(fs_data_base(slot), count);
+    }
+
+    src_len = 0;
+    src_pos = 0;
+    while (i < count && src_len < SRC_MAX)
+    {
+        if (byte_mode == 1) { w = disk_bytes_read(); }
+        else                { w = in_port32(6); }
+        c = (u16)(w & 0xFF);
+        if (c == 13)
+        {
+            // Normalise CRLF to LF.
+        }
+        else
+        {
+            if (c == 10 || (c >= 32 && c <= 126))
+            {
+                src[src_len] = c;
+                src_len = src_len + 1;
+            }
+        }
+        i = i + 1;
+    }
+    if (src_len == 0) { return 0; }
+    if (src[src_len - 1] != 10)
+    {
+        if (src_len < SRC_MAX)
+        {
+            src[src_len] = 10;
+            src_len = src_len + 1;
+        }
+    }
+    return 1;
+}
+
+void write_output(u16 start, u16 end)
+{
+    u32 slot = 0;
+    u16 i = 0;
+
+    slot = fs_resolve_path(start, end);
+    if (slot != ROOT_SLOT && slot != NOT_FOUND)
+    {
+        if (fs_remove(start, end) == 0) { return; }
+    }
+    slot = fs_create(start, end, FILE_PROGRAM);
+    if (slot == NOT_FOUND) { return; }
+
+    // fs_create writes a zero-length record; fill in the final word count.
+    fs_read_entry(slot);
+    fs_write_entry(slot, FILE_PROGRAM, fs_e_parent, fs_e_namelen, out_count);
+
+    disk_write_begin(fs_data_base(slot), out_count);
+    while (i < out_count)
+    {
+        out_port32(6, out_words[i]);
+        i = i + 1;
+    }
+    tty_puts("wrote ");
+    tty_putu32(out_count);
+    tty_puts(" words to ");
+    i = start;
+    while (i < end)
+    {
+        tty_putc(line[i]);
+        i = i + 1;
+    }
+    tty_newline();
+}
+
+// ---------------------------------------------------------------------------
+// Terminal input
+// ---------------------------------------------------------------------------
+
+void read_line()
+{
+    u16 c = 0;
+    line_len = 0;
+    while (1)
+    {
+        c = tty_getc();
+        if (c != 0)
+        {
+            if (c == 13 || c == 10)
+            {
+                tty_newline();
+                return;
+            }
+            if (c == 8 || c == 127)
+            {
+                if (line_len > 0)
+                {
+                    line_len = line_len - 1;
+                    tty_putc(8);
+                    tty_putc(' ');
+                    tty_putc(8);
+                }
+            }
+            else
+            {
+                if (c >= 32 && c < 127)
+                {
+                    if (line_len < LINE_MAX - 1)
+                    {
+                        line[line_len] = c;
+                        line_len = line_len + 1;
+                        tty_putc(c);
+                    }
+                }
+            }
+        }
+    }
+}
+
+void store_path()
+{
+    u16 i = 0;
+    path_len = line_len;
+    if (path_len > 63) { path_len = 63; }
+    while (i < path_len)
+    {
+        path_buf[i] = line[i];
+        i = i + 1;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Entry point
+// ---------------------------------------------------------------------------
+
+void main()
+{
+    u32 slot = 0;
+    u16 i = 0;
+
+    init_tables();
+    tty_puts("FoxOS f32 assembler 0.1\r\n");
+
+    tty_puts("Source: ");
+    read_line();
+    while (line_len > 0 && line[line_len - 1] == ' ') { line_len = line_len - 1; }
+    if (line_len == 0) { tty_puts("no source\r\n"); os_return(); return; }
+    store_path();
+    slot = fs_resolve_path(0, path_len);
+    if (slot == ROOT_SLOT || slot == NOT_FOUND)
+    {
+        tty_puts("source not found\r\n");
+        os_return();
+        return;
+    }
+    if (load_source(slot) == 0)
+    {
+        tty_puts("cannot read source\r\n");
+        os_return();
+        return;
+    }
+
+    tty_puts("Output: ");
+    read_line();
+    while (line_len > 0 && line[line_len - 1] == ' ') { line_len = line_len - 1; }
+    if (line_len == 0) { tty_puts("no output name\r\n"); os_return(); return; }
+
+    assemble_pass(1);
+    if (asm_error == 0) { assemble_pass(2); }
+    if (asm_error != 0)
+    {
+        tty_puts("assembly failed\r\n");
+        os_return();
+        return;
+    }
+
+    write_output(0, line_len);
+    os_return();
+}

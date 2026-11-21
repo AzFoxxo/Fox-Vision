@@ -1,36 +1,22 @@
 // foxos.fh - public FoxOS application header
 // -------------------------------------------
-// Include this header to get the OS services that are useful to a FoxOS
-// foreground program. It exposes only the application-facing subsets of the
-// kernel and FoxFS, not the shell, formatter or resident-kernel internals:
+// Include this header to build a FoxOS foreground program. It exposes the
+// application-facing OS ABI only:
 //
-//   kernel/kernel_api.fc   terminal, 32-bit disk I/O, shared line[] buffer
-//   foxfs/foxfs_api.fc     paths, entry access, file create/remove, constants
+//   Processes:  fork, exec, wait, exit, getpid, getppid, yield
+//   Memory:     sbrk, malloc, free, calloc, realloc
+//   Files:      open, close, read, write, lseek
+//   Terminal:   tty_putc, tty_putc32, tty_getc, tty_puts, tty_newline,
+//               tty_putu32
+//   FoxFS:      fs_resolve_path, fs_create, fs_remove, fs_read_entry,
+//               fs_write_entry, fs_data_base and the shared line[] buffer
 //
-// Supported functionality:
-//   Terminal I/O:   tty_putc, tty_putc32, tty_puts, tty_getc, tty_newline,
-//                   tty_putu32
-//   Disk I/O:       disk_read_begin, disk_write_begin, disk_read, disk_write
-//   FoxFS:          fs_resolve_path, fs_resolve_dir, fs_find_child, fs_create,
-//                   fs_remove, fs_read_entry, fs_write_entry, fs_data_base,
-//                   fs_name_*, fs_entry_base, fs_split and path helpers
-//   Shared state:   line[], line_len, LINE_MAX, fs_current_dir, fs_e_*
-//   Constants:      PORT_TTY, PORT_DISK, ROOT_SLOT, NOT_FOUND,
-//                   FILE_CHUNK_WORDS, ENTRY_COUNT, NAME_TABLE_BASE
+// Programs are linked at 0x00100000. Globals live in the private data window
+// at $A000-$EC77 and the heap starts at 0x20000000. A program must finish
+// with exit()/os_return(); returning from main halts the machine.
 //
-// Not included (OS/shell internals): program loading, kernel_banner, embedded
-// image constants, fs_format, fs_valid, fs_list, fs_df and root-directory
-// setup. Use the OS images for those.
-//
-// Build with the FoxOS Makefile (which adds -I <foxos dir>), or pass
-// -I /path/to/foxos to foxc yourself:
-//
-//   #include <foxos.fh>
-//
-// This is a whole-code header: FoxC expands the API files into the translation
-// unit, so an application compiled at 0x100000 is self-contained.
+// The syscall convention is documented in docs/abi.md:
+//   R0 = number, R1..R6 = arguments, X = result, Y = errno.
 
-#pragma once
-
-#include "kernel/kernel_api.fc"
-#include "foxfs/foxfs_api.fc"
+#include <abi.fh>
+#include <foxlib.fc>

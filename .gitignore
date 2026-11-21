@@ -7,3 +7,4 @@ FoxC/**/*f16
 .vscode/
 *foxc*
 .gitignore
+foxos/mountfoxfs/foxfs_mount

@@ -10,6 +10,10 @@
 u32 ENTRY_COUNT      = 512;
 u32 ROOT_SLOT        = 512;
 u32 NOT_FOUND        = 513;
+// Entry types: 1 = word-packed program, 2 = directory, 3 = byte-packed text.
+u32 FILE_PROGRAM     = 1;
+u32 FILE_DIR         = 2;
+u32 FILE_TEXT        = 3;
 
 u32 ENTRY_TABLE      = 4;
 u32 ENTRY_WORDS      = 4;
@@ -324,15 +328,15 @@ u32 fs_resolve_path(u16 start, u16 end)
 // Create / remove entries – name taken from line[start..end-1]
 // ---------------------------------------------------------------------------
 
-// Create a file (type 1) or directory (type 2). Returns the new slot or
-// NOT_FOUND. Error messages are printed here; successful creation is silent so
-// callers can decide what to report.
+// Create a program file (1), directory (2) or byte-packed text file (3).
+// Returns the new slot or NOT_FOUND. Error messages are printed here;
+// successful creation is silent so callers can decide what to report.
 u32 fs_create(u16 start, u16 end, u32 type)
 {
     u32 dir  = 0;
     u32 slot = 0;
 
-    if (type != 1 && type != 2)
+    if (type != FILE_PROGRAM && type != FILE_DIR && type != FILE_TEXT)
     {
         tty_puts("invalid entry type\r\n");
         return NOT_FOUND;

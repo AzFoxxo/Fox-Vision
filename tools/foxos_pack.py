@@ -7,6 +7,7 @@ from pathlib import Path
 
 EMBED_ADDRESS = 0x20000
 EMBED_MAGIC = 0xF057
+EMBED_FILE_MAGIC = 0xF058
 EMBED_NAME_MAX = 8
 PROGRAM_BASE = 0x100000
 
@@ -85,12 +86,27 @@ def main() -> int:
         required=True,
         help="name to create under /bin (1-8 ASCII characters); pairs with --embed-program in order",
     )
+    parser.add_argument(
+        "--embed-file",
+        type=Path,
+        action="append",
+        default=[],
+        help="data file to embed in /usr/include; repeat for several files",
+    )
+    parser.add_argument(
+        "--embed-file-name",
+        action="append",
+        default=[],
+        help="name to create under /usr/include (1-8 ASCII characters); pairs with --embed-file in order",
+    )
     parser.add_argument("-o", "--output", type=Path, required=True)
     parser.add_argument("--embed-address", type=lambda value: int(value, 0), default=EMBED_ADDRESS)
     args = parser.parse_args()
 
     if len(args.embed_program) != len(args.embed_name):
         raise ValueError("--embed-program and --embed-name must be given the same number of times")
+    if len(args.embed_file) != len(args.embed_file_name):
+        raise ValueError("--embed-file and --embed-file-name must be given the same number of times")
 
     os_start, os_words, header = read_rom(args.os_rom)
     if os_start != 0 or not header.startswith(b".VFOX16EXT"):
